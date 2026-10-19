@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.0.1 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.0.2 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -641,7 +641,10 @@ The diff call is switched on where overlap >= 0.78 AND length >= 200 (hive/switc
 bands only (hive/scan/bands.json).
 
   python3 hive/scan/linklbee_scan.py --logs calls.jsonl [--out report.md] [--json stats.json] [--lang ko|en]
+  python3 hive/scan/linklbee_scan.py --logs calls.jsonl --peek     (what would be read as what; scans nothing)
+  python3 hive/scan/linklbee_scan.py --logs export.csv --map ts=When output=AnswerBody
   python3 hive/scan/linklbee_scan.py --hashify calls.jsonl --out hashed.jsonl --salt <secret>
+Raw OpenAI / Anthropic SDK response lines and CSV are read as they are (FIELDS / ALIASES below, v1.0.2).
   optional: --share summary.json  (statistics only, for the customer to keep or send by hand)
 
 Standard library only. No network code: check with  grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py
@@ -666,7 +669,7 @@ from array import array
 
 
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 # a package resource, so it also loads from inside a zipapp (engine.pyz)
 CELLS = json.loads(BANDS_JSON)
@@ -746,27 +749,258 @@ def mask_digits(s):
     return DIGITS.sub("0", s)
 
 
+# ------------------------------------------------------------------ field names (v1.0.2)
+# A vendor SDK log has every field the scanner needs under other names (PM 10-19 19:1x: an OpenAI SDK log read as 0
+# usable calls). The scanner reads these fixed paths only -- it never takes an arbitrary string as the answer; anything
+# else goes through --map. The canonical name, when present, wins over every alias.
+FIELDS = ("ts", "output", "output_tokens", "input_tokens", "cached_input_tokens", "model", "group_key", "prompt",
+          "prompt_hash", "output_token_hashes", "prompt_token_hashes")
+ALIASES = {
+    # created: OpenAI Chat Completions (epoch s) · created_at: OpenAI Responses
+    "ts": ["created", "created_at", "timestamp", "time", "start_time"],
+    # Chat Completions · legacy Completions · Anthropic Messages (text blocks joined) · plain names
+    "output": ["choices.0.message.content", "choices.0.text", "content", "completion", "response", "text"],
+    "output_tokens": ["usage.completion_tokens", "usage.output_tokens"],
+    "input_tokens": ["usage.prompt_tokens", "usage.input_tokens"],
+    "cached_input_tokens": ["usage.prompt_tokens_details.cached_tokens", "usage.input_tokens_details.cached_tokens",
+                            "usage.cache_read_input_tokens"],
+    "model": [],
+}
+WRAPPERS = ("response.body", "response")  # OpenAI Batch API output lines; {request, response} log wrappers
+TEXT_FIELDS = ("output", "prompt", "model", "group_key", "prompt_hash")
+NUM_FIELDS = ("output_tokens", "input_tokens", "cached_input_tokens")
+NUM_STR = re.compile(r"^\s*\d+(\.\d+)?\s*$")
+TS_MIN_ALIAS = 1e9  # epoch seconds before 2001 under an alias name ("time") are a duration, not a timestamp
+TS_MS = 1e11  # epoch numbers at or above this are milliseconds (1e11 s would be the year 5138)
+FIELD_MAP = {}  # --map field=path, set by scan()/peek() before reading (inherited by forked workers)
+
+
+def _get(d, path):
+    """Value at a dotted path (list items by number); a key equal to the whole path wins (flat CSV/JSON exports).
+    A string met on the way that holds JSON (a CSV cell) is read as JSON to go further."""
+    if isinstance(d, dict) and path in d:
+        return d[path]
+    cur = d
+    for part in path.split("."):
+        if isinstance(cur, str) and cur[:1] in "{[":
+            try:
+                cur = json.loads(cur)
+            except ValueError:
+                return None
+        if isinstance(cur, dict):
+            if part not in cur:
+                return None
+            cur = cur[part]
+        elif isinstance(cur, list) and part.isdigit() and int(part) < len(cur):
+            cur = cur[int(part)]
+        else:
+            return None
+    return cur
+
+
+def _text(v):
+    """Answer text: a string, or a list of content parts / blocks with their text pieces joined (Anthropic content
+    blocks, Chat Completions content parts, OpenAI Responses output items). Tool calls and other non-text parts are
+    skipped; nothing found -> None."""
+    if isinstance(v, str):
+        return v or None
+    if not isinstance(v, list):
+        return None
+    parts = []
+    for x in v:
+        if isinstance(x, str):
+            parts.append(x)
+        elif isinstance(x, dict):
+            if x.get("type") in (None, "text", "output_text") and isinstance(x.get("text"), str):
+                parts.append(x["text"])
+            elif isinstance(x.get("content"), list):
+                t = _text(x["content"])
+                if t:
+                    parts.append(t)
+    return "".join(parts) or None
+
+
+def _num(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str) and NUM_STR.match(v):
+        return float(v) if "." in v else int(v)
+    return None
+
+
+def _ts_value(v, alias):
+    """A time value as parse_ts takes it: numeric strings become numbers, milliseconds become seconds; under an alias
+    a number before TS_MIN_ALIAS is not a time -> None."""
+    x = _num(v)
+    if x is None:
+        return v
+    if x >= TS_MS:
+        x = x / 1000.0
+    if alias and x < TS_MIN_ALIAS:
+        return None
+    return x
+
+
+def _coerce(field, v, alias):
+    if v is None:
+        return None
+    if field == "ts":
+        return _ts_value(v, alias)
+    if field == "output":
+        return _text(v)
+    if field in NUM_FIELDS:
+        return _num(v)
+    if field in TEXT_FIELDS:
+        return v if isinstance(v, str) and v else (str(v) if isinstance(v, (int, float)) and field == "group_key" else None)
+    return v  # token-hash lists, read as before
+
+
+def resolve(d):
+    """Raw record -> (record in the scanner's own field names, ((field, source path), ...) for every field not read
+    under its own name). Order: --map (strict: no fallback), the field's own name, the aliases, then the same inside
+    a response wrapper."""
+    out, via = {}, []
+    for f in FIELDS:
+        if f in FIELD_MAP:
+            v = _coerce(f, _get(d, FIELD_MAP[f]), True)
+            if v is not None:
+                out[f] = v
+                via.append((f, FIELD_MAP[f] + " (--map)"))
+            continue
+        v = _coerce(f, d.get(f), False)
+        if v is not None:
+            out[f] = v
+            if f == "output" and isinstance(d[f], list):  # OpenAI Responses: output items, not a string
+                via.append((f, "output.*.content.*.text"))
+            continue
+        for pre in ("",) + WRAPPERS:
+            base = _get(d, pre) if pre else d
+            if not isinstance(base, dict):
+                continue
+            for path in ([f] if pre else []) + ALIASES.get(f, []):
+                v = _coerce(f, _get(base, path), True)
+                if v is not None:
+                    out[f] = v
+                    via.append((f, (pre + "." if pre else "") + path))
+                    break
+            if f in out:
+                break
+    # Anthropic usage counts cache reads and writes outside input_tokens; the scanner's input_tokens includes the
+    # cached part (call_cost prices input_tokens - cached_input_tokens at the full rate), so add them back
+    if "input_tokens" not in FIELD_MAP and "input_tokens" not in d:
+        for pre in ("",) + WRAPPERS:
+            u = _get(d, (pre + "." if pre else "") + "usage")
+            if isinstance(u, dict) and ("cache_read_input_tokens" in u or "cache_creation_input_tokens" in u):
+                extra = [k for k in ("cache_read_input_tokens", "cache_creation_input_tokens") if _num(u.get(k))]
+                if extra and _num(u.get("input_tokens")) is not None:
+                    out["input_tokens"] = _num(u["input_tokens"]) + sum(_num(u[k]) for k in extra)
+                    via = [x for x in via if x[0] != "input_tokens"]
+                    via.append(("input_tokens", "+".join((pre + "." if pre else "") + "usage." + k
+                                                         for k in ["input_tokens"] + extra)))
+                break
+    return out, tuple(via)
+
+
+def _flatten(d, pre="", depth=0):
+    """(path, value) leaves of a record, for showing candidates; list items up to the third."""
+    if isinstance(d, str) and pre and d[:1] in "{[" and depth < 6:
+        try:
+            d = json.loads(d)
+        except ValueError:
+            pass
+    if isinstance(d, dict) and depth < 6:
+        for k, v in d.items():
+            yield from _flatten(v, "%s.%s" % (pre, k) if pre else str(k), depth + 1)
+    elif isinstance(d, list) and depth < 6 and d and not all(isinstance(x, (int, float, str)) and not isinstance(x, bool)
+                                                             and len(str(x)) < 20 for x in d):
+        for i, v in enumerate(d[:3]):
+            yield from _flatten(v, "%s.%d" % (pre, i), depth + 1)
+    else:
+        yield pre, d
+
+
+CAND_TEXT_MIN = 40  # design value: characters for a string to be shown as a possible answer body
+
+
+def candidates(records):
+    """Paths that could hold the fields the scanner did not find -- shown, never used without --map.
+    ts: values parse_ts reads as a time after 2001; output: the longest strings (by mean length, CAND_TEXT_MIN chars or
+    more); token counts: numbers under a path with "token" in its name."""
+    ts_c, txt, tok = collections.Counter(), collections.defaultdict(list), collections.Counter()
+    for d in records:
+        for p, v in _flatten(d):
+            if not p:
+                continue
+            if isinstance(v, str) and len(v) >= CAND_TEXT_MIN and not NUM_STR.match(v):
+                txt[p].append(len(v))
+            t = _ts_value(v, True) if isinstance(v, (int, float, str)) and not isinstance(v, bool) else None
+            if t is not None and (isinstance(t, (int, float)) or len(str(t)) <= 40):
+                try:
+                    if parse_ts(t) is not None:
+                        ts_c[p] += 1
+                except (ValueError, OverflowError, OSError):
+                    pass
+            if _num(v) is not None and "tok" in p.lower():
+                tok[p] += 1
+    return {"ts": [p for p, _ in ts_c.most_common(3)],
+            "output": [p for p, _ in sorted(txt.items(), key=lambda kv: -statistics.mean(kv[1]))[:3]],
+            "tokens": [p for p, _ in tok.most_common(4)]}
+
+
+def looks_like(records):
+    """The vendor shape a record has, by fixed markers only (for the report's wording)."""
+    for d in records:
+        b = d
+        for pre in WRAPPERS:
+            x = _get(d, pre)
+            if isinstance(x, dict) and ("choices" in x or "usage" in x or "content" in x):
+                b = x
+                break
+        if isinstance(b.get("choices"), list) or b.get("object") in ("chat.completion", "text_completion"):
+            return "openai_chat"
+        if b.get("object") == "response" or (isinstance(b.get("output"), list) and "created_at" in b):
+            return "openai_responses"
+        if b.get("type") == "message" and isinstance(b.get("content"), list):
+            return "anthropic"
+    return None
+
+
 class Row:
     __slots__ = ("i", "ts", "model", "toks", "length", "out_billed", "out_counted", "inp", "cached", "key",
-                 "auto", "prompt_sig", "masked_out_sig", "has_body", "hashed", "sig", "fact", "req", "out_sig")
+                 "auto", "prompt_sig", "masked_out_sig", "has_body", "hashed", "sig", "fact", "req", "out_sig", "via")
 
 
-def parse_line(n, line):
-    """One log line -> (status, Row or None); status is "ok", "empty", "bad_json" or "rejected_no_ts"."""
+def load_record(line):
+    """A JSONL line or a CSV row -> dict, or "empty" / "bad_json"."""
+    if isinstance(line, dict):
+        return line
     line = line.strip()
     if not line:
-        return "empty", None
+        return "empty"
     try:
         d = json.loads(line)
     except ValueError:
-        return "bad_json", None
-    if not isinstance(d, dict):
-        return "bad_json", None
-    ts = parse_ts(d.get("ts"))
+        return "bad_json"
+    return d if isinstance(d, dict) else "bad_json"
+
+
+def parse_line(n, line):
+    """One log line (JSONL text or a CSV row dict) -> (status, Row or None); status is "ok", "empty", "bad_json" or
+    "rejected_no_ts"."""
+    d = load_record(line)
+    if isinstance(d, str):
+        return d, None
+    d, via = resolve(d)
+    try:
+        ts = parse_ts(d.get("ts"))
+    except (ValueError, OverflowError, OSError):
+        ts = None
     if ts is None:
         return "rejected_no_ts", None
     r = Row()
-    r.i, r.ts, r.model = n, ts, d.get("model") or None
+    r.i, r.ts, r.model, r.via = n, ts, d.get("model") or None, via
     out, hashes = d.get("output"), d.get("output_token_hashes")
     r.hashed = False
     if isinstance(out, str) and out:
@@ -826,6 +1060,29 @@ def _parse_chunk(chunk):
 CHUNK = 1000  # lines per worker task
 
 
+def open_records(path, fh):
+    """("jsonl" | "csv", iterator of lines or row dicts). CSV by extension (.csv, .tsv) or, failing that, by a first
+    non-empty line that is not a JSON object but has a header delimiter; the header row gives the field names."""
+    import csv
+    import itertools
+    ext = os.path.splitext(path)[1].lower()
+    head = []
+    first = ""
+    for line in fh:
+        head.append(line)
+        if line.strip():
+            first = line.strip()
+            break
+    lines = itertools.chain(head, fh)
+    if ext not in (".csv", ".tsv") and (not first or first.startswith("{")):
+        return "jsonl", lines
+    delim = "\t" if ext == ".tsv" or ("\t" in first and "," not in first) else ("," if "," in first or ext == ".csv" else None)
+    if delim is None:
+        return "jsonl", lines
+    csv.field_size_limit(2 ** 31 - 1)  # answer bodies are longer than the 128 KB default
+    return "csv", csv.DictReader(lines, delimiter=delim)
+
+
 def read_rows(path, stats, workers=1):
     """Lines are parsed (JSON, o200k, MinHash signature) in `workers` forked processes, a bounded window of chunks at
     a time so the file is never held in memory; rows come back in file order, so the result does not depend on
@@ -839,19 +1096,23 @@ def read_rows(path, stats, workers=1):
             stats["lines"] += 1
             if status == "ok":
                 rows.append(r)
+                for f, src in r.via:
+                    stats[("via", f, src)] += 1
             else:
                 stats[status] += 1
 
     import multiprocessing as mp
     ctx = mp.get_context("fork") if workers > 1 and "fork" in mp.get_all_start_methods() else None
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig", newline="") as fh:  # -sig: a spreadsheet's CSV starts with a BOM
+        records = open_records(path, fh)
+        stats[("format", records[0])] = 1
         if ctx is None:
-            for n, line in enumerate(fh):
+            for n, line in enumerate(records[1]):
                 take([parse_line(n, line)])
             return rows
         o200k.encode("warm")  # load the rank table before forking so workers share it
         with ctx.Pool(workers) as pool:
-            it = enumerate(fh)
+            it = enumerate(records[1])
             while True:
                 window = []
                 for _ in range(workers * 4):
@@ -1155,13 +1416,40 @@ def cell_rates(cell):
 
 
 # ------------------------------------------------------------------ scan
-def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1):
+def head_records(path, n=None):
+    """The first n records (dicts) of a log, for --peek and the hints of a rejected run."""
+    n = n or PEEK_LINES
+    out = []
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        for line in open_records(path, fh)[1]:
+            d = load_record(line)
+            if isinstance(d, dict):
+                out.append(d)
+            if len(out) >= n:
+                break
+    return out
+
+
+PEEK_LINES = 200  # design value: records --peek reads (and the hints of a rejected run look at)
+
+
+def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=None):
     t0 = time.time()
+    FIELD_MAP.clear()
+    FIELD_MAP.update(field_map or {})
     st = collections.Counter()
     rows = read_rows(path, st, workers)
     pricing = load_pricing(pricing_path)
     res = {"version": VERSION, "input": os.path.basename(path), "lines": st["lines"], "bad_json": st["bad_json"],
-           "rejected_no_ts": st["rejected_no_ts"], "calls": len(rows), "mode_requested": mode}
+           "rejected_no_ts": st["rejected_no_ts"], "calls": len(rows), "mode_requested": mode,
+           "format": next((k[1] for k in st if isinstance(k, tuple) and k[0] == "format"), "jsonl"),
+           "field_map": dict(FIELD_MAP) or None, "field_sources": {}}
+    for k, c in st.items():
+        if isinstance(k, tuple) and k[0] == "via":
+            res["field_sources"].setdefault(k[1], {})[k[2]] = c
+    if not rows or not any(r.has_body for r in rows):
+        head = head_records(path)
+        res["field_hints"] = {"looks_like": looks_like(head), "candidates": candidates(head), "records_looked_at": len(head)}
     if not rows:
         res["error"] = "no usable rows (every row needs ts)"
         return res
@@ -1606,7 +1894,8 @@ def report(res, lang="ko"):
     if res.get("error"):
         L += [("- 줄 %d · JSON 오류 %d · ts 없음 거부 %d → 쓸 수 있는 호출 0" if ko else
                "- %d lines · %d bad JSON · %d rejected for missing ts -> 0 usable calls")
-              % (res["lines"], res["bad_json"], res["rejected_no_ts"]), "", "**" + res["error"] + "**", ""]
+              % (res["lines"], res["bad_json"], res["rejected_no_ts"])] + sources_line(res, ko) + \
+             ["", "**" + res["error"] + "**", ""]
         L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않는다." if ko else "everything. Sections 1-5 are not produced.")]
         if res["rejected_no_ts"]:
             L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 짝을 만들면 뒤의 답이 앞 답의 초안이 되어 겹침이 부풀고 진단이 거짓이 된다. "
@@ -1614,6 +1903,7 @@ def report(res, lang="ko"):
                              ("%d lines rejected for missing ts — pairing without time order lets a later answer serve as an earlier "
                               "one's draft, inflating overlap and making the diagnosis false. Fix: add ts (ISO-8601 or epoch "
                               "seconds) to every line")) % res["rejected_no_ts"])
+            L += ["  - " + x for x in hint_lines(res, ko, "ts")]
         if res["bad_json"]:
             L.append("- " + ("JSON 이 아닌 줄 %d개" if ko else "%d lines that are not JSON objects") % res["bad_json"])
         L.append("")
@@ -1624,8 +1914,7 @@ def report(res, lang="ko"):
           % (res["calls"], res["lines"], res["bad_json"], res["rejected_no_ts"], res["period"][0][:10], res["period"][1][:10]),
           ("- 모델: " if ko else "- models: ") + ", ".join("%s %d" % kv for kv in res["models"].items()),
           ("- 본문: 텍스트 %d · 토큰 해시 %d · 없음 %d" if ko else "- body: text %d · token hashes %d · none %d")
-          % (b["text"], b["token_hashes"], b["none"]),
-          "- " + t["net"], ""]
+          % (b["text"], b["token_hashes"], b["none"])] + sources_line(res, ko) + ["- " + t["net"], ""]
     L += ["## " + t["s1"], ""]
     if res.get("bill"):
         L += [("- 출력 금액 %s / 전체 %s = **%s** (가격 호출 %d건, 가격표 %s 기준)" if ko else
@@ -1658,6 +1947,7 @@ def report(res, lang="ko"):
                  "고칠 법: output 또는 output_token_hashes(--hashify)를 넣는다" if ko else
                  "%d calls without a body — all of axis 1 (overlap). Sections 2 (two-axis table), 4 (savings band) and 5 "
                  "(zero-call candidates) were not produced. Fix: add output or output_token_hashes (--hashify)") % b["none"]]
+        gaps[0] += ". " + " ".join(hint_lines(res, ko, "output"))
         gaps += _gaps_common(res, ko)
         L += ["- " + x for x in gaps] + ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
         return "\n".join(L)
@@ -1854,7 +2144,128 @@ def report(res, lang="ko"):
     return "\n".join(L)
 
 
-SHARE_DROP = {"input", "mode_requested"}
+LOOKS = {"openai_chat": ("OpenAI Chat Completions 로그", "an OpenAI Chat Completions log"),
+         "openai_responses": ("OpenAI Responses 로그", "an OpenAI Responses log"),
+         "anthropic": ("Anthropic Messages 로그", "an Anthropic Messages log")}
+
+
+def sources_line(res, ko):
+    """Section 0: which fields were read under another name (v1.0.2) -- the user has to see what was read as what."""
+    fs = res.get("field_sources") or {}
+    head = [("- 형식: CSV (머리 줄을 필드 이름으로)" if ko else "- format: CSV (header row as field names)")] \
+        if res.get("format") == "csv" else []
+    if not fs:
+        return head
+    items = ["%s ← %s (%d%s)" % (f, src, c, "줄" if ko else "")
+             for f in FIELDS if f in fs for src, c in sorted(fs[f].items(), key=lambda kv: -kv[1])]
+    return head + [("- 별칭으로 읽은 필드: " if ko else "- fields read under another name: ") + " · ".join(items)]
+
+
+def hint_lines(res, ko, field):
+    """How to fix a missing ts / output: the vendor shape if one is recognised, the candidate paths, --peek / --map."""
+    h = res.get("field_hints") or {}
+    c = (h.get("candidates") or {}).get(field) or []
+    lk = LOOKS.get(h.get("looks_like"))
+    out = []
+    if lk:
+        out.append(("%s 같습니다 — 이 형식은 별칭으로 읽는데도 %s 를 못 찾았습니다." if ko else
+                    "This looks like %s — the scanner reads that shape, yet found no %s.") % (lk[0 if ko else 1], field))
+    if c:
+        out.append(("`%s` 에 %s 같은 값이 보입니다. `--map %s=%s` 로 지정하십시오." if ko else
+                    "`%s` holds values that look like %s. Point the scanner at it with `--map %s=%s`.")
+                   % (c[0], ("시각" if field == "ts" else "답 본문") if ko else ("a time" if field == "ts" else "the answer body"),
+                      field, c[0]))
+        if len(c) > 1:
+            out.append(("다른 후보: %s" if ko else "other candidates: %s") % ", ".join("`%s`" % x for x in c[1:]))
+    else:
+        out.append(("앞 %d줄에 %s 같은 값이 없습니다." if ko else "No value in the first %d records looks like %s.")
+                   % (h.get("records_looked_at", 0),
+                      ("시각(ISO-8601 또는 epoch)" if field == "ts" else "답 본문(%d자 이상 문자열)" % CAND_TEXT_MIN) if ko else
+                      ("a time (ISO-8601 or epoch)" if field == "ts" else "an answer body (a string of %d+ characters)" % CAND_TEXT_MIN)))
+    out.append(("`--peek` 로 무엇을 무엇으로 읽는지 먼저 보십시오(호출 0, 앞 %d줄)." if ko else
+                "Run with `--peek` first to see what is read as what (no calls, first %d records).") % PEEK_LINES)
+    return out
+
+
+def peek(path, field_map=None, lang="ko"):
+    """--peek: read the first records and print what would be read as what, with an example; for a missing field, the
+    candidate paths. Nothing is scanned or written."""
+    ko = lang == "ko"
+    FIELD_MAP.clear()
+    FIELD_MAP.update(field_map or {})
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        fmt = open_records(path, fh)[0]
+    recs = head_records(path)
+    seen = collections.OrderedDict((f, {"n": 0, "src": collections.Counter(), "ex": None, "raw": None}) for f in FIELDS)
+    readable = body = 0
+    for d in recs:
+        out, via = resolve(d)
+        vmap = dict(via)
+        for f, v in out.items():
+            e = seen[f]
+            e["n"] += 1
+            e["src"][vmap.get(f, f)] += 1
+            if e["ex"] is None:
+                e["ex"], e["raw"] = v, _get(d, vmap.get(f, f).split(" (")[0])
+        try:
+            ok = parse_ts(out.get("ts")) is not None
+        except (ValueError, OverflowError, OSError):
+            ok = False
+        readable += ok
+        body += ok and ("output" in out or "output_token_hashes" in out)
+    cand = candidates(recs)
+    lk = LOOKS.get(looks_like(recs))
+    L = [("형식: %s · 앞 %d줄을 읽었습니다%s" if ko else "format: %s · read the first %d records%s")
+         % (fmt.upper(), len(recs), (" (%s 같습니다)" % lk[0] if ko else " (looks like %s)" % lk[1]) if lk else "")]
+    w = max(len(f) for f in FIELDS)
+    for f in FIELDS:
+        e = seen[f]
+        if not e["n"]:
+            if f in ("ts", "output"):
+                c = cand["ts" if f == "ts" else "output"]
+                L.append("%-*s ← %s" % (w, f, (("못 찾음. 후보: %s → `--map %s=%s`" if ko else "not found. candidates: %s -> `--map %s=%s`")
+                                               % (", ".join(c), f, c[0]) if c else ("못 찾음. 후보 없음" if ko else "not found, no candidate"))))
+            elif f in NUM_FIELDS and cand["tokens"]:
+                L.append("%-*s ← %s" % (w, f, ("못 찾음. 토큰 수 같은 값: %s" if ko else "not found. token-count-like values: %s")
+                                        % ", ".join(cand["tokens"])))
+            continue
+        src = ", ".join("%s%s" % (s_, "" if c_ == e["n"] else " ×%d" % c_) for s_, c_ in e["src"].most_common())
+        ex = e["ex"]
+        if f == "ts":
+            kind = "ISO-8601"
+            raw = _num(e["raw"])
+            if raw is not None:
+                kind = ("epoch 밀리초" if ko else "epoch ms") if raw >= TS_MS else ("epoch 초" if ko else "epoch s")
+            try:
+                shown = parse_ts(ex).strftime("%Y-%m-%d %H:%M:%S")
+            except (AttributeError, ValueError, OverflowError, OSError):
+                shown = repr(ex)
+            exs = "(%s)  %s %s" % (kind, "예:" if ko else "e.g.", shown)
+        elif f == "output":
+            t = ex.replace("\n", " ")
+            exs = '%s "%s%s" (%s %s)' % ("예:" if ko else "e.g.", t[:30], "…" if len(t) > 30 else "",
+                                         "{:,}".format(len(o200k.encode(ex))), "토큰" if ko else "tokens")
+        elif f in ("output_token_hashes", "prompt_token_hashes"):
+            exs = "(%d)" % len(ex) if isinstance(ex, list) else ""
+        elif f in NUM_FIELDS:
+            exs = "%s %s" % ("예:" if ko else "e.g.", "{:,}".format(ex))
+        else:
+            t = str(ex)
+            exs = '%s "%s%s"' % ("예:" if ko else "e.g.", t[:30].replace("\n", " "), "…" if len(t) > 30 else "")
+        L.append("%-*s ← %-34s %s%s" % (w, f, src, exs, "" if e["n"] == len(recs) else
+                                         ("  [%d/%d줄]" if ko else "  [%d/%d records]") % (e["n"], len(recs))))
+    L.append("→ %d줄 중 %d줄을 읽을 수 있습니다(ts 있음), 그중 본문 있음 %d줄." % (len(recs), readable, body) if ko else
+             "-> %d of %d records can be read (have ts), %d of them with an answer body." % (readable, len(recs), body))
+    if readable:
+        L.append("이대로 돌리려면 --peek 를 빼십시오." if ko else "To run on this, drop --peek.")
+    else:
+        L.append("ts 를 못 찾으면 한 줄도 쓸 수 없습니다. 위 후보를 `--map ts=<경로>` 로 지정하십시오." if ko else
+                 "Without ts no record can be used. Point it at a candidate above with `--map ts=<path>`.")
+    print("\n".join(L))
+    return 0 if readable else 1
+
+
+SHARE_DROP = {"input", "mode_requested", "field_map", "field_sources", "field_hints"}  # path names can be the customer's
 
 
 def share_summary(res):
@@ -1880,7 +2291,22 @@ def main(argv=None):
     ap.add_argument("--from-pairs", help="convert a material pair JSONL (doc_id, from, to, draft, gold, facts) to the call log and exit")
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1,
                     help="processes for reading and tokenizing (default: all cores; 1 = this process only)")
+    ap.add_argument("--peek", action="store_true",
+                    help="read the first %d records and show what would be read as what; scan nothing" % PEEK_LINES)
+    ap.add_argument("--map", nargs="+", action="extend", default=[], metavar="FIELD=PATH",
+                    help="read FIELD from PATH (dotted, list items by number: choices.0.message.content; a CSV column "
+                         "name as is). FIELD is one of: " + ", ".join(FIELDS))
     a = ap.parse_args(argv)
+    fmap = {}
+    for m in a.map:
+        f, eq, path = m.partition("=")
+        if not eq or f not in FIELDS or not path:
+            ap.error("--map takes FIELD=PATH with FIELD one of %s (got %r)" % (", ".join(FIELDS), m))
+        fmap[f] = path
+    if a.peek:
+        if not a.logs:
+            ap.error("--peek needs --logs")
+        return peek(a.logs, fmap, a.lang)
     if a.hashify:
         n = hashify(a.hashify, a.out or a.hashify + ".hashed.jsonl", a.salt)
         print("hashed %d rows" % n)
@@ -1891,7 +2317,7 @@ def main(argv=None):
         return 0
     if not a.logs:
         ap.error("--logs is required")
-    res = scan(a.logs, a.pricing, a.mode, a.workers)
+    res = scan(a.logs, a.pricing, a.mode, a.workers, fmap)
     md = report(res, a.lang)
     if a.out:
         open(a.out, "w", encoding="utf-8").write(md)

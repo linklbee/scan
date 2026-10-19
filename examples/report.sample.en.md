@@ -1,6 +1,6 @@
 # Linklbee diagnostic report — output tokens
 
-scanner 1.0.1 · calls.sample.jsonl
+scanner 1.0.2 · calls.sample.jsonl
 
 ## 0. What was read
 
@@ -71,4 +71,4 @@ Ranges we measured (three public document sets (product copy, drug label revisio
 - 248 calls without output_tokens — counted from the body with o200k (approximate for non-OpenAI models)
 - Saving ranges were measured on other materials (two public document sets). This customer's own value comes from a holdout pilot
 
-took 1.2s
+took 1.4s

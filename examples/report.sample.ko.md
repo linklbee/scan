@@ -1,6 +1,6 @@
 # 링클비 진단 리포트 — 출력 토큰
 
-scanner 1.0.1 · calls.sample.jsonl
+scanner 1.0.2 · calls.sample.jsonl
 
 ## 0. 읽은 것
 
@@ -71,4 +71,4 @@ scanner 1.0.1 · calls.sample.jsonl
 - output_tokens 없는 호출 248개 — 본문을 o200k 로 세었다(OpenAI 밖 모델이면 근사)
 - 절감 범위는 다른 재료(공개 문서 2종)에서 잰 값이다. 이 고객 트래픽에서 잰 값은 홀드아웃 파일럿에서 나온다
 
-소요 1.2초
+소요 1.4초
