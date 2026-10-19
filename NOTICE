@@ -1,0 +1,7 @@
+Linklbee scanner
+Copyright (c) 2026 NOTEGG
+
+This product is licensed under the MIT License (SPDX-License-Identifier: MIT), see LICENSE.
+
+It embeds the o200k_base token table published with OpenAI's tiktoken (MIT License); the scanner checks the
+embedded table against its sha256 on load.
