@@ -1,6 +1,6 @@
 # 링클비 진단 리포트 — 출력 토큰
 
-scanner 1.0.0 · calls.sample.jsonl
+scanner 1.0.1 · calls.sample.jsonl
 
 ## 0. 읽은 것
 

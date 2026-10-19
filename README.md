@@ -80,11 +80,15 @@ The scanner measures **your** share from **your** logs. The savings band it appl
 
 | Dataset (public) | Calls | Output tokens | Cost | Quality: Linklbee | Quality: full rewrite |
 |---|---|---|---|---|---|
-| Korea MFDS drug-label revisions | 45 | −78.5% | −61.7% | 0.9719 | 0.9346 |
 | Korean statute amendments | 317 | −57.1% | −38.2% | 0.9777 | 0.9811 |
-| US eCFR amendments | 79 | −74.3% | −56.9% | 0.9875 | 0.9439 |
+| Product manual revisions (Arduino docs) | 327 | −87.5% | −68.7% | 0.9995 | 0.988 |
+| Knowledge-base revisions (Wikipedia sections) | 308 | −91.0% | −64.1% | 0.9993 | 0.997 |
 
-Model `claude-sonnet-5-5`, 2026-10-17 to 18. **Sample sizes are where each run's budget ended, not a design choice.**
+All three are **update work where the change is given** — the diff carrying the new wording is part of the request, as it is in a statute amendment. Reasoning tokens were **off on both arms**.
+
+Model `claude-sonnet-5-5`, 2026-10-17 to 19. **Sample sizes are where each run's budget ended, not a design choice.**
+
+Two further runs (45 Korea MFDS drug labels, 79 US eCFR sections) are held back while we re-check how they were measured.
 
 **The cost figures include the cost of re-calling as a full rewrite when an edit fails to apply.** We did not take that out.
 

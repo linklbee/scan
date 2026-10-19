@@ -1,6 +1,6 @@
 # Linklbee diagnostic report — output tokens
 
-scanner 1.0.0 · calls.sample.jsonl
+scanner 1.0.1 · calls.sample.jsonl
 
 ## 0. What was read
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.0.0 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.0.1 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -666,7 +666,7 @@ from array import array
 
 
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 # a package resource, so it also loads from inside a zipapp (engine.pyz)
 CELLS = json.loads(BANDS_JSON)
@@ -711,6 +711,15 @@ SPAN_BOOT_B = 2000
 SPAN_BOOT_SEEDS = (0, 1, 2, 3, 4)
 OUTPUT_PRICE_MULTIPLE = 5  # design value (PM 10-19): output price / input price used only when no call is priced
 MONEY_BAND = (0.85, 0.99)  # UB-1: below 0.85 the diff call lost money (0.78-0.85: -0.8%), at 0.99+ the draft won
+# SCAN-THINK (10-19): billed output tokens over the
+# body counted with o200k, over calls that carry both. Reasoning tokens are billed as output but are not in the body, and
+# Linklbee shortens what the model writes, not its reasoning. The tokenizer gap alone is not small: seven paid runs with
+# thinking_tokens 0 (claude-sonnet/haiku-5-5, ko/en, ~2,600 calls) had 1.54-1.71 billed per
+# o200k token. The line sits above that, a design value; for models that bill in o200k (ratio ~1 without reasoning) it
+# only fires once reasoning is about half the output. Warning only -- the savings estimate is not rescaled (that needs the
+# reasoning share per call, which the log does not give).
+THINK_RATIO = 2.0
+THINK_MIN_CALLS = 30  # design value: fewer calls with both counts -> no ratio is shown
 
 
 # ------------------------------------------------------------------ input
@@ -1165,6 +1174,11 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1):
     res["output_tokens_missing"] = sum(1 for r in rows if r.out_billed is None)
     total_out = sum(r.out_billed or 0 for r in rows)
     res["output_tokens_total"] = total_out
+    both = [r for r in rows if r.has_body and not r.out_counted and r.out_billed is not None and r.length]
+    b_tok, m_tok = sum(r.out_billed for r in both), sum(r.length for r in both)
+    res["billed_vs_body"] = {"calls": len(both), "billed_output_tokens": b_tok, "body_o200k_tokens": m_tok,
+                             "ratio": b_tok / m_tok if m_tok else None, "threshold": THINK_RATIO,
+                             "warn": len(both) >= THINK_MIN_CALLS and m_tok > 0 and b_tok / m_tok >= THINK_RATIO}
 
     # section 1: output share of the bill
     priced = [r for r in rows if call_cost(r, pricing) is not None]
@@ -1622,6 +1636,17 @@ def report(res, lang="ko"):
         L += [("- 금액 환산 불가: 가격표에 있는 모델 + input_tokens 가 있는 호출이 없다. 출력 토큰 합 %d." if ko else
                "- No dollar figure: no call has both a priced model and input_tokens. Output tokens total %d.")
               % res["output_tokens_total"], ""]
+    bv = res.get("billed_vs_body") or {}
+    if bv.get("warn"):
+        L += [("- **주의 — 청구된 출력 토큰 %d 중 본문에서 셀 수 있는 것은 %d 입니다**(o200k, 두 값이 다 있는 호출 %d건, %.2f배). "
+               "차이는 추론 토큰으로 보입니다. **링클비는 모델이 쓰는 글을 줄이지 추론을 줄이지 않습니다.** 이 로그에서는 절감 "
+               "여지가 아래 추정보다 작을 수 있습니다. (추론 없는 Claude 로그도 토크나이저 차이로 1.5~1.7배가 나와서, %.1f배 "
+               "이상에서만 이 경고를 띄웁니다.)" if ko else
+               "- **Note — of %d billed output tokens, %d can be counted in the answer bodies** (o200k, %d calls with both, "
+               "%.2fx). The gap looks like reasoning tokens. **Linklbee shortens what the model writes, not its reasoning.** "
+               "Savings in this log can be smaller than the estimates below. (Claude logs without reasoning already show "
+               "1.5-1.7x from the tokenizer difference, so this note appears only at %.1fx or more.)")
+              % (bv["billed_output_tokens"], bv["body_o200k_tokens"], bv["calls"], bv["ratio"], bv["threshold"]), ""]
     if res.get("upper_bound_only"):
         L += ["## " + t["s3"], "", ("- 응답 본문이 없어 겹침(축 1)을 못 쟀다. 답 ≥200 토큰 호출의 출력 몫 = **%s 이하(상한)**. "
                                     "실제 적격 비중은 이보다 낮을 수 있고, 얼마나 낮은지는 본문(또는 토큰 해시) 없이는 알 수 없다." if ko else
@@ -1842,7 +1867,8 @@ def share_summary(res):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Linklbee scanner v1 — output-token diagnosis (no network)")
-    ap.add_argument("--logs", help="generic JSONL call log")
+    ap.add_argument("--logs", help="generic JSONL call log (group_key = one document / one case across its versions, "
+                                   "not the kind of call)")
     ap.add_argument("--out", help="report path (or hashed JSONL with --hashify)")
     ap.add_argument("--json", help="also write stats JSON")
     ap.add_argument("--lang", choices=("ko", "en"), default="ko")
