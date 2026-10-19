@@ -50,6 +50,7 @@ python3 linklbee_scan.py --logs export.jsonl --map ts=created output=data.body.t
 ```
 
 **CSV 도 읽습니다.** 확장자(`.csv`·`.tsv`)나 첫 줄로 판별하고, 머리 줄을 필드 이름으로 봅니다. `--map` 은 열 이름에도 걸립니다(`--map ts=When output=AnswerBody`).
+**JSON 배열 내보내기도 읽습니다.** 파일이 `[` 로 시작하면 한 줄이든 들여쓰기든 원소 하나를 호출 하나로 봅니다(파일 전체를 메모리에 올리지 않습니다).
 
 ## 이 파일이 아직 없다면
 
@@ -89,7 +90,7 @@ grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py      # -> 0
 
 ## 필요한 로그 필드는 두 개입니다
 
-한 줄 = LLM 호출 한 번 (JSONL 또는 CSV). 아래 이름이 아니어도 위 표의 이름이면 읽습니다.
+한 줄 = LLM 호출 한 번 (JSONL 또는 CSV; JSON 배열이면 원소 하나). 아래 이름이 아니어도 위 표의 이름이면 읽습니다.
 
 ```json
 {"ts": "2026-10-17T09:12:33Z", "output": "그때 모델이 낸 답 본문"}
@@ -169,6 +170,7 @@ python3 linklbee_scan.py --logs calls.jsonl --lang en --out report.md
 - `--peek` reads the first 200 records and prints what would be read as what, with an example, and candidate paths for a field it cannot find. Nothing is scanned or written.
 - `--map ts=created output=data.body.text output_tokens=meta.usage.out` points a field at any path (dots, list items by number) or CSV column.
 - CSV is read too (by extension `.csv`/`.tsv` or by the first line; the header row gives the field names).
+- A JSON-array export is read too: a file starting with `[`, on one line or indented, is one call per element (streamed, not loaded whole).
 
 **No log file yet?** Append one line per call right after it. Python (OpenAI SDK; for Anthropic use `resp.content[0].text`, `u.input_tokens`, `u.output_tokens`):
 
@@ -193,27 +195,6 @@ export function logCall(resp: any, path = "calls.jsonl") {  // resp = await clie
 **Keep text out of files too**: `--hashify calls.jsonl --out hashed.jsonl --salt <secret>`, then scan `hashed.jsonl`; overlap comes out the same.
 
 **The report holds numbers only** — no answer text, no keys, no prompts (checked by planting marker strings in every field of the example log: 0 hits in all four outputs). The header shows the input file name and model names.
-
-### Where the savings numbers come from
-
-The scanner measures **your** share from **your** logs. The savings band it applies to that share comes from the runs below — real paid calls against public revision datasets, each item called twice (once through Linklbee, once as a full rewrite), with quality scored against the version that was actually published next.
-
-| Dataset (public) | Calls | Output tokens | Cost | Quality: Linklbee | Quality: full rewrite |
-|---|---|---|---|---|---|
-| Korean statute amendments | 317 | −57.1% | −38.2% | 0.9777 | 0.9811 |
-| Korea MFDS drug-label revisions | 45 | −75.1% | −57.0% | 0.971 | 0.9628 |
-| Product manual revisions (Arduino docs) | 327 | −87.5% | −68.7% | 0.9995 | 0.988 |
-| Knowledge-base revisions (Wikipedia sections) | 308 | −91.0% | −64.1% | 0.9993 | 0.997 |
-
-The statute, manual and wiki runs are **update work where the change is given** — the diff carrying the new wording is part of the request, as it is in a statute amendment. Reasoning tokens were **off on both arms** in all four runs.
-
-Model `claude-sonnet-5-5`, 2026-10-17 to 19. **Sample sizes are where each run's budget ended, not a design choice.**
-
-One further run (79 US eCFR sections) is held back while we re-check how it was measured.
-
-**The cost figures include the cost of re-calling as a full rewrite when an edit fails to apply.** We did not take that out.
-
-These come from public data. They are not a promise about your traffic — which is the entire reason this scanner exists.
 
 **What it does not do**
 - A service that only makes one-off calls should get 0. That is the correct result.

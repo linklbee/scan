@@ -973,9 +973,11 @@ class Row:
 
 
 def load_record(line):
-    """A JSONL line or a CSV row -> dict, or "empty" / "bad_json"."""
+    """A JSONL line, a CSV row or a JSON-array element -> dict, or "empty" / "bad_json"."""
     if isinstance(line, dict):
         return line
+    if line is None:  # a JSON-array element that is not an object, or undecodable text (json_array)
+        return "bad_json"
     line = line.strip()
     if not line:
         return "empty"
@@ -1060,8 +1062,55 @@ def _parse_chunk(chunk):
 CHUNK = 1000  # lines per worker task
 
 
+ARRAY_READ = 1 << 16  # characters read ahead before a JSON-array element is decoded again
+
+
+def json_array(lines):
+    """Elements of top-level JSON arrays (an export file, one line or indented), streamed: the buffer holds the
+    current element and a read-ahead, never the whole file. An object element is yielded as a dict; a non-object element,
+    and text that does not decode by end of file (once), are yielded as None, which counts as one bad_json line."""
+    dec = json.JSONDecoder()
+    buf, pos, eof, opened = "", 0, False, False
+
+    def more(need):
+        nonlocal buf, pos, eof
+        buf, pos, got = buf[pos:], 0, 0
+        while got < need:
+            line = next(lines, None)
+            if line is None:
+                eof = True
+                break
+            buf += line
+            got += len(line)
+
+    while True:
+        while pos < len(buf) and (buf[pos].isspace() or buf[pos] == "," or (buf[pos] == "[" and not opened)):
+            opened = opened or buf[pos] == "["
+            pos += 1
+        if pos >= len(buf):
+            if eof:
+                return
+            more(ARRAY_READ)
+            continue
+        if buf[pos] == "]":  # end of this array; a following one (arrays one per line, or concatenated) is read too
+            opened = False
+            pos += 1
+            continue
+        try:
+            d, end = dec.raw_decode(buf, pos)
+        except ValueError:
+            if eof:
+                yield None
+                return
+            more(max(ARRAY_READ, len(buf) - pos))  # doubles the window: a long element costs linear time, not quadratic
+            continue
+        yield d if isinstance(d, dict) else None
+        pos = end
+
+
 def open_records(path, fh):
-    """("jsonl" | "csv", iterator of lines or row dicts). CSV by extension (.csv, .tsv) or, failing that, by a first
+    """("jsonl" | "json" | "csv", iterator of lines or records). A first non-empty line starting with "[" is one JSON
+    array (v1.0.2: an export file), read element by element. CSV by extension (.csv, .tsv) or, failing that, by a first
     non-empty line that is not a JSON object but has a header delimiter; the header row gives the field names."""
     import csv
     import itertools
@@ -1074,6 +1123,8 @@ def open_records(path, fh):
             first = line.strip()
             break
     lines = itertools.chain(head, fh)
+    if ext not in (".csv", ".tsv") and first.startswith("["):
+        return "json", json_array(lines)
     if ext not in (".csv", ".tsv") and (not first or first.startswith("{")):
         return "jsonl", lines
     delim = "\t" if ext == ".tsv" or ("\t" in first and "," not in first) else ("," if "," in first or ext == ".csv" else None)
@@ -2049,7 +2100,7 @@ def report(res, lang="ko"):
     if fi["on_pairs_with_request"]:
         L.append(("- 사실 입력(축 3): 요청 본문이 있는 켜짐 짝 %d개(켜짐 짝 %d개 중). 답에 새로 들어간 토큰 중 요청이 미리 알려 준 비율 = "
                   "토큰 가중 %s · 중앙 %s (p10 %s ~ p90 %s) · 0.5 이상인 짝 %s · 다른 요청을 넣은 대조군 %s → **고유 몫 %s**. **[선 미확정]** 이 축의 적격선은 아직 정하지 않았다. "
-                  "참고(저희 재료, 귀사 값 아님 — %s): 품질 통과 재료 %s ~ %s · 품질 미달 재료 %s ~ %s." if ko else
+                  "참고(저희 재료, 자사 값 아님 — %s): 품질 통과 재료 %s ~ %s · 품질 미달 재료 %s ~ %s." if ko else
                   "- Fact input (axis 3): %d switch-on pairs with a request body (of %d). Share of the answer's new tokens the "
                   "request told in advance = token-weighted %s · median %s (p10 %s – p90 %s) · pairs at 0.5 or more %s · "
                   "control with another request %s -> **own share %s**. "
@@ -2153,7 +2204,9 @@ def sources_line(res, ko):
     """Section 0: which fields were read under another name (v1.0.2) -- the user has to see what was read as what."""
     fs = res.get("field_sources") or {}
     head = [("- 형식: CSV (머리 줄을 필드 이름으로)" if ko else "- format: CSV (header row as field names)")] \
-        if res.get("format") == "csv" else []
+        if res.get("format") == "csv" else \
+        [("- 형식: JSON 배열 (원소 하나 = 호출 하나)" if ko else "- format: JSON array (one element per call)")] \
+        if res.get("format") == "json" else []
     if not fs:
         return head
     items = ["%s ← %s (%d%s)" % (f, src, c, "줄" if ko else "")
