@@ -1,6 +1,6 @@
 # Linklbee diagnostic report — output tokens
 
-scanner 1.0.2 · calls.sample.jsonl
+scanner 1.1.1 · calls.sample.jsonl
 
 ## 0. What was read
 
@@ -28,7 +28,7 @@ cell = pairs · share of all output tokens. Bold = switch on (overlap >= 0.78 an
 
 ## 3. Qualified share — the conclusion
 
-- **Calling at every version leaves a large band where the call itself loses (23.4% of output at overlap >= 0.99), but calling once per few versions brings it into the qualifying range.** span 2 for every document (one call per that many versions): >= 0.99 4.7% · under 0.78 where diff loses 5.7% · the money band 0.85-0.99 89.6%. The span was fitted on this log (table below).
+- **Caution — on this material the LLM call itself may be the loss.** 23.4% of paired output is at overlap >= 0.99 (the draft already is the next answer). On such material calling, diff or full, scored below the draft as is (admin rules, 277 real calls: draft 0.9635 > diff 0.9611 > full 0.9545). What should shrink here is the call itself, and that is not Linklbee's product -- Linklbee does not turn on removing the call (zero-call) by default. The figures below are 'if you call'. The line (20.0% of output at >= 0.99) was set on three other materials (two that passed, 8-16%; one that lost, 27-28%), not on this log.
 
 Span (how many versions back the draft is) — share of paired output at >= 0.99 / < 0.78 / 0.85-0.99:
 
@@ -45,11 +45,15 @@ This table is measured after folding answers equal to the previous answer (repea
 
 Span picked per length tier (answer-token edges [532.0, 558.0], this log's tertiles): 1*, 1*, 1*. A tier with under 100 pairs keeps span 1. A span of 2 or more is picked only where it beats span 1 on the same answers (also at the 2.5th percentile of a document resample).
 
+With 248 calls (under 600) the span is not fitted to this log (span 1 for every tier; the table above is for reference). A span picked on a small log rests on chance.
+
 - **Output tokens in switch-on cells = 76.7% of all output** (120 pairs). Of paired output: 93.1%.
 - Engine replay (switch decides before the answer, from the key's earlier pairs only): 62.6% of all output (96 pairs). A key's first pair has no history and stays off.
 - Fact input (axis 3) **not checked**: switch-on pairs carry no request body (prompt). The 76.7% above comes from two axes only — if a request does not say what changed, the real saving can be lower.
 
 ## 4. Savings estimate (band)
+
+This section looks at the document-diff cells only. On a log whose documents do not resemble each other 0 is the normal result; see section 7.
 
 **Not a saving measured on this log.** Each switch-on cell gets the range we measured (below) as a band; outside the switch it is 0.
 
@@ -71,4 +75,37 @@ Ranges we measured (three public document sets (product copy, drug label revisio
 - 248 calls without output_tokens — counted from the body with o200k (approximate for non-OpenAI models)
 - Saving ranges were measured on other materials (two public document sets). This customer's own value comes from a holdout pilot
 
-took 1.4s
+took 1.2s
+
+## 7. Waste checklist — items read without the answer body
+
+- 7-1 billed failed calls — **[cannot judge: input missing]** needs: status
+- 7-2 the same request sent again shortly after — **[cannot judge: input missing]** needs: request (or prompt / prompt_hash)
+- 7-3 answers cut at the token limit — **[cannot judge: input missing]** needs: finish_reason (or max_tokens + output_tokens)
+- 7-4 unstable serialization of the request prefix (tool definitions, system instructions) — **[cannot judge: input missing]** needs: request (tools / system)
+- 7-5 prompts under the cache minimum — **found**
+  - Fix: the engine counts each request's tokens short of the minimum but does not fix it yet; for now fixing it is in-house work.
+  - claude-sonnet-5-5 (anthropic): under 512 tokens 0 / 168 calls (0.0%), 0 of them with no cache read.
+  - gpt-5.6-luna (openai): under 1,024 tokens 80 / 80 calls (100.0%), 80 of them with no cache read.
+  - by threshold (248 calls judged): 64 -> 0.0% under · 512 -> 32.3% under · 1,024 -> 85.9% under · 2,048 -> 100.0% under · 4,096 -> 100.0% under
+  - Engine: `/admin/usage` `waste.cache_min` reports the tenant ledger's share under the same constants, with a correction for those calls (merge the prefix past the threshold, or drop the cache marker).
+  - Constants as of 2026-10-20 (vendor documents). Gemini prices change on 2026-12-01.
+- 7-6 billing check — billed output tokens vs the answer body — **[cannot judge: input missing]** needs: answer body (output) + the vendor's output_tokens
+- 7-7 prompt cache hit rate — **[cannot judge: input missing]** needs: input_tokens + the vendor's cache-read field (cached_tokens / cache_read_input_tokens / cachedContentTokenCount)
+  - not judged: no cache-read field 248 — not counted as 0
+- 7-8 prefix shared between calls — **[cannot judge: input missing]** needs: request body (messages / system / tools) or prompt, + input_tokens + ts
+
+This section covers the log given. It is not a guarantee.
+
+## 8. Axes that came out 0 — why, and where to look next
+
+One line per axis: (a) the reason, counted on this log · (b) what would change it, or which axis to look at instead. Every figure is counted on this log or is a named constant in the code (named in brackets).
+
+- Axis 3, fact input — cannot be measured on this log (no field prompt). (b) With the request body (prompt, or --hashify's prompt_token_hashes) it is measured.
+- Section 5, the zero-call gate — cannot be measured on this log (no field prompt). (b) With prompt or prompt_hash it runs. Upper bound counted with the answer known (reference): pairs identical to the previous answer 0 · with digits-only differences 16.
+- 7-1 billed failed calls — cannot be measured on this log (no field status).
+- 7-2 the same request sent again shortly after — cannot be measured on this log (no field request (or prompt / prompt_hash)).
+- 7-3 answers cut at the token limit — cannot be measured on this log (no field finish_reason (or max_tokens + output_tokens)).
+- 7-4 unstable request prefix serialization — cannot be measured on this log (no field request (tools / system)).
+- 7-6 billing check — cannot be measured on this log (no field answer body (output) + the vendor's output_tokens).
+- 7-7 prompt cache hit rate — cannot be measured on this log (no field input_tokens + the vendor's cache-read field (cached_tokens / cache_read_input_tokens / cachedContentTokenCount)).
