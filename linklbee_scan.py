@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.3 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.4 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2583,6 +2583,7 @@ import datetime
 import hashlib
 import importlib.resources
 import json
+import locale
 import math
 import os
 import random
@@ -2594,7 +2595,30 @@ from array import array
 
 
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
+
+
+def _default_lang():
+    """Pick the report language from the machine's own settings.
+
+    We never ask. A Korean-locale machine gets Korean, everything else
+    English. --lang ko|en overrides it.
+    """
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        val = os.environ.get(var, "")
+        if val:
+            return "ko" if val.lower().startswith("ko") else "en"
+    loc = ""
+    try:
+        loc = locale.getlocale()[0] or ""
+    except Exception:
+        loc = ""
+    if not loc:
+        try:
+            loc = locale.getdefaultlocale()[0] or ""
+        except Exception:
+            loc = ""
+    return "ko" if loc.lower().startswith("ko") else "en"
 HERE = os.path.dirname(os.path.abspath(__file__))
 # a package resource, so it also loads from inside a zipapp (engine.pyz)
 CELLS = json.loads(BANDS_JSON)
@@ -2718,9 +2742,9 @@ BUNDLE_LIVE_WAIT = 2.0  # s, bundler.BUNDLE_LIVE_WAIT: how long a live bundle wa
 # PM 10-25 09:32 / 18:05 2: the report's last lines, the way to us. The customer sends it by hand if at all -- nothing
 # here sends anything. The second line holds because the report carries no prompt / answer text, document key, file
 # or field name (REPLY-LINE check: planted markers in every text field, 0 in report and JSON); model names do appear
-CONTACT = ("이 리포트를 bee@linklbee.com 으로 보내 주시면 더 깊게 봐 드립니다. 무료입니다.\n"
-           "리포트에는 프롬프트와 답의 원문이 들어 있지 않습니다 — 숫자와 패턴, 모델 이름뿐입니다. 기록 파일은 보내지 않으셔도 됩니다.",
-           "Send this report to bee@linklbee.com and we will look deeper, free of charge.\n"
+CONTACT = ("리포트를 **bee@linklbee.com** 으로 보내주시면 진단 결과와 개선 방법을 무료로 안내해 드립니다. "
+           "리포트에는 요청·응답 원문이 포함되지 않으며, 분석 수치와 패턴 정보만 포함됩니다.",
+           "Send this report to bee@linklbee.com and we will look deeper, free of charge. "
            "The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.")
 ENGINE_HOLDOUT = 0.10  # route.HOLDOUT: the share the engine sends in full as its control (section 4 saves on the rest)
 EXTRA_FIELDS = ("status", "finish_reason", "max_tokens", "request")  # section 7 only; --map takes them too
@@ -4102,6 +4126,18 @@ def head_records(path, n=None):
 
 
 PEEK_LINES = 200  # design value: records --peek reads (and the hints of a rejected run look at)
+
+
+def head_line(res, ko):
+    """Report head: '진단기 1.4.3 · 파일 1개' / 'scanner 1.4.3 · 1 file'."""
+    src = res.get("input", "")
+    if ko:
+        m = re.match(r"^(\d+) files?$", src)
+        if m:
+            src = "파일 %s개" % m.group(1)
+    line = ("진단기 %s · %s" if ko else "scanner %s · %s") % (res["version"], src)
+    # The language came from this machine's settings. Say how to change it.
+    return line + (" · English: --lang en" if ko else " · 한국어: --lang ko")
 
 
 def input_label(path):
@@ -5909,10 +5945,10 @@ def usd(x):
 
 T = {
     "ko": {
-        "title": "링클비 진단 리포트", "s0": "0. 읽은 것", "s1": "1. 청구서에서 출력이 차지하는 몫",
-        "s2": "2. 답 쌍 분포 (닮음 × 답 길이)", "s3": "3. 줄일 수 있는 요청의 비중 — 결론", "s4": "4. 절감 추정 (예상 범위)",
-        "s5": "5. 호출 없이 답하기 후보", "s6": "6. 읽을 때 참고할 것",
-        "net": "이 스크립트는 네트워크 코드가 0줄입니다. 확인: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` → 0. "
+        "title": "링클비 진단 리포트", "s0": "0. 분석 대상", "s1": "1. 입력·출력 비용 구성",
+        "s2": "2. 응답 유사도·길이별 분포", "s3": "3. 최적화 후보 분포", "s4": "4. 예상 절감 범위",
+        "s5": "5. 기존 응답 재사용 후보", "s6": "6. 읽을 때 참고할 것",
+        "net": "로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다. 확인: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` → 0. "
                "응답 본문은 메모리에서만 읽고, 이 리포트와 JSON 에는 본문과 문서 id 가 들어가지 않습니다(개수와 비율만).",
     },
     "en": {
@@ -5991,7 +6027,7 @@ def cache_head(res, ko):
                  "`cache_read_input_tokens` / `cachedContentTokenCount`)."))
     om = h.get("over_min_hit_rate")
     return (("캐시 적중률" if ko else "Cache hit rate"), pct(h["hit_rate"]),
-            ("입력 토큰 중 캐시에서 읽힌 몫입니다(호출 %s건, 벤더 usage 기준)%s. 자세한 것은 7-7." if ko else
+            ("입력 토큰 중 캐시에서 읽힌 비중입니다(호출 %s건, 벤더 usage 기준)%s. 자세한 것은 7-7." if ko else
              "The share of input tokens read from the cache (%s calls, the vendor's usage)%s. Details in 7-7.")
             % ("{:,}".format(h["calls_judged"]),
                ((" · 최소 길이 이상인 호출만 보면 %s" if ko else " · %s on calls over the minimum") % pct(om))
@@ -6015,7 +6051,38 @@ def marked_head(res, ko):
 def report(res, lang="ko", cache_line=True):
     """The markdown report: sections as _report_body builds them, laid out in the 1.4.3 frame (frame_143)."""
     md = _report_body(res, lang, cache_line)
-    return md if res.get("error") else "\n".join(frame_143(md.split("\n"), res, lang == "ko"))
+    return md if res.get("error") else renum("\n".join(frame_143(md.split("\n"), res, lang == "ko")), lang == "ko")
+
+
+# Reading-order section numbers (PM 10-26 COPY-FIXES 2). The source keeps its own numbers, so every internal "see
+# section N" stays right; the printed report is renumbered here in one pass. Section 6 has no heading (frame_143 hands
+# its notes out), so it is not in the map. Item codes such as 7-4 are not section numbers and are left as they are.
+SEC_RENUM = {"0": "1", "7": "2", "3": "3", "4": "4", "2": "5", "5": "6", "1": "7", "8": "8"}
+SEC_RENUM_USAGE = {"0": "1", "1": "2", "2": "3", "3": "4", "4": "5"}  # the vendor-usage report (grade D) has 0-4
+
+
+def renum(text, ko, m=SEC_RENUM):
+    """One pass over the printed text: '## N.' headings, 'N절' / 'N~M절' / 'N·M절' (ko), 'section N' / 'sections N-M' /
+    'sections N and M' (en). A span stays a span when its new numbers are contiguous, else it becomes a list."""
+    def nums(a, b, sep):
+        if not b:
+            return m.get(a, a)
+        if sep in ("~", "-") and int(b) <= int(a):  # '7-2' is an item code, not a span
+            return a + sep + b
+        rng = range(int(a), int(b) + 1) if sep in ("~", "-") else (int(a), int(b))
+        new = sorted({int(m[str(i)]) for i in rng if str(i) in m})
+        if sep in ("~", "-") and new and new == list(range(new[0], new[-1] + 1)):
+            return "%d%s%d" % (new[0], sep, new[-1])
+        return (sep if sep in ("·", " and ") else ", ").join(map(str, new))
+
+    text = re.sub(r"(?m)^(## |<h2>)(\d)\. ", lambda g: g.group(1) + m.get(g.group(2), g.group(2)) + ". ", text)
+    # an item's own line names its code as a code, so '7-5' is not read as section 7 (which now prints as 2)
+    text = re.sub(r"(?m)^- (\d-\d) ", lambda g: "- [%s %s] " % ("진단 코드" if ko else "code", g.group(1)), text)
+    if ko:
+        return re.sub(r"(?<![\d.-])(\d)(?:([~·])(\d))?절", lambda g: nums(g.group(1), g.group(3), g.group(2)) + "절", text)
+    return re.sub(r"\b([Ss]ections?) (\d)(?:(-| and )(\d))?\b(?!-)",
+                  lambda g: g.group(0) if g.group(1)[-1] == "n" and g.group(4) else  # 'section 7-8': an item code
+                  "%s %s" % (g.group(1), nums(g.group(2), g.group(4), g.group(3))), text)
 
 
 # 1.4.3 frame (PM 10-25 10:50, from REPORT-STRUCTURE-1025 sec 2): a three-line head summary, then sections 0, 7, 3, 4,
@@ -6042,7 +6109,7 @@ def head_summary(res, ko):
     if not W:
         return []
     out = ["## " + ("요약" if ko else "Summary"), ""]
-    split = {}
+    split, leak_sum = {}, None
     for kind, name in (("leak", ("새고 있는 돈", "Leaking now", "새고 있는 것", "Leaking now")),
                        ("more", ("더 줄일 수 있는 돈", "Could cost less", "더 줄일 수 있는 것", "Could cost less"))):
         ks = [k for k in WKIND if WKIND[k] == kind and k in W and k not in NO_KNIFE and W[k]["status"] == "found"]
@@ -6054,6 +6121,8 @@ def head_summary(res, ko):
             v = [W[k].get(f) for f in HEAD_USD.get(k, ()) if W[k].get(f) is not None]
             amt.append(max(v) if v else None)
         known = [a for a in amt if a is not None]
+        if kind == "leak":
+            leak_sum = sum(known)
         for k, a in zip(ks, amt):
             if k in SPLIT_FIELDS:  # an item holding both kinds: each amount field goes to its own side
                 for g, f in SPLIT_FIELDS[k]:
@@ -6073,11 +6142,19 @@ def head_summary(res, ko):
         out.append(line)
     if split:
         sums = {g: sum(a for kk, (gg, a) in split.items() if a is not None and gg == g) for g in ("A", "B")}
-        out.append(("- 그중 직접 하셔도 되는 몫(한 번 고치면 됨) %s · 계속 맞춰야 하는 몫 %s. 바뀐 부분만 고쳐 쓰기(4절)와 호출 없이 "
-                    "답하기(5절)도 계속 맞춰야 하는 쪽입니다 — 답 조각을 저장해 두고 요청마다 비교해야 합니다." if ko else
+        out.append(("- 그중 설정 개선 %s · 지속 최적화 %s. 바뀐 부분만 고쳐 쓰기(4절)와 호출 없이 답하기(5절)도 지속 최적화 항목입니다. "
+                    "적용 효과는 이전 응답과의 유사도와 응답 길이에 따라 달라집니다. 요청 패턴이 바뀌면 적용 기준도 조정해야 합니다. "
+                    "유사도가 낮은 요청에 적용하면 오히려 비용이 증가할 수 있습니다." if ko else
                     "- Of that, a one-time fix you can do yourself: %s · needs ongoing tuning: %s. Rewriting only the "
                     "changed parts (section 4) and answering without a call (section 5) also need ongoing work: answer "
                     "pieces are kept and compared on every request.") % (usd(sums["A"]), usd(sums["B"])))
+    bill = (res.get("bill") or {}).get("usd_total")
+    if res.get("synthetic_calls") and bill and usd(leak_sum or 0.0) == usd(0.0):
+        out.append(("- 견본 로그는 전체 청구가 %s 인 작은 로그입니다. 여기서 찾은 새는 돈은 $%.3f 라서 소수 둘째 자리까지 적는 "
+                    "금액 칸에 $0.00 으로 보입니다. 내 로그를 넣으면 그 로그의 청구 크기대로 금액이 나옵니다." if ko else
+                    "- The example log is a small one: its whole bill is %s. The leak found in it is $%.3f, so the money "
+                    "lines, which show two decimals, read $0.00. Your own log gives amounts at the size of its bill.")
+                   % (usd(bill), leak_sum or 0.0))
     out += ["", ("최소 기준입니다 — 켜면 실제로 줄어든 금액이 화면에 뜹니다." if ko else
                  "This is the floor. Once switched on, the amount actually saved shows on screen."), ""]
     return out
@@ -6085,7 +6162,7 @@ def head_summary(res, ko):
 
 def frame_143(L, res, ko):
     """Lay the body's lines out in the 1.4.3 frame (FRAME_ORDER). Text is not changed, only moved."""
-    timing = [x for x in L if re.fullmatch(r"소요 [0-9.]+초|took [0-9.]+s", x)]
+    timing = [x for x in L if re.fullmatch(r"분석 소요 시간 [0-9.]+초|took [0-9.]+s", x)]
     contact = [x for x in L if x in CONTACT]
     L = [x for x in L if x not in timing and x not in contact]
     pre, chunks, cur = [], {}, None
@@ -6116,7 +6193,7 @@ def frame_143(L, res, ko):
 
 def _report_body(res, lang="ko", cache_line=True):
     t, ko = T[lang], lang == "ko"
-    L = ["# " + t["title"], "", "scanner %s · %s" % (res["version"], res["input"]), ""]
+    L = ["# " + t["title"], "", head_line(res, ko), ""]
     ch = cache_head(res, ko) if cache_line else None  # the HTML page shows it as its first tile instead
     if ch:
         L += ["**%s %s** — %s" % (ch[0], ch[1], ch[2]) if ch[1] else "**%s** — %s" % (ch[0], ch[2]), ""]
@@ -6132,7 +6209,7 @@ def _report_body(res, lang="ko", cache_line=True):
         L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않습니다." if ko else "Nothing could be read, so sections 1-5 are not produced.")]
         L += ["-" + x[1:] for x in unread_lines(None, ko, blank=not res["lines"]) if x]
         if res["rejected_no_ts"]:
-            L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 답 쌍을 만들면 뒤의 답이 앞 답의 재료로 쓰여 닮음이 부풀고 진단이 거짓이 됩니다. "
+            L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 응답 쌍을 만들면 뒤의 답이 앞 답의 재료로 쓰여 응답 유사도가 부풀고 진단이 거짓이 됩니다. "
                               "고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요") if ko else
                              ("%d lines were rejected for missing ts. Without time order a later answer could be paired as an "
                               "earlier one's draft, which inflates similarity and makes the diagnosis false. To fix, add ts "
@@ -6165,17 +6242,17 @@ def _report_body(res, lang="ko", cache_line=True):
                "cuts the LLM calls a company's own service makes, and that service's call log gives the same report.") % res["agent_log_calls"]]
     if res.get("synthetic_calls"):
         L += [("- **[합성] 예시 로그입니다.** 호출 %d건 중 %d건이 지어낸 것이라 실제 회사의 숫자가 아닙니다. 자기 로그는 "
-               "`python3 linklbee_scan.py --logs <파일>` 로 넣습니다." if ko else
+               "`%s --logs <파일>` 로 넣습니다." if ko else
                "- **[synthetic] This is the example log.** %d of %d calls are made up, so these are not a real company's "
-               "figures. To scan your own log: `python3 linklbee_scan.py --logs <file>`.") % ((res["calls"], res["synthetic_calls"]) if ko else
-                                                                          (res["synthetic_calls"], res["calls"]))]
+               "figures. To scan your own log: `%s --logs <file>`.") % ((res["calls"], res["synthetic_calls"], command_name()) if ko else
+                                                                          (res["synthetic_calls"], res["calls"], command_name()))]
     L += [("- 호출 %d (줄 %d, JSON 오류 %d, ts 없음 거부 %d) · 기간 %s ~ %s" if ko else
            "- %d calls (%d lines, %d not JSON, %d rejected for missing ts) · %s to %s")
           % (res["calls"], res["lines"], res["bad_json"], res["rejected_no_ts"], per[0][:10], per[1][:10]),
           ("- 모델: " if ko else "- models: ") + ", ".join("%s %d" % kv for kv in res["models"].items()),
           ("- 본문: 텍스트 %d · 토큰 해시 %d · 없음 %d" if ko else "- body: text %d · token hashes %d · none %d")
           % (b["text"], b["token_hashes"], b["none"])] + grade_line(res, ko) + billing_line(res, ko) + sources_line(res, ko) + \
-        ([("- **시각 필드가 없어 시각이 필요한 항목은 못 봅니다** (시각 없는 호출 %d건 — 2~5절 답 쌍, 7-2 간격, 7-8 접두 수명에서 빠짐. "
+        ([("- **시각 필드가 없어 시각이 필요한 항목은 못 봅니다** (시각 없는 호출 %d건 — 2~5절 응답 쌍, 7-2 간격, 7-8 접두 수명에서 빠짐. "
             "7-1·7-3·7-5·7-6·7-7 은 시각 없이 봅니다)" if ko else
             "- **No time field, so items that need time are skipped.** %d calls have no ts. They are left out of the "
             "answer pairs in sections 2-5, the resend gaps (7-2) and the prefix lifetime (7-8). Items 7-1, 7-3, 7-5, 7-6 "
@@ -6245,7 +6322,7 @@ def _report_body(res, lang="ko", cache_line=True):
     if res.get("no_time"):
         ub = res.get("qualified_share_upper_bound")
         if ub is not None:
-            L += ["## " + t["s3"], "", ("- 시각이 없어 같은 문서의 판을 잇지 못했습니다. 지금 데이터로 보이는 것: 답 ≥%d 토큰 호출의 출력 몫 = "
+            L += ["## " + t["s3"], "", ("- 시각이 없어 같은 문서의 판을 잇지 못했습니다. 지금 데이터로 보이는 것: 답 ≥%d 토큰 호출의 출력 비중 = "
                                         "**%s 이하(상한)**. 줄일 수 있는 요청의 실제 비중은 이보다 낮을 수 있고, 각 줄에 ts 가 있으면 "
                                         "실제 비중과 절감 범위(4절)까지 나옵니다." if ko else
                   "- Without time, a document's versions could not be put in order. What this data shows: calls with "
@@ -6253,18 +6330,18 @@ def _report_body(res, lang="ko", cache_line=True):
                   "be lower; with ts on every line the real share and the savings range (section 4) follow.")
                   % (SWITCH["min_answer_tokens"], pct(ub, 2)), ""]
         L += ["## " + t["s6"], ""]
-        gaps = [("시각(ts) 없는 호출 %d개 — 같은 문서의 판을 시간 순서로 이을 수 없어 2절(답 쌍 분포)·3절의 실제 비중·4절(절감 예상 범위)·"
+        gaps = [("시각(ts) 없는 호출 %d개 — 같은 문서의 판을 시간 순서로 이을 수 없어 2절(응답 쌍 분포)·3절의 실제 비중·4절(절감 예상 범위)·"
                  "5절(호출 없이 답하기 후보)을 내지 않았습니다. 고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요" if ko else
-                 "%d calls have no ts. Without it the versions of a document cannot be put in order, so sections 2 "
-                 "(answer pairs), the real share in 3, 4 (estimated savings) and 5 (answering without a call) are not "
+                 "%d calls have no ts. Without it the versions of a document cannot be put in order, so section 2 "
+                 "(answer pairs), section 3's real share, section 4 (estimated savings) and section 5 (answering without a call) are not "
                  "produced. To fix, add ts (ISO-8601 or epoch seconds) to every line") % res["no_ts"]]
         gaps += _gaps_common(res, ko)
-        L += ["- " + x for x in gaps] + ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        L += ["- " + x for x in gaps] + ["", ("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
         L += waste_lines(res, ko)
         L += zero_lines(res, ko)
         return "\n".join(L)
     if res.get("upper_bound_only"):
-        L += ["## " + t["s3"], "", ("- 응답 본문이 없어 닮음을 못 쟀습니다. 답 ≥200 토큰 호출의 출력 몫 = **%s 이하(상한)**. "
+        L += ["## " + t["s3"], "", ("- 응답 본문이 없어 응답 유사도를 못 쟀습니다. 답 ≥200 토큰 호출의 출력 비중 = **%s 이하(상한)**. "
                                     "줄일 수 있는 요청의 실제 비중은 이보다 낮을 수 있고, 얼마나 낮은지는 본문(또는 토큰 해시) 없이는 알 수 없습니다." if ko else
               "- The log has no answer bodies, so similarity could not be measured. Calls with answers of 200+ tokens "
               "make up **at most %s of output (an upper bound)**. The real reducible share can be lower. How much lower "
@@ -6273,28 +6350,28 @@ def _report_body(res, lang="ko", cache_line=True):
             L[-1:-1] = [("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 항목은 8절에 적었습니다." if ko else
                         "- Why this is 0% (counted on this log), and what to look at instead: section 8.")]
         L += ["## " + t["s6"], ""]
-        gaps = [("본문 없는 호출 %d개 — 닮음을 하나도 잴 수 없습니다. 그래서 2절(답 쌍 분포)·4절(절감 예상 범위)·5절(호출 없이 답하기 후보)을 내지 않았습니다. "
+        gaps = [("본문 없는 호출 %d개 — 응답 유사도를 하나도 잴 수 없습니다. 그래서 2절(응답 쌍 분포)·4절(절감 예상 범위)·5절(호출 없이 답하기 후보)을 내지 않았습니다. "
                  "고칠 법: output 또는 output_token_hashes(--hashify)를 넣으세요" if ko else
-                 "%d calls have no body, so no similarity can be measured. Sections 2 (answer pairs), 4 (estimated "
-                 "savings) and 5 (answering without a call) are not produced. To fix, add output, or "
+                 "%d calls have no body, so no similarity can be measured. Section 2 (answer pairs), section 4 (estimated "
+                 "savings) and section 5 (answering without a call) are not produced. To fix, add output, or "
                  "output_token_hashes from --hashify") % b["none"]]
         gaps[0] += ". " + " ".join(hint_lines(res, ko, "output"))
         gaps += _gaps_common(res, ko)
-        L += ["- " + x for x in gaps] + ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        L += ["- " + x for x in gaps] + ["", ("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
         L += waste_lines(res, ko)
         L += zero_lines(res, ko)
         return "\n".join(L)
     g = res["grouping"]
     at_s2 = len(L)
     L += ["## " + t["s2"], "",
-          ("비교한 답 쌍 %d개(문서 %d개). 쌍마다 같은 문서의 바로 앞 답과 이번 답을 비교했습니다. 닮음은 이번 답을 보고 잰 "
+          ("비교한 응답 쌍 %d개(문서 %d개). 쌍마다 같은 문서의 바로 앞 답과 이번 답을 비교했습니다. 응답 유사도는 이번 답을 보고 잰 "
            "값입니다. 문서를 정한 방법: 지정한 문서 키 호출 %d · 엔진이 찾아 묶은 호출 %d(쌍 %d) · 같은 시각이라 건너뜀 %d." if ko else
            "%d answer pairs from %d documents. Each pair compares an answer with the previous answer for the same "
            "document. Similarity here is measured with the answer known. How documents were found: %d calls by the "
            "document key in the log · %d calls grouped by the scanner (%d pairs) · %d skipped for an identical timestamp.")
           % (g["pairs"], g["keys"], g["customer_key_calls"], g["auto_key_calls"], g["pairs_auto"], g["same_ts_skipped"]), ""]
     lbs = [x[0] for x in CELLS["length_bands"]]
-    L += ["| " + ("닮음 \\ 답 길이" if ko else "similarity \\ length") + " | " + " | ".join(lbs) + " |",
+    L += ["| " + ("응답 유사도 \\ 응답 길이" if ko else "similarity \\ length") + " | " + " | ".join(lbs) + " |",
           "|---|" + "---|" * len(lbs)]
     tot = res["output_tokens_total"] or 1
     for ob in reversed([x[0] for x in CELLS["overlap_bands"]]):
@@ -6304,17 +6381,17 @@ def _report_body(res, lang="ko", cache_line=True):
             mark = "**" if ob in ("0.78-0.95", ">=0.95") and lb_ != "<200" else ""
             cells.append("—" if not c else "%s%d · %s%s" % (mark, c["pairs"], pct(c["out_tokens"] / tot), mark))
         L.append("| " + ob + " | " + " | ".join(cells) + " |")
-    L += ["", ("표의 값 = 답 쌍 수 · 전체 출력 토큰 중 몫. 굵은 값 = 줄일 수 있는 요청(닮음 0.78 이상, 답 200토큰 이상). 쌍 닮음 토큰 가중 %.3f, 중앙 %.3f." if ko else
+    L += ["", ("표의 값 = 응답 쌍 수 · 전체 출력 토큰 중 비중. 굵은 값 = 줄일 수 있는 요청(응답 유사도 0.78 이상, 답 200토큰 이상). 응답 쌍 유사도 토큰 가중 %.3f, 중앙 %.3f." if ko else
                "Each cell: answer pairs · share of all output tokens. Bold = reducible (similarity 0.78+ and answer "
                "200+ tokens). Pair similarity, token-weighted %.3f, median %.3f.") % (res["overlap_token_weighted"] or 0, res["overlap_median"] or 0), ""]
     q, rp = res["qualified"], res["replay"]
     cl = res.get("call_loss") or {}
     warn = []
     if cl.get("warn"):
-        warn = [("- 이 로그에는 이전 답이 이미 다음 답과 거의 같은(닮음 %.2f 이상) 요청이 비교한 답 쌍 출력의 %s 있습니다. 그런 요청은 "
+        warn = [("- 이 로그에는 이전 답이 이미 다음 답과 거의 같은(응답 유사도 %.2f 이상) 요청이 비교한 응답 쌍 출력의 %s 있습니다. 그런 요청은 "
                  "애초에 부르지 않는 편이 낫습니다(행정규칙 실호출 277건에서 이전 답 그대로 0.9635 > 바뀐 부분만 고쳐 쓰기 0.9611 > "
                  "처음부터 다시 쓰기 0.9545). 링클비는 호출을 없애는 판단을 기본으로 켜지 않습니다. 위 수치는 그 요청도 부른다고 보고 "
-                 "잰 값입니다. 이 설명을 붙이는 선(닮음 %.2f 이상이 출력의 %s 이상)은 다른 재료 3종에서 정했고, 이 로그의 선이 아닙니다." if ko else
+                 "잰 값입니다. 이 설명을 붙이는 선(응답 유사도 %.2f 이상이 출력의 %s 이상)은 다른 재료 3종에서 정했고, 이 로그의 선이 아닙니다." if ko else
                  "- In this log, %s of paired output comes from calls whose previous answer is already almost the "
                  "same (similarity %.2f+). Those calls are better not made at all. On administrative rules (277 real "
                  "calls), reusing the previous answer scored 0.9635, rewriting only the changed parts 0.9611, and "
@@ -6339,8 +6416,8 @@ def _report_body(res, lang="ko", cache_line=True):
                ("모든 문서에 폭 %d" % rc["span"])) if ko else \
               (("spans fitted per length tier: %s" % "/".join(str(c["span"]) for c in sp["chosen"])) if rc["by"] == "fitted"
                else ("a span of %d for every document" % rc["span"]))
-        warn = [("- **판마다 부르면 호출 자체가 손해인 구간이 크지만(닮음 %.2f 이상 출력 %s), 몇 판에 한 번 부르면 줄일 수 있는 구간이 됩니다.** "
-                 "%s(그 판 수마다 한 번 부름): 닮음 %.2f 이상 %s · 고쳐 쓰기가 손해인 0.78 미만 %s · 돈이 나는 %.2f~%.2f 구간 %s. "
+        warn = [("- **판마다 부르면 호출 자체가 손해인 구간이 크지만(응답 유사도 %.2f 이상 출력 %s), 몇 판에 한 번 부르면 줄일 수 있는 구간이 됩니다.** "
+                 "%s(그 판 수마다 한 번 부름): 응답 유사도 %.2f 이상 %s · 고쳐 쓰기가 손해인 0.78 미만 %s · 돈이 나는 %.2f~%.2f 구간 %s. "
                  "폭은 이 로그에서 정했습니다(아래 표)." if ko else
                  "- **Calling at every version wastes many calls (%s of output at similarity %.2f+). Calling once every "
                  "few versions makes them reducible.** With %s (one call per that many versions): %.2f+ %s · under 0.78, "
@@ -6353,22 +6430,22 @@ def _report_body(res, lang="ko", cache_line=True):
     # the span table only when some span has a share to move (REPORT-READ 10-22: an all-0.0% table of internal terms
     # told the reader nothing)
     if sp and any(pct(c[k]) not in ("—", pct(0)) for c in sp["by_span"] for k in ("top_share", "money_share")):
-        warn += ["", ("몇 판마다 부르나(몇 판 앞의 답을 이전 답으로 보나) — 답 쌍이 있는 출력 중 몫. 닮음 ≥%.2f / <0.78 / %.2f~%.2f:" if ko else
+        warn += ["", ("몇 판마다 부르나(몇 판 앞의 답을 이전 답으로 보나) — 응답 쌍이 있는 출력 중 비중. 응답 유사도 ≥%.2f / <0.78 / %.2f~%.2f:" if ko else
                       "Span (how many versions back the previous answer is taken from) — share of paired output at "
                       "%.2f+ / under 0.78 / %.2f-%.2f:")
                  % (CALL_LOSS_BAND, MONEY_BAND[0], MONEY_BAND[1]), "",
-                 ("이 표는 바로 앞 답과 같은 답(반복: 답 쌍 %d개, 폭 1 답 쌍 출력의 %s)을 접고, 더 이른 판으로 돌아간 답(되돌림: 답 쌍 %d개, "
+                 ("이 표는 바로 앞 답과 같은 답(반복: 응답 쌍 %d개, 폭 1 응답 쌍 출력의 %s)을 접고, 더 이른 판으로 돌아간 답(되돌림: 응답 쌍 %d개, "
                   "%s)을 뺀 사슬에서 쟀습니다. 그 둘은 몇 판에 한 번 부르든 부를 필요가 없는 자리라 폭의 효과로 세지 않습니다." if ko else
                   "Before measuring, answers identical to the previous one were folded (repeats: %d pairs, %s of span-1 "
                   "paired output), and answers that went back to an earlier version were left out (reverts: %d pairs, "
                   "%s). Neither needs a call at any span, so neither counts toward the span's effect.")
                  % (sp["repeat_pairs"], pct(sp["repeat_share"]), sp["revert_pairs"], pct(sp["revert_share"])), "",
-                 "| %s | %s | >=%.2f | <0.78 | %.2f-%.2f |" % ("폭" if ko else "span", "답 쌍" if ko else "answer pairs",
+                 "| %s | %s | >=%.2f | <0.78 | %.2f-%.2f |" % ("폭" if ko else "span", "응답 쌍" if ko else "answer pairs",
                                                              CALL_LOSS_BAND, MONEY_BAND[0], MONEY_BAND[1]), "|---|---|---|---|---|"]
         warn += ["| %d | %d | %s | %s | %s |" % (c["span"], c["pairs"], pct(c["top_share"]), pct(c["low_share"]),
                                                 pct(c["money_share"])) for c in sp["by_span"]]
-        warn += ["", ("길이 층(답 토큰 경계 %s, 이 로그의 3분위)별로 고른 폭: %s. 답 쌍이 %d개 미만인 층은 폭 1을 씁니다. "
-                      "폭 2 이상은 같은 답을 한 판 앞 이전 답으로 쟀을 때보다 돈 구간 몫이 클 때만 고릅니다"
+        warn += ["", ("길이 층(답 토큰 경계 %s, 이 로그의 3분위)별로 고른 폭: %s. 응답 쌍이 %d개 미만인 층은 폭 1을 씁니다. "
+                      "폭 2 이상은 같은 답을 한 판 앞 이전 답으로 쟀을 때보다 돈 구간 비중이 클 때만 고릅니다"
                       "(문서 단위 재표집 2.5 백분위로도)." if ko else
                       "Span chosen per length tier (answer-token edges %s, this log's tertiles): %s. A tier with fewer "
                       "than %d answer pairs keeps span 1. A span of 2 or more is chosen only where it beats span 1 on the "
@@ -6376,18 +6453,18 @@ def _report_body(res, lang="ko", cache_line=True):
                  % (sp["tier_edges_answer_tokens"], ", ".join("%d%s" % (c["span"], "" if c["fitted"] else "*")
                                                               for c in sp["chosen"]), SPAN_MIN_PAIRS), ""]
     L += ["## " + t["s3"], ""] + [
-          ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (답 쌍 %d개). 답 쌍이 있는 출력 중에서는 %s." if ko else
+          ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (응답 쌍 %d개). 응답 쌍이 있는 출력 중에서는 %s." if ko else
            "- **Reducible calls produce %s of all output tokens** (%d answer pairs), and %s of paired output.")
           % (pct(q["share_of_all_output"]), q["on_pairs"], pct(q["share_of_paired_output"])),
-          ("- 링클비 엔진이 그때그때 판단했다면(답을 보기 전, 그 문서의 지난 기록만 보고): 전체 출력의 %s (답 쌍 %d개). 문서의 첫 비교는 기록이 없어 줄이지 않습니다." if ko else
+          ("- 링클비 엔진이 그때그때 판단했다면(답을 보기 전, 그 문서의 지난 기록만 보고): 전체 출력의 %s (응답 쌍 %d개). 문서의 첫 비교는 기록이 없어 줄이지 않습니다." if ko else
            "- If the Linklbee engine had decided each call as it came (before the answer, from that document's history "
            "only): %s of all output (%d answer pairs). A document's first pair has no history, so it is not reduced.") % (pct(rp["share_of_all_output"]), rp["on_pairs"])]
     gn = (rp.get("guard_full_pairs") or {}).get("new_text") or 0
     if gn:
-        L.append(("  - 스위치는 답 쌍 %d개를 켰지만, 새 글 가드(요청에 이전 답에 없는 글이 답 길이의 절반 이상이면 처음부터 쓰기)가 그중 "
+        L.append(("  - 스위치는 응답 쌍 %d개를 켰지만, 새 글 가드(요청에 이전 답에 없는 글이 응답 길이의 절반 이상이면 처음부터 쓰기)가 그중 "
                   "%d개(전체 출력의 %s)를 처음부터 쓰기로 보냈습니다. 이 가드는 고정이 아닙니다. 엔진은 막힌 요청의 일부를 "
-                  "고쳐 쓰기로 시험해 보고, 그 고객에서 가드를 올리거나 끕니다. 이 몫은 시험 결과가 나오기 전에는 줄일 수 있는지 "
-                  "모르는 몫입니다." if ko else
+                  "고쳐 쓰기로 시험해 보고, 그 고객에서 가드를 올리거나 끕니다. 이 비중은 시험 결과가 나오기 전에는 줄일 수 있는지 "
+                  "모르는 비중입니다." if ko else
                   "  - The switch turned on %d answer pairs, but the new-text guard (a full write when the request holds "
                   "new text of at least half the answer's length) sent %d of them (%s of all output) to a full write. The "
                   "guard is not fixed: the engine tries a share of the blocked calls as edits and raises "
@@ -6398,8 +6475,8 @@ def _report_body(res, lang="ko", cache_line=True):
         L.append(("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 항목은 8절에 적었습니다." if ko else
                       "- Why this is 0% (counted on this log), and what to look at instead: section 8."))
     if q["on_pairs_with_prompt"]:
-        L.append(("- 그중 같은 프롬프트를 다시 보낸 답 쌍 %d개(프롬프트가 있는, 줄일 수 있는 답 쌍 %d개 중), 출력 %s — 사용자가 다른 답을 원해 "
-                  "다시 보냈을 수 있는 몫입니다. 그중 %d개는 %d초 안에 다시 보냈습니다 — 링클비 엔진은 이것을 다시 생성으로 보고 처음부터 다시 쓰기로 "
+        L.append(("- 그중 같은 프롬프트를 다시 보낸 응답 쌍 %d개(프롬프트가 있는, 줄일 수 있는 응답 쌍 %d개 중), 출력 %s — 사용자가 다른 답을 원해 "
+                  "다시 보냈을 수 있는 비중입니다. 그중 %d개는 %d초 안에 다시 보냈습니다 — 링클비 엔진은 이것을 다시 생성으로 보고 처음부터 다시 쓰기로 "
                   "보냅니다('엔진이 판단했다면'과 '호출 없이 답하기' 값에서 뺐습니다). %s" if ko else
                   "- Of these, %d answer pairs resent the same prompt (out of %d reducible pairs with a prompt), %s of "
                   "all output. The user may have wanted a different answer. %d of them came within %d s. The Linklbee "
@@ -6410,8 +6487,8 @@ def _report_body(res, lang="ko", cache_line=True):
                     q["on_pairs_same_prompt_in_window"], res["resend_window"]["window_s"], resend_note(res["resend_window"], ko)))
     fi, ref = res["fact_input"], CELLS["fact_input_reference"]
     if fi["on_pairs_with_request"]:
-        L.append(("- 사실 입력: 요청 본문이 있는, 줄일 수 있는 답 쌍 %d개(줄일 수 있는 답 쌍 %d개 중). 답에 새로 들어간 토큰 중 요청이 미리 알려 준 비율 = "
-                  "토큰 가중 %s · 중앙 %s (p10 %s ~ p90 %s) · 0.5 이상인 답 쌍 %s · 다른 요청을 넣은 대조군 %s → **고유 몫 %s**. **[선 미확정]** 이 값으로 줄일 수 있는지 가르는 선은 아직 정하지 않았습니다. "
+        L.append(("- 사실 입력: 요청 본문이 있는, 줄일 수 있는 응답 쌍 %d개(줄일 수 있는 응답 쌍 %d개 중). 답에 새로 들어간 토큰 중 요청이 미리 알려 준 비율 = "
+                  "토큰 가중 %s · 중앙 %s (p10 %s ~ p90 %s) · 0.5 이상인 응답 쌍 %s · 다른 요청을 넣은 대조군 %s → **고유 비중 %s**. **[선 미확정]** 이 값으로 줄일 수 있는지 가르는 선은 아직 정하지 않았습니다. "
                   "참고(링클비가 잰 다른 재료의 값이며 이 로그의 값이 아닙니다 — %s): 품질 통과 재료 %s ~ %s · 품질 미달 재료 %s ~ %s." if ko else
                   "- Facts in the request: %d reducible answer pairs have a request body (out of %d). Share of an "
                   "answer's new tokens that the request gave in advance: token-weighted %s · median %s (p10 %s, p90 %s) "
@@ -6426,14 +6503,14 @@ def _report_body(res, lang="ko", cache_line=True):
                     pct(ref["miss"][0]), pct(ref["miss"][1])))
         gm = fi["ge_min"]
         if gm["pairs"]:
-            L.append(("  - 새 토큰이 %d개 이상인 답 쌍만(%d개 — 한두 토큰 고침은 거저 100%%가 나와서 따로 봅니다): 토큰 가중 %s · 중앙 %s · "
-                      "대조군 %s → 고유 몫 %s." if ko else
+            L.append(("  - 새 토큰이 %d개 이상인 응답 쌍만(%d개 — 한두 토큰 고침은 거저 100%%가 나와서 따로 봅니다): 토큰 가중 %s · 중앙 %s · "
+                      "대조군 %s → 고유 비중 %s." if ko else
                       "  - Only pairs with %d+ new tokens (%d; a one- or two-token fix scores 100%% for free): "
                       "token-weighted %s · median %s · control %s -> unique share %s.")
                      % (fi["added_min"], gm["pairs"], pct(gm["pooled"]), pct(gm["median"]), pct(gm["control_pooled"]),
                         ("%+.2f" % gm["unique_over_control"]) if gm["unique_over_control"] is not None else "-"))
     elif q["on_pairs"]:
-        L.append(("- 위 %s 는 닮음과 답 길이만 본 값입니다. 로그에 요청 본문(prompt)이 있으면 요청이 바뀐 내용을 알려 주는지도 봅니다. "
+        L.append(("- 위 %s 는 응답 유사도와 응답 길이만 본 값입니다. 로그에 요청 본문(prompt)이 있으면 요청이 바뀐 내용을 알려 주는지도 봅니다. "
                   "알려 주지 않는 트래픽이면 실제 절감은 이보다 낮을 수 있습니다." if ko else
                   "- The %s above uses similarity and answer length only. If the log has the request body (prompt), the "
                   "report also checks whether each request says what changed. Where it does not, the real saving can be "
@@ -6446,10 +6523,12 @@ def _report_body(res, lang="ko", cache_line=True):
         L.append("")
     s = res["savings"]
     L += ["## " + t["s4"], "",
-          ("이 절은 바뀐 부분만 고쳐 쓸 수 있는 구간만 봅니다. 문서가 닮지 않은 로그에서는 0 이 정상이며, 7절을 보세요." if ko else
+          ("동일한 문서를 수정할 때마다 전체 응답을 다시 생성하고 있다면, 이전 응답과 중복되는 부분이 많을수록 변경된 부분만 생성하는 방식으로 "
+           "출력 토큰을 줄일 수 있습니다. 이 절은 그 구간만 봅니다. 응답 유사도가 낮은 로그에서는 0 이 정상이며, 7절을 보세요." if ko else
            "This section covers only calls that can be answered by rewriting the changed parts. On a log whose "
            "documents do not resemble each other, 0 is the expected result; see section 7."), "",
-          ("**이 로그로 잰 절감이 아닙니다.** 링클비가 다른 공개 문서로 잰 범위(아래)를 이 로그의 해당 구간에 대입한 값입니다. 그 밖의 구간은 0으로 봅니다." if ko else
+          ("**아래 수치는 실제 절감액이 아닌 추정치입니다.** 별도의 공개 문서 데이터로 측정한 절감 범위를 이번 로그의 최적화 후보 구간에 적용했습니다. "
+           "그 외 구간은 예상 절감액 산정에서 제외했습니다." if ko else
            "**This is not a saving measured on this log.** The ranges Linklbee measured on other public documents "
            "(below) are applied to this log's reducible calls. Everything else counts as 0."), "",
           ("- 출력 토큰: 전체 출력의 %s ~ %s (구간에 대입)" if ko else "- output tokens: %s – %s of all output (ranges applied)")
@@ -6462,7 +6541,7 @@ def _report_body(res, lang="ko", cache_line=True):
            "it came to %s times what the engine actually turned on. Judgments only the engine makes (such as a request "
            "with two equally likely previous answers) are not replayed.") % ENGINE_REPLAY_RANGE]
     if s.get("share_of_bill_low") is not None:
-        L.append(("- 금액(캐시 없음 가정의 금액 절감 범위): %s ~ %s = 청구서의 %s ~ %s · 가격표 %s · 금액을 못 낸 줄일 수 있는 답 쌍 %d" if ko else
+        L.append(("- 금액(캐시 없음 가정의 금액 절감 범위): %s ~ %s = 분석 기간 비용의 %s ~ %s · 가격표 %s · 금액을 못 낸 줄일 수 있는 응답 쌍 %d" if ko else
                   "- dollars (cost ranges measured without a prompt cache): %s – %s = %s – %s of the bill · "
                   "prices as of %s · reducible pairs without a price: %d")
                  % (usd(s["usd_low"]), usd(s["usd_high"]), pct(s["share_of_bill_low"]), pct(s["share_of_bill_high"]),
@@ -6472,7 +6551,7 @@ def _report_body(res, lang="ko", cache_line=True):
                       "  - Linklbee sends %s of the reducible pairs in full as its comparison group. The range above is "
                       "what the rest saves.") % pct(s["holdout_share"]))
     if (res.get("flat") or {}).get("on_output_tokens"):
-        L.append(("- 정액 구간의 줄일 수 있는 출력 %s 토큰 — 청구액은 그대로이고, 같은 정액 용량에서 그만큼 비는 몫입니다(금액 범위에서 뺐습니다)." if ko else
+        L.append(("- 정액 구간의 줄일 수 있는 출력 %s 토큰 — 청구액은 그대로이고, 같은 정액 용량에서 그만큼 비는 비중입니다(금액 범위에서 뺐습니다)." if ko else
                   "- Reducible output in flat-rate traffic: %s tokens. The bill stays the same; this is capacity freed "
                   "on the same plan, so it is not in the dollar range.") % "{:,}".format(res["flat"]["on_output_tokens"]))
     if res.get("mode", {}).get("known"):
@@ -6483,51 +6562,51 @@ def _report_body(res, lang="ko", cache_line=True):
                     pct(m["output_saving_share_high"])))
     L += ["", ("링클비가 측정한 범위(%s):" if ko else "Ranges Linklbee measured (%s):") % CELLS["measured"][lang]]
     for row, r in sorted(CELLS["on_rows"].items(), reverse=True):
-        L.append(("- 닮음 %s · 답 ≥200 토큰 구간: 출력 %s ~ %s, 금액 %s ~ %s" if ko else
+        L.append(("- 응답 유사도 %s · 답 ≥200 토큰 구간: 출력 %s ~ %s, 금액 %s ~ %s" if ko else
                   "- similarity %s · answer 200+ tokens: output %s – %s, cost %s – %s")
                  % (row, pct(r["output"][0], 0), pct(r["output"][1], 0), pct(r["usd"][0], 0), pct(r["usd"][1], 0)))
     L.append("")
     if not g["pairs"]:  # no answer pair: an empty table and 0.0% ranges tell nothing (REPORT-READ 10-22)
         L[at_s2:] = ["## " + t["s2"], "",
-                     ("- 비교할 답 쌍(같은 문서의 앞 답과 이번 답)이 없습니다(문서 %d개). 그래서 2절 표와 4절(절감 예상 범위)은 내지 않았습니다." if ko else
+                     ("- 비교할 응답 쌍(같은 문서의 앞 답과 이번 답)이 없습니다(문서 %d개). 그래서 2절 표와 4절(절감 예상 범위)은 내지 않았습니다." if ko else
                       "- There is no answer pair to compare (a document's previous answer and this one; %d documents), so the "
                       "section 2 table and section 4 (estimated savings) are not produced.") % g["keys"], "",
                      "## " + t["s3"], "",
-                     ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (답 쌍 0개). 왜 0 인지와 대신 볼 항목은 8절에 적었습니다." if ko else
+                     ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (응답 쌍 0개). 왜 0 인지와 대신 볼 항목은 8절에 적었습니다." if ko else
                       "- **Reducible calls produce %s of all output tokens** (0 answer pairs). Why, and what to look at "
                       "instead: section 8.") % pct(0), ""]
     z = res["zero_call"]
     L += ["## " + t["s5"], ""]
     if z["pairs_with_prompt"]:
-        L += [("- 켜는 조건(직전 호출과 프롬프트가 숫자만 빼고 같으면 호출 없이 답하기)이 고른 답 쌍 %d개 = 전체 출력의 %s. 그중 실제 답이 직전 답과 같았던 몫: 완전 일치 %s · 숫자만 다름 포함 %s. **켜는 조건은 프롬프트만 보고 골랐습니다(답을 보지 않음).**" if ko else
+        L += [("- 켜는 조건(직전 호출과 프롬프트가 숫자만 빼고 같으면 호출 없이 답하기)이 고른 응답 쌍 %d개 = 전체 출력의 %s. 그중 실제 답이 직전 답과 같았던 비중: 완전 일치 %s · 숫자만 다름 포함 %s. **켜는 조건은 프롬프트만 보고 골랐습니다(답을 보지 않음).**" if ko else
                "- The rule (a prompt equal to the previous call's except for digits gets no call) picked %d answer "
                "pairs, %s of all output. Of those, the answer really matched the previous one in: exactly %s · "
                "allowing digit-only differences %s. **The rule looked only at prompts, never at answers.**")
               % (z["gate_selected"], pct(z["gate_share_of_all_output"]), pct(z["gate_precision_exact"]),
                  pct(z["gate_precision_digits_masked"]))]
     elif not g["pairs"]:  # WRONG-SWEEP (10-24): no pair, not no prompt -- AG0 / RA / TL / A carry request bodies
-        L += ["- " + ("비교할 답 쌍이 없어 이 후보를 보지 못했습니다(같은 문서의 앞 호출이 있어야 합니다)." if ko else
+        L += ["- " + ("비교할 응답 쌍이 없어 이 후보를 보지 못했습니다(같은 문서의 앞 호출이 있어야 합니다)." if ko else
                       "No answer pair to compare, so this candidate is not checked (a document's earlier call is needed).")]
     else:
         L += ["- " + ("로그에 prompt(또는 prompt_hash)가 있으면 이 후보를 봅니다. 지금 로그에는 없습니다." if ko else "Shown when the log has prompt (or prompt_hash). This log does not.")]
-    L += [("- 참고(답을 보고 센 상한): 직전 답과 완전 일치 답 쌍 %d · 숫자만 다른 답 쌍 포함 %d" if ko else
+    L += [("- 참고(답을 보고 센 상한): 직전 답과 완전 일치 응답 쌍 %d · 숫자만 다른 응답 쌍 포함 %d" if ko else
            "- For reference, counted with the answer known (an upper bound): pairs identical to the previous answer "
            "%d · allowing digit-only differences %d") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]), ""]
     at_s6 = len(L)
     L += ["## " + t["s6"], ""]
     gaps = []
     if res["rejected_no_ts"]:
-        gaps.append(("ts 없는 줄 %d개 거부(시간 순서 없이 답 쌍을 만들면 뒤의 답이 앞 답 쪽으로 샙니다)" if ko else
+        gaps.append(("ts 없는 줄 %d개 거부(시간 순서 없이 응답 쌍을 만들면 뒤의 답이 앞 답 쪽으로 샙니다)" if ko else
                      "%d lines were rejected for missing ts (without time order, a later answer would leak into an earlier pair)") % res["rejected_no_ts"])
     if b["none"]:
-        gaps.append(("본문 없는 호출 %d개 — 답 쌍·닮음에서 빠짐" if ko else "%d calls have no body, so they are not in the answer pairs or similarity") % b["none"])
+        gaps.append(("본문 없는 호출 %d개 — 응답 쌍·응답 유사도에서 빠짐" if ko else "%d calls have no body, so they are not in the answer pairs or similarity") % b["none"])
     gaps += _gaps_common(res, ko)
     if g["auto_key_calls"]:
         # AP-1/AP-1b (10-18): with keys hidden, auto pairs matched the true on-cell volume on law / eCFR (0.98-1.00) but
         # read 1.15-1.54x on drug labels, where same-ingredient generics interleaved in time get chained as one key
-        gaps.append(("엔진이 문서를 찾아 묶은 호출 %d개(답 쌍 %d) — 이 답 쌍에서 나온 줄일 수 있는 물량은 상한입니다. 문서 표시를 지우고 잰 시험에서 법령·eCFR 은 실제 문서로 묶었을 때의 0.98~1.00 배였으나, "
+        gaps.append(("엔진이 문서를 찾아 묶은 호출 %d개(응답 쌍 %d) — 이 응답 쌍에서 나온 줄일 수 있는 물량은 상한입니다. 문서 표시를 지우고 잰 시험에서 법령·eCFR 은 실제 문서로 묶었을 때의 0.98~1.00 배였으나, "
                      "비슷한 형제 문서(같은 성분 제품 등)가 시간에 섞여 오면 다른 문서의 판을 앞 판으로 이어 붙여 최대 1.5배까지 부풀었습니다. "
-                     "링클비 엔진은 고객이 보내는 문서 id 로 답 쌍을 짓습니다 — 문서 id 를 로그에 넣으면 이 값이 엔진과 같아집니다" if ko else
+                     "링클비 엔진은 고객이 보내는 문서 id 로 응답 쌍을 짓습니다 — 문서 id 를 로그에 넣으면 이 값이 엔진과 같아집니다" if ko else
                      "The scanner grouped %d calls into documents itself (%d answer pairs), so the reducible volume from "
                      "these pairs is an upper bound. In tests with document ids removed, it read 0.98-1.00x the true "
                      "volume on statutes and eCFR. Where similar sibling documents (such as products with the same "
@@ -6544,7 +6623,7 @@ def _report_body(res, lang="ko", cache_line=True):
         L += ["- " + x for x in gaps] + [""]
     else:  # 1.4.2: nothing to note -> no empty heading (the timing line stays)
         del L[at_s6:at_s6 + 2]
-    L += [("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+    L += [("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
     L += waste_lines(res, ko)
     L += zero_lines(res, ko)
     L += gpu_ref_lines(res, ko)
@@ -6606,7 +6685,7 @@ def table_gap(w, ko):
     Linklbee's table, so it is said that way, with the input curve at common minimums (EMPTY-HAND, PM 10-23 21:12)."""
     if "open_curve" not in w and w.get("upstream_spread"):  # SELFHOST-SPREAD: a log that names its servers
         return (("보낸 서버가 기록된 자체 호스팅 로그로 보입니다. 자체 호스팅 서버의 접두 캐시에는 벤더의 최소 길이가 없어 그 기준으로는 "
-                 "판정하지 않았습니다. 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. 서버를 옮겨 다니며 다시 계산한 몫은 "
+                 "판정하지 않았습니다. 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. 서버를 옮겨 다니며 다시 계산한 비중은 "
                  "아래에 셉니다." if ko else
                  "This looks like a self-hosted log that names its servers. A self-hosted prefix cache has no vendor "
                  "minimum, so it is not judged against one. The whole-log hit rate (cache reads / input) is **%s** (%d "
@@ -6741,39 +6820,39 @@ FIX_KIND = {"failed": "A", "resent": "A", "truncated": "A", "prefix_unstable": "
 # 7-8 holds two knives: the 1-hour mark picked from the gaps (B) and cutting the history every k turns (A, answers change)
 SPLIT_FIELDS = {"shared_prefix": (("B", "usd_ttl"), ("A", "usd_history"))}
 FIX_KIND_TEXT = {
-    "A": ("직접 하셔도 됩니다 — 한 번 고치면 되는 항목입니다.", "You can do this yourself: a one-time fix."),
-    "B": ("계속 맞춰야 합니다 — 같은 앞부분이 돌아오는 간격이 바뀌면 값을 다시 골라야 해서, 한 번 고쳐서는 끝나지 않습니다.",
+    "A": ("설정 개선: 설정이나 요청 구성을 변경해 적용할 수 있는 항목입니다. 아래 개선 방법을 참고해 직접 적용하실 수 있습니다.", "You can do this yourself: a one-time fix."),
+    "B": ("지속 최적화: 요청 내용과 사용 패턴에 따라 적용 여부와 기준을 조정해야 하는 항목입니다. 운영 중에도 절감 효과를 확인하고 기준을 관리해야 합니다.",
           "This needs ongoing tuning: when the gap between returns of the same prefix changes, the value has to be picked "
           "again, so a one-time fix does not hold.")}
 # MISSION-4 (PM 10-25 18:05 1): a one-time (A) item also says how to do it yourself, in one line; an ongoing (B) part
 # gives the amount and why it is ongoing, never the method (its prescription line is left out)
 FIX_HOWTO = {
-    "failed": ("하는 법: 청구된 실패가 몰리는 요청(모델·시간대)을 찾아, 서비스의 시간 초과 값과 재시도 조건을 고치세요.",
+    "failed": ("개선 방법: 청구된 실패가 몰리는 요청(모델·시간대)을 찾아, 서비스의 시간 초과 값과 재시도 조건을 고치세요.",
                "How: find the calls the billed failures cluster on (model, time of day) and fix your service's "
                "timeout and retry settings."),
-    "resent": ("하는 법: 같은 요청을 짧은 간격으로 다시 보내는 자리(재시도·중복 클릭)를 찾아, 앞 요청이 끝나기 전에는 다시 보내지 "
+    "resent": ("개선 방법: 같은 요청을 짧은 간격으로 다시 보내는 자리(재시도·중복 클릭)를 찾아, 앞 요청이 끝나기 전에는 다시 보내지 "
                "않게 고치세요.",
                "How: find where the same request is sent again shortly after (retries, double clicks) and stop it from "
                "going out again before the first one has finished."),
-    "truncated": ("하는 법: 잘린 뒤 더 큰 길이 상한으로 다시 보내는 요청은 처음부터 그 상한으로 보내세요.",
+    "truncated": ("개선 방법: 잘린 뒤 더 큰 길이 상한으로 다시 보내는 요청은 처음부터 그 상한으로 보내세요.",
                   "How: send the calls that are resent with a bigger length limit after a cut with that limit from "
                   "the start."),
-    "prefix_unstable": ("하는 법: 도구 정의와 시스템 지시를 늘 같은 순서·같은 글로 보내고, 시각·ID 처럼 바뀌는 값은 요청 뒤쪽으로 "
+    "prefix_unstable": ("개선 방법: 도구 정의와 시스템 지시를 늘 같은 순서·같은 글로 보내고, 시각·ID 처럼 바뀌는 값은 요청 뒤쪽으로 "
                         "옮기세요.",
                         "How: send the tool definitions and system instructions in the same order and the same text "
                         "every time, and move changing values such as times and IDs to the end of the call."),
-    "cache_min": ("하는 법: 앞부분이 같은 짧은 요청은 고정 지시문을 캐시 최소 길이 위로 늘리거나, 여러 개를 한 요청으로 묶어 보내세요.",
+    "cache_min": ("개선 방법: 앞부분이 같은 짧은 요청은 고정 지시문을 캐시 최소 길이 위로 늘리거나, 여러 개를 한 요청으로 묶어 보내세요.",
                   "How: for short calls that share a start, lengthen the fixed instructions past the cache minimum or "
                   "send several of them together as one request."),
-    "billing": ("하는 법: 위 호출 목록을 근거로 벤더에 청구 정정을 요청하세요.",
+    "billing": ("개선 방법: 위 호출 목록을 근거로 벤더에 청구 정정을 요청하세요.",
                 "How: ask the vendor to correct the bill, with the calls above as the evidence."),
-    "cache_hit": ("하는 법: 반복되는 고정 앞부분 끝에 캐시 표시를 붙이고(Anthropic 은 `cache_control`), 같은 앞부분 요청이 같은 "
+    "cache_hit": ("개선 방법: 반복되는 고정 앞부분 끝에 캐시 표시를 붙이고(Anthropic 은 `cache_control`), 같은 앞부분 요청이 같은 "
                   "계정·같은 키로 가게 하세요.",
                   "How: put a cache mark at the end of the repeated fixed start (`cache_control` on Anthropic) and send "
                   "calls that share it through the same account and key."),
-    "flex": ("하는 법: 사람이 기다리지 않는 요청(야간 작업·일괄 처리)에 `service_tier: \"flex\"` 를 붙여 보내세요.",
+    "flex": ("개선 방법: 사람이 기다리지 않는 요청(야간 작업·일괄 처리)에 `service_tier: \"flex\"` 를 붙여 보내세요.",
              "How: add `service_tier: \"flex\"` to the calls no one is waiting on (overnight jobs, batch work)."),
-    "shared_prefix": ("하는 법(대화 기록 몫): 긴 대화는 몇 턴마다 앞 기록을 잘라 보내세요. 답이 달라질 수 있어 품질을 먼저 확인하세요.",
+    "shared_prefix": ("개선 방법(대화 기록 비중): 긴 대화는 몇 턴마다 앞 기록을 잘라 보내세요. 답이 달라질 수 있어 품질을 먼저 확인하세요.",
                       "How (history part): cut the earlier history every few turns in long conversations. Answers can "
                       "change, so check quality first."),
 }
@@ -6811,7 +6890,7 @@ def waste_lines(res, ko):
     W = res.get("waste")
     if not W:
         return []
-    L = ["## " + ("7. 점검서 — 새고 있는 것 · 더 줄일 수 있는 것" if ko else "7. Checklist — what is leaking, what could cost less"), ""]
+    L = ["## " + ("7. 상세 진단 결과" if ko else "7. Checklist — what is leaking, what could cost less"), ""]
     marks = []  # (item, index of its first line): the items are regrouped at the end
 
     def head(n, k, title):
@@ -6854,7 +6933,7 @@ def waste_lines(res, ko):
                   "  - %d calls have a status. %d failed, and %d of those were still billed: %s.")
                  % (w["calls_with_status"], w["failed_calls"], w["failed_calls_billed"], _spent(w, ko)))
     if w.get("usd_back_on_retry") and usd(w["usd_back_on_retry"]) != usd(0):
-        L.append(("  - 이 금액은 청구된 %s 에서 %s 를 뺀 것입니다. 뺀 몫은 재시도 %d건이 실패 호출이 써 둔 캐시를 읽어 덜 낸 "
+        L.append(("  - 이 금액은 청구된 %s 에서 %s 를 뺀 것입니다. 뺀 비중은 재시도 %d건이 실패 호출이 써 둔 캐시를 읽어 덜 낸 "
                   "돈입니다. 그래서 실패가 없었다면 실제로 아꼈을 돈은 이 금액입니다." if ko else
                   "  - This is the billed %s less %s: %d retries read the cache the failed calls wrote and paid that "
                   "much less. So this amount is what the bill would have saved without the failures.")
@@ -6881,7 +6960,7 @@ def waste_lines(res, ko):
                     rt.get("after_failed_calls", 0)))
         fb = W["failed"]
         if fb.get("usd_back_on_retry") and usd(fb["usd_back_on_retry"]) != usd(0):
-            L.append(("  - 버려진 산출물의 실패 몫은 청구된 %s 에서 %s 를 뺀 금액입니다. 뺀 몫은 재시도 %d건이 실패 호출이 써 둔 캐시를 "
+            L.append(("  - 버려진 산출물의 실패 비중은 청구된 %s 에서 %s 를 뺀 금액입니다. 뺀 비중은 재시도 %d건이 실패 호출이 써 둔 캐시를 "
                       "읽어 덜 낸 돈입니다. 실패가 없었다면 실제로 아꼈을 돈만 셉니다." if ko else
                       "  - The failed part of the discarded output is the billed %s less %s: %d retries read the cache the "
                       "failed calls wrote and paid that much less. Only what the bill would have saved without the "
@@ -6918,13 +6997,13 @@ def waste_lines(res, ko):
         ua = w.get("usd_after") or {}
         if w["status"] == "found" and any(v is not None for v in ua.values()):
             m = lambda st: usd(ua[st]) if ua.get(st) is not None else ("없음" if ko else "none")  # noqa: E731
-            L.append(("  - 금액을 앞 호출 상태로 가르면: 정상 뒤 %s — 엔진이 저장한 답으로 고칠 수 있는 몫 · 실패 뒤 %s — 서비스의 재시도 "
+            L.append(("  - 금액을 앞 호출 상태로 가르면: 정상 뒤 %s — 엔진이 저장한 답으로 고칠 수 있는 비중 · 실패 뒤 %s — 서비스의 재시도 "
                       "설정으로 고칩니다 · 잘림 뒤 %s — 7-3 의 큰 상한이 고칩니다." if ko else
                       "  - Split by the earlier call: after a successful answer %s — the engine's stored answer can fix this · "
                       "after a failure %s — fixed by the service's retry settings · after a "
                       "cut %s — fixed by 7-3's larger cap.") % (m("ok"), m("failed"), m("truncated")))
             if ua.get("failed"):  # 1.4.2: the engine has no fix for this share (permanent; it only shows the chains)
-                L.append(("  - 실패 뒤 재시도 몫은 링클비 엔진이 줄이지 않습니다. 엔진은 재시도 연쇄를 보여 줄 뿐입니다. 서비스 코드의 재시도 "
+                L.append(("  - 실패 뒤 재시도 비중은 링클비 엔진이 줄이지 않습니다. 엔진은 재시도 연쇄를 보여 줄 뿐입니다. 서비스 코드의 재시도 "
                           "설정(간격·최대 횟수)을 바꾸면 줄어듭니다." if ko else
                           "  - The Linklbee engine does not reduce the share after a failure; it only shows the retry chains. "
                           "Changing the retry settings in your service code (interval, maximum retries) is what lowers it."))
@@ -6960,7 +7039,7 @@ def waste_lines(res, ko):
                     ((" 잘린 호출의 max_tokens: %s." if ko else " max_tokens of the cut calls: %s.") % mt) if mt else ""))
         if w["status"] == "found":
             L.append(("  - 엔진: 링클비 서버는 답의 종료 사유와 요청의 max_tokens 를 기록에 남깁니다. 엔진의 사용 현황에 "
-                      "잘린 요청의 상한별 몫과 상한 교정안을 냅니다." if ko else
+                      "잘린 요청의 상한별 비중과 상한 교정안을 냅니다." if ko else
                       "  - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. "
                       "The engine's usage view shows the cut share per limit, with a suggested limit."))
     w = W["prefix_unstable"]
@@ -6990,7 +7069,7 @@ def waste_lines(res, ko):
                       "answer would change. Fix: build each kind of schema with one field order in your code."))
             if w.get("usd_schema_order"):
                 L.append(("  - 금액으로: 스키마의 필드 순서를 하나로 고정하면 **%s** 를 덜 냅니다 — 같은 스키마가 캐시에서 하나로 읽히는 "
-                          "몫입니다(키 순서 몫은 뺀 값, 그 호출들의 입력 단가, 가격표 %s). 답의 필드 순서가 바뀔 수 있어 고객이 정할 "
+                          "비중입니다(키 순서 비중은 뺀 값, 그 호출들의 입력 단가, 가격표 %s). 답의 필드 순서가 바뀔 수 있어 고객이 정할 "
                           "일입니다. 필드 순서 말고 다른 키의 순서는 엔진이 정렬해 보냅니다(답 그대로)." if ko else
                           "  - In dollars: one field order for the schema saves **%s** — the same schema read from the cache "
                           "as one (the key-order share left out; at those calls' input price, price list %s). It can change "
@@ -7001,11 +7080,11 @@ def waste_lines(res, ko):
         if w.get("usd_sort"):
             how = []
             if sp_.get("anthropic"):
-                how.append(("Anthropic 호출 %s — 같은 앞부분에 5분 캐시 표시를 달았을 때 형태마다 따로 쓰던 것을 한 번 쓰고 읽게 되는 몫"
+                how.append(("Anthropic 호출 %s — 같은 앞부분에 5분 캐시 표시를 달았을 때 형태마다 따로 쓰던 것을 한 번 쓰고 읽게 되는 비중"
                             if ko else "Anthropic calls %s — with 5-minute cache marks on the repeated prefix, what each form "
                             "wrote separately is written once and read") % usd(sp_["anthropic"]))
             if sp_.get("openai"):
-                how.append(("OpenAI 호출 %s — 기본 캐시가 형태마다 따로 쓰던 앞부분을 한 형태로 읽게 되는 몫" if ko else
+                how.append(("OpenAI 호출 %s — 기본 캐시가 형태마다 따로 쓰던 앞부분을 한 형태로 읽게 되는 비중" if ko else
                             "OpenAI calls %s — the default cache reads one form of the prefix where each form wrote its own")
                            % usd(sp_["openai"]))
             L.append(("  - 금액으로: 키를 한 순서로 맞추면 **%s** 를 덜 냅니다. %s(그 호출들의 입력 단가, 가격표 %s)." if ko else
@@ -7018,7 +7097,7 @@ def waste_lines(res, ko):
                       "ids), so the vendor caches it as %d separate entries.** %d calls use this template; the most common "
                       "form has %d of them.") % (b["block"], b["value_forms"], b["value_forms"], b["calls"], b["calls_in_main_form"]))
         if w.get("usd_values"):
-            L.append(("  - 금액으로: 값을 앞부분에서 빼면 **%s** 를 덜 냅니다 — 값을 가린 틀이 하나로 캐시에서 읽히는 몫입니다(키 순서 몫은 "
+            L.append(("  - 금액으로: 값을 앞부분에서 빼면 **%s** 를 덜 냅니다 — 값을 가린 틀이 하나로 캐시에서 읽히는 비중입니다(키 순서 비중은 "
                       "뺀 값, 그 호출들의 입력 단가, 가격표 %s). 엔진이 하는 일이 아니라 서비스 코드를 고쳐야 나오는 금액입니다." if ko else
                       "  - In dollars: taking the values out of the prefix saves **%s** — the masked template read from the "
                       "cache as one (the key-order share left out; at those calls' input price, price list %s). This is "
@@ -7028,7 +7107,7 @@ def waste_lines(res, ko):
         if sw:
             sc = sw["shape_calls"]
             L.append(("  - **바뀌지 않는 문단이 바뀌는 부분 뒤에 있는 호출 %s건**(앞에 고정부가 있는 샌드위치형 %s건 · 앞에 고정부가 "
-                      "아예 없는 형 %s건, 그 문단 몫 입력 %s 토큰). 캐시는 앞에서부터만 읽어서 이 문단은 매번 다시 냅니다." if ko else
+                      "아예 없는 형 %s건, 그 문단 비중 입력 %s 토큰). 캐시는 앞에서부터만 읽어서 이 문단은 매번 다시 냅니다." if ko else
                       "  - **%s calls have a paragraph that never changes after the part that does** (%s sandwiched behind a "
                       "fixed front, %s with no fixed front at all; %s input tokens in those paragraphs). The cache reads "
                       "from the front only, so they are paid in full every time.")
@@ -7112,7 +7191,7 @@ def waste_lines(res, ko):
         if w.get("usd_bundle"):
             rp = bd["replay"]
             L.append(("  - 묶어 보내면: 고정 앞부분이 최소 길이에 못 미친 호출 %d건을 같은 앞부분끼리 %d개씩(2초 안에 온 것만 — 켰을 때 링클비가 기다리는 시간) 묶으면 "
-                      "**%s** 덜 냅니다 — 앞부분을 묶음마다 한 번만 보내는 몫입니다(묶음 %d개에 호출 %d건, 항목 번호 몫은 뺀 값, "
+                      "**%s** 덜 냅니다 — 앞부분을 묶음마다 한 번만 보내는 비중입니다(묶음 %d개에 호출 %d건, 항목 번호 비중은 뺀 값, "
                       "가격표 %s). 한 호출이 여러 건에 답하므로 답이 달라질 수 있습니다 — 상한이고, 켤지는 고객이 정합니다. "
                       "답 품질은 아직 재지 않았습니다." if ko else
                       "  - Bundled: %d calls whose fixed prefix is under the minimum, bundled %d at a time with the same "
@@ -7124,7 +7203,7 @@ def waste_lines(res, ko):
             u60, bill_ = w.get("usd_bundle_wait60"), ((res.get("bill") or {}).get("usd_total"))
             if u60 and bill_ and u60 > w["usd_bundle"] * 1.01:
                 if u60 <= 10 * w["usd_bundle"]:
-                    L.append(("  - 기다리는 시간은 고객이 60초까지 늘릴 수 있습니다. 2초간 모을 때 청구서의 %s, 60초간 모을 때 %s 입니다"
+                    L.append(("  - 기다리는 시간은 고객이 60초까지 늘릴 수 있습니다. 2초간 모을 때 분석 기간 비용의 %s, 60초간 모을 때 %s 입니다"
                               "(답이 그만큼 늦게 옵니다). 위 금액은 2초 기준입니다." if ko else
                               "  - You can let a bundle wait up to 60 seconds. Gathering for 2 seconds saves %s of the bill, "
                               "for 60 seconds %s (the answers come that much later). The amount above is the 2-second one.")
@@ -7159,7 +7238,7 @@ def waste_lines(res, ko):
                       "list %s).")
                      % (usd(w["usd_pad"]), pv["calls"], pv["reads"], pv["writes"],
                         (res.get("pricing") or {}).get("as_of") or "—"))
-        L.append(("  - 엔진: 엔진의 사용 현황이 같은 상수로 사용 기록의 미달 몫을 내고, 미달 요청에는 "
+        L.append(("  - 엔진: 엔진의 사용 현황이 같은 상수로 사용 기록의 미달 비중을 내고, 미달 요청에는 "
                   "접두를 문턱 이상으로 묶거나 캐시 표시를 빼라는 교정안을 붙입니다." if ko else
                   "  - Engine: the engine's usage view reports the same share from your usage records, using "
                   "the same constants, with a suggested fix for those calls (grow the prefix past the threshold, or "
@@ -7251,7 +7330,7 @@ def waste_lines(res, ko):
         # GPU-SHARE (PM 10-25 09:58): the device side in its own lines -- a share, never multiplied by a price here
         if us_.get("share_upper") is not None:
             if us_.get("share_lower") is not None:
-                L.append(("  - **자체 호스팅 장비**: 서버들이 계산한 앞부분(입력 처리) 중 흩어짐 때문에 다시 계산한 몫은 **%s ~ %s** 입니다. "
+                L.append(("  - **자체 호스팅 장비**: 서버들이 계산한 앞부분(입력 처리) 중 흩어짐 때문에 다시 계산한 비중은 **%s ~ %s** 입니다. "
                           "아래쪽은 같은 서버로 보냈을 때 이 기록에서 그 서버가 실제로 캐시에서 읽어 낸 비율(%s)을 곱한 값, 위쪽은 다시 "
                           "계산한 앞부분 전부입니다." if ko else
                           "  - **Self-hosted servers**: of the prompt processing the servers did, **%s – %s** was computed "
@@ -7259,15 +7338,15 @@ def waste_lines(res, ko):
                           "back from its cache on this log (%s); the upper end is all of it.")
                          % (pct(us_["share_lower"]), pct(us_["share_upper"]), pct(us_["same_server_read_share"])))
             else:
-                L.append(("  - **자체 호스팅 장비**: 서버들이 계산한 앞부분(입력 처리) 중 흩어짐 때문에 다시 계산한 몫은 **최대 %s** 입니다. "
+                L.append(("  - **자체 호스팅 장비**: 서버들이 계산한 앞부분(입력 처리) 중 흩어짐 때문에 다시 계산한 비중은 **최대 %s** 입니다. "
                           "같은 서버로 이어진 호출이 없어 아래쪽(같은 서버가 실제로 읽어 내는 비율)은 이 기록으로 못 잽니다." if ko else
                           "  - **Self-hosted servers**: of the prompt processing the servers did, **at most %s** was computed "
                           "again because calls were spread. No call followed another on the same server, so the lower end "
                           "(what one server really reads back) cannot be measured on this log.") % pct(us_["share_upper"]))
             if us_.get("time_share_upper") is not None:
                 L.append(("  - 장비 시간으로는 서버가 일한 시간(입력 처리 + 답 쓰기)의 **%s ~ %s** 입니다(이 기록의 처리 시간 timings 로 "
-                          "셈, 호출 %s건). GPU 를 시간으로 빌린다면 이 비율이 비용 몫의 상한입니다 — 서버가 노는 시간이 있으면 비용에서의 "
-                          "몫은 이보다 작습니다. 단가는 아래 참고표나 계약 단가로 곱하세요." if ko else
+                          "셈, 호출 %s건). GPU 를 시간으로 빌린다면 이 비율이 비용 비중의 상한입니다 — 서버가 노는 시간이 있으면 비용에서의 "
+                          "비중은 이보다 작습니다. 단가는 아래 참고표나 계약 단가로 곱하세요." if ko else
                           "  - In device time that is **%s – %s** of the time the servers worked (prompt processing plus "
                           "writing answers), from this log's own timings (%s calls). If you rent GPUs by the hour, this is "
                           "the upper side of that share of the bill: idle server time makes it smaller. Multiply by your "
@@ -7275,7 +7354,7 @@ def waste_lines(res, ko):
                          % (pct(us_["time_share_lower"]) if us_.get("time_share_lower") is not None else "—",
                             pct(us_["time_share_upper"]), "{:,}".format(us_["timed_calls"])))
             else:
-                L.append(("  - 장비 시간·비용의 몇 %인지는 이 기록으로 못 냅니다. 입력 처리 몫은 장비 시간 전체가 아니고(답 쓰기에 따로 "
+                L.append(("  - 장비 시간·비용의 몇 %인지는 이 기록으로 못 냅니다. 입력 처리 비중은 장비 시간 전체가 아니고(답 쓰기에 따로 "
                           "듭니다), 서버의 처리 시간(timings: prompt_ms · predicted_ms)이 로그에 있어야 둘을 나눌 수 있습니다." if ko else
                           "  - What share of device time or cost this is cannot be given from this log: prompt processing is "
                           "not all of the device time (writing answers takes its own), and splitting the two needs the "
@@ -7295,7 +7374,7 @@ def waste_lines(res, ko):
                       "perfect cache's ceiling) x 0.5. A log with little shared prefix is not held to another log's line.")
                      % pct(w["ceiling"]))
             if w.get("kept_by_money"):
-                L.append(("  - 적중률은 그 선 위지만, 아래 금액(캐시 쓰기 웃돈·놓친 몫)이 남아 있어 발견으로 둡니다." if ko else
+                L.append(("  - 적중률은 그 선 위지만, 아래 금액(캐시 쓰기 웃돈·놓친 비중)이 남아 있어 발견으로 둡니다." if ko else
                           "  - The rate is over that line, but the money below (cache-write premium, missed reads) is still "
                           "there, so this stays found."))
         for b in w["by_model"][:8]:
@@ -7303,7 +7382,7 @@ def waste_lines(res, ko):
                       "  - %s (%s): %s; above the minimum %s (%d calls); %d calls with no cache read.")
                      % (b["model"], b["vendor"], pct(b["hit_rate"]), pct(b["over_min_hit_rate"]), b["over_min_calls"],
                         b["calls_read_0"]))
-        L.append(("  - 최소 길이를 넘고도 못 읽는 몫은 캐시를 켜지 않았거나(Anthropic API 는 요청에 `cache_control` 을 달아야 "
+        L.append(("  - 최소 길이를 넘고도 못 읽는 비중은 캐시를 켜지 않았거나(Anthropic API 는 요청에 `cache_control` 을 달아야 "
                   "캐시합니다. Bedrock 은 표시 없이도 캐시를 시도하지만 최선 노력이라 적중이 보장되지 않습니다), 접두가 바이트 단위로 같지 않거나(7-4), 캐시 유지 시간이 지났거나, 벤더가 다른 서버로 보낸 경우입니다"
                   "(GPT-5.6 전 OpenAI 모델은 한 키에 분당 약 15건을 넘으면 다른 서버로 넘칠 수 있다고 문서에 적혀 있습니다. "
                   "GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정합니다)." if ko else
@@ -7324,7 +7403,7 @@ def waste_lines(res, ko):
                  % ow["calls"])
     elif ow:
         L.append(("  - 직접 붙인 캐시 표시(Anthropic 계열, 쓰기 필드가 있는 호출 %d건, 그중 쓴 호출 %d건): 쓰기 웃돈 %s 토큰분"
-                  "(5분 쓰기 %s 토큰 × %.2f배, 1시간 쓰기 %s 토큰 × %.1f배에서 정가를 뺀 몫), 읽기로 아낀 몫 %s 토큰분(읽기 %s 토큰, "
+                  "(5분 쓰기 %s 토큰 × %.2f배, 1시간 쓰기 %s 토큰 × %.1f배에서 정가를 뺀 비중), 읽기로 아낀 비중 %s 토큰분(읽기 %s 토큰, "
                   "읽기 %.2f배) → **순 %s 토큰분**. 입력 토큰 정가로 환산한 값입니다." if ko else
                   "  - Your own cache markers (Anthropic family; %d calls with a cache-write field, %d of them wrote): "
                   "write premium %s tokens' worth (5-minute writes %s tokens at %.2fx, 1-hour writes %s tokens at %.1fx, "
@@ -7337,7 +7416,7 @@ def waste_lines(res, ko):
         if ow["net"] < 0:
             L.append(("  - **쓴 캐시를 읽어서 돌려받지 못하고 있습니다.** 캐시를 안 쓰는 것보다 %s 토큰분 더 냈습니다. 바뀌는 블록"
                       "(시각·사용자 값)에 표시를 달았거나, 다음 요청이 유지 시간 안에 오지 않는 경우입니다. 1시간 표시는 쓰기가 "
-                      "정가의 2배라 한 번 못 읽으면 읽기 약 20번 몫을 잃습니다. 고칠 법: 표시를 고정 앞부분 끝으로 옮기고, "
+                      "정가의 2배라 한 번 못 읽으면 읽기 약 20번 비중을 잃습니다. 고칠 법: 표시를 고정 앞부분 끝으로 옮기고, "
                       "다음 요청 간격이 5분 안이면 1시간 대신 5분 표시를 쓰세요. 엔진은 직접 붙인 표시를 바꾸지 않습니다." if ko else
                       "  - **The cache you write is not being read back.** It cost %s tokens' worth more than no cache. "
                       "Usually a marker sits on a block that changes (times, user values), or the next request comes after "
@@ -7363,7 +7442,7 @@ def waste_lines(res, ko):
     ot = w.get("openai_tail")
     if ot:
         L.append(("  - OpenAI GPT-5.6 이상 호출 %d건(입력 %s 토큰): 기본(implicit) 표시는 마지막 메시지 끝까지 씁니다(30분 쓰기 "
-                  "1.25배). 그렇게 쓰이는 몫 %s 토큰 중 30분 안에 뒤 호출이 다시 읽지 않는 몫 **%s 토큰**(대화 사슬로 셈). "
+                  "1.25배). 그렇게 쓰이는 비중 %s 토큰 중 30분 안에 뒤 호출이 다시 읽지 않는 비중 **%s 토큰**(대화 사슬로 셈). "
                   "토큰 셈이며 금액이 아닙니다." if ko else
                   "  - %d OpenAI GPT-5.6+ calls (%s prompt tokens): the default implicit mode writes up to the end of the "
                   "last message (a 30-minute write at 1.25x). Of the %s tokens written that way, **%s tokens** are not "
@@ -7378,21 +7457,21 @@ def waste_lines(res, ko):
                  % pct(W["shared_prefix"]["share_3600"]))
     pw = w.get("usd_waste_parts") or {}
     if w.get("usd_waste") and w["status"] == "found":
-        L.append(("  - 금액으로: 새는 몫 **%s** — %s(그 호출들의 입력 단가로 환산, 가격표 %s)." if ko else
+        L.append(("  - 금액으로: 새는 비중 **%s** — %s(그 호출들의 입력 단가로 환산, 가격표 %s)." if ko else
                   "  - In dollars: **%s** leaking — %s (at those calls' input price, price list %s).")
                  % (usd(w["usd_waste"]), " · ".join(
                      (("아무도 안 읽은 기본 표시 쓰기의 웃돈 %s" if ko else "the premium on implicit writes nobody read, %s") % usd(pw["implicit_unread"])
                       if k == "implicit_unread" else
                       ("직접 단 표시의 순 손해 %s" if ko else "the net loss on your own cache marks, %s") % usd(pw["own_mark_loss"])
                       if k == "own_mark_loss" else
-                      ("캐시 표시를 하나도 안 달아서 놓친 몫 %s(같은 앞부분에 5분 표시를 달았다면)" if ko else
+                      ("캐시 표시를 하나도 안 달아서 놓친 비중 %s(같은 앞부분에 5분 표시를 달았다면)" if ko else
                        "what no cache mark at all left on the table, %s (with 5-minute marks on the repeated prefix)")
                       % usd(pw["no_mark_gain"]))
                      for k in ("implicit_unread", "own_mark_loss", "no_mark_gain") if pw.get(k)),
                     (res.get("pricing") or {}).get("as_of") or "—"))
     if w.get("usd_spread") and w["status"] == "found":
         L.append(("  - 놓친 재료: 같은 앞부분이 5분 안에 다시 왔고 최소 길이도 넘었는데 읽지 못한 입력 %s 토큰 — 캐시가 있는 서버가 "
-                  "아닌 곳으로 갔거나 첫 응답이 시작되기 전에 몰린 몫입니다(GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정한다고 "
+                  "아닌 곳으로 갔거나 첫 응답이 시작되기 전에 몰린 비중입니다(GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정한다고 "
                   "문서에 적혀 있어, 어느 쪽인지는 로그로 가르지 못합니다). 금액으로 **최대 %s**(그 호출들의 "
                   "입력 단가, 가격표 %s). 엔진이 요청 경로를 바꾸는 칼은 없습니다 — 몰아 보내는 일괄 처리라면 먼저 한 건을 보내고 "
                   "첫 응답이 온 뒤 나머지를 보내거나, Flex·Batch(7-9)로 보내세요." if ko else
@@ -7426,7 +7505,7 @@ def waste_lines(res, ko):
         names = {"unsupported": ("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A", "vendors without prompt caching (CLOVA and others) %d — N/A"),
                  "no_input_tokens": ("input_tokens 없음 %d건", "no input_tokens %d"),
                  "no_cache_read_field": ("캐시 읽기 필드 없음 %d건 — 0 으로 세지 않음", "no cache-read field %d — not counted as 0"),
-                 "cache_read_over_input": ("캐시 읽기가 입력보다 큰 기록 %d건 — 입력에 캐시 몫이 빠진 것으로 보여 뺐습니다",
+                 "cache_read_over_input": ("캐시 읽기가 입력보다 큰 기록 %d건 — 입력에 캐시 비중이 빠진 것으로 보여 뺐습니다",
                                            "cache read larger than input %d — input seems to exclude the cached part, left out")}
         L.append(("  - 판단 못 한 호출: " if ko else "  - not checked: ") +
                  " · ".join(names[k][0 if ko else 1] % v for k, v in sorted(nj.items())))
@@ -7439,11 +7518,11 @@ def waste_lines(res, ko):
                   "**%s** · within 1 hour %s · across the whole log %s (%d calls, %d of them sharing a prefix within 5 "
                   "minutes).")
                  % (pct(w["share_300"]), pct(w["share_3600"]), pct(w["share_all"]), w["calls_judged"], w["calls_shared_300"]))
-        L.append(("  - 같은 접두가 5분 넘어 다시 와서 캐시 유지 시간에 놓치는 몫: **%s**." if ko else
+        L.append(("  - 같은 접두가 5분 넘어 다시 와서 캐시 유지 시간에 놓치는 비중: **%s**." if ko else
                   "  - Shared prefixes that came back after more than 5 minutes, once the cache had expired: **%s**.")
                  % pct(w["ttl_missed_share"]))
         if w["judged_min_calls"]:
-            L.append(("  - 5분 안에 같은 접두가 있었지만 그 접두가 벤더 캐시 최소 길이(cache_constants.json) 미만이라 캐시가 못 읽는 몫: "
+            L.append(("  - 5분 안에 같은 접두가 있었지만 그 접두가 벤더 캐시 최소 길이(cache_constants.json) 미만이라 캐시가 못 읽는 비중: "
                       "**%s** (호출 %d건 / 판단 %d건)." if ko else
                       "  - Shared within 5 minutes but shorter than the vendor's cache minimum (cache_constants.json), so "
                       "it cannot be cached: **%s** (%d of %d calls checked).")
@@ -7452,7 +7531,7 @@ def waste_lines(res, ko):
             # cache-minimum item (MORE_USD: the same prefix tokens), so it is pointed to here, not added again
             ub = (W.get("cache_min") or {}).get("usd_bundle")
             if w["below_min_calls"] and ub:
-                L.append(("  - 이 몫은 묶어 보내면 줄어듭니다. 금액은 '캐시 최소 길이 미달 요청' 항목의 **%s** 입니다. 같은 "
+                L.append(("  - 이 비중은 묶어 보내면 줄어듭니다. 금액은 '캐시 최소 길이 미달 요청' 항목의 **%s** 입니다. 같은 "
                           "앞부분이라 여기에 다시 더하지 않습니다." if ko else
                           "  - Bundling cuts this share. Its amount, **%s**, is under 'prompts shorter than the cache "
                           "minimum'. It is the same prefix, so it is not counted again here.") % usd(ub))
@@ -7513,7 +7592,7 @@ def waste_lines(res, ko):
                      % (pct(W["cache_hit"]["hit_rate"]), pct(w["share_300"])))
         L.append(("  - 센 방법: 도구 정의 → 시스템 → 대화 항목 순서로 항목이 통째로 같은 것만 셌습니다(요청 본문이 없으면 프롬프트를 "
                   "%d토큰 조각으로). 항목 안 부분 일치는 안 셌습니다. 벤더가 실제로 캐시하는 자리(`cache_control` 표시·벤더의 "
-                  "단위)는 따로 정해지므로 이 몫은 절감액이 아니라 캐시가 읽을 수 있는 재료의 크기입니다." if ko else
+                  "단위)는 따로 정해지므로 이 비중은 절감액이 아니라 캐시가 읽을 수 있는 재료의 크기입니다." if ko else
                   "  - Method: only whole items count, in the order tools → system → conversation items (without a request "
                   "body, the prompt in %d-token blocks). Partial matches inside an item are not counted. Where the vendor "
                   "actually caches (`cache_control` markers, its own block sizes) is decided separately, so this share is "
@@ -7526,7 +7605,7 @@ def waste_lines(res, ko):
             L.append(("  - Flex 할인이 있는 OpenAI 모델의 호출이 이 로그에 없습니다." if ko else
                       "  - This log has no calls to the OpenAI models that Flex offers."))
         elif not w["nonstream_calls"]:
-            L.append(("  - Flex 를 쓸 수 있는 OpenAI 모델 호출 %d건이 모두 스트림이라 Flex 로 옮길 몫이 없습니다." if ko else
+            L.append(("  - Flex 를 쓸 수 있는 OpenAI 모델 호출 %d건이 모두 스트림이라 Flex 로 옮길 비중이 없습니다." if ko else
                       "  - All %d calls to models that Flex offers were streamed, so none could move to Flex.")
                      % w["calls_flex_models"])
         else:
@@ -7539,16 +7618,16 @@ def waste_lines(res, ko):
             # bill is known, else in dollars; the two ends said in the customer's words
             bill_, up = (res.get("bill") or {}).get("usd_total"), w["saving_upper_usd"]
             if up is None:
-                L.append("  - " + (("덜 드는 몫: 금액 미상(입력 토큰 수가 로그에 없음)." if ko else
+                L.append("  - " + (("덜 드는 비중: 금액 미상(입력 토큰 수가 로그에 없음)." if ko else
                                     "What it would save: unknown (the log has no input token counts).") if not w.get("input_known", 1) else
-                                   ("덜 드는 몫: 금액 미상(가격표에 없는 모델)." if ko else
+                                   ("덜 드는 비중: 금액 미상(가격표에 없는 모델)." if ko else
                                     "What it would save: unknown (model not in the price list).")))
             else:
-                L.append(("  - 덜 드는 몫: %s **0 ~ %s** 입니다. 기다려도 되는 호출이 하나도 없으면 0, 스트림 아닌 호출이 전부 기다려도 "
+                L.append(("  - 덜 드는 비중: %s **0 ~ %s** 입니다. 기다려도 되는 호출이 하나도 없으면 0, 스트림 아닌 호출이 전부 기다려도 "
                           "되면 %s 입니다. 어느 호출이 기다려도 되는지는 로그로 가를 수 없습니다." if ko else
                           "  - What it would save: %s **0 – %s**. It is 0 if no call can wait, and %s if every call that was "
                           "not streamed can wait. The log cannot tell which calls can wait.")
-                         % ((("청구서의" if ko else "a share of the bill,"), pct(up / bill_), pct(up / bill_)) if bill_ else
+                         % ((("분석 기간 비용의" if ko else "a share of the bill,"), pct(up / bill_), pct(up / bill_)) if bill_ else
                             (("금액으로" if ko else "in dollars,"), usd(up), usd(up))))
     # regroup (PM 10-22 19:15): 'leak' items first, then 'more' items, found before none; items with no engine fix
     # dropped; items that need more data listed once per missing field, together with sections 2-5
@@ -7570,7 +7649,7 @@ def waste_lines(res, ko):
             for k in listed:
                 L += segs.get(k, [])
             if small:
-                L.append((("- 그 밖에 소액 기회" if listed else "- 소액 기회") + " %d건, 합계 **%s** (청구액의 %s 미만인 항목: %s)" if ko else
+                L.append((("- 그 밖에 소액 기회" if listed else "- 소액 기회") + " %d건, 합계 **%s** (분석 기간 비용의 %s 미만인 항목: %s)" if ko else
                           ("- Other small opportunities" if listed else "- Small opportunities") +
                           ": %d items, **%s** in all (each under %s of the bill: %s)")
                          % (len(small), usd(sum(more_amount(W[k], k) for k in small)), pct(MORE_SMALL_SHARE, 0),
@@ -7591,14 +7670,14 @@ def waste_lines(res, ko):
         if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge" and W[k]["missing"] != "threshold table":
             need.setdefault(W[k]["missing"], []).append(ITEM_NAMES[k][0 if ko else 1])
     # the other sections' items this log cannot show yet, as the next step (section 8 keeps only the zeros)
-    label = {"switch": ("2~4절 바뀐 부분만 고쳐 쓰기(닮음 × 답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
+    label = {"switch": ("2~4절 바뀐 부분만 고쳐 쓰기(응답 유사도 × 응답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
              "fact_input": ("3절 사실 입력(요청이 바뀐 내용을 알려 주는가)", "Section 3, facts in the request (does it say what changed)"),
              "zero_call": ("5절 호출 없이 답하기", "Section 5, answering without a call")}
     nm_ = [e for e in (res.get("zero_explain") or {}).get("axes") or () if e["state"] == "not_measured" and e["axis"] in label]
     for e in nm_:
         need.setdefault(e["missing"], []).append(label[e["axis"]][0 if ko else 1])
     if need:
-        L += ["### " + ("더 주시면 볼 수 있는 것" if ko else "What more data would show"), "",
+        L += ["### " + ("분석이 제한된 항목 — 더 주시면 볼 수 있는 것" if ko else "What more data would show"), "",
               (("코딩 에이전트 기록에는 아래 필드가 남지 않습니다. 회사 서비스의 호출 로그에 있으면 오른쪽 항목을 봅니다." if ko else
                 "A coding agent's record does not keep the fields on the left. A service's call log that has them gets the items on the right.")
                if res.get("agent_log_calls") else
@@ -7633,7 +7712,7 @@ def zero_lines(res, ko):
         return []
     W, sw = res["waste"], SWITCH
     nm = (lambda f: "이 로그로는 못 잽니다(필드 %s 없음)" % f) if ko else (lambda f: "cannot be measured on this log (no %s field)" % f)
-    L = ["## " + ("8. 0 이 나온 항목 — 이유와 다음에 볼 곳" if ko else "8. Items that came out 0 — why, and what to look at next"), "",
+    L = ["## " + ("8. 예상 절감액이 0원인 항목" if ko else "8. Items that came out 0 — why, and what to look at next"), "",
          ("항목마다 한 줄: (가) 이 로그에서 센 이유 · (나) 무엇이 바뀌면 달라지나, 대신 볼 항목. 숫자는 이 로그에서 센 값이거나 "
           "링클비가 정해 둔 선입니다(선 이름을 괄호에 적었습니다)." if ko else
           "One line per item: (a) the reason, counted on this log · (b) what would change it, or what to look at "
@@ -7657,15 +7736,15 @@ def zero_lines(res, ko):
         if stt == "not_measured" or ax in NO_KNIFE:  # said once in section 7; no-knife items are left out of the report
             continue
         if ax == "switch":
-            head = "- " + ("바뀐 부분만 고쳐 쓰기(닮음 × 답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
+            head = "- " + ("바뀐 부분만 고쳐 쓰기(응답 유사도 × 응답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
             if stt == "not_measured" and e["missing"] == "ts":
-                L.append(head + " — " + nm("ts") + (". (나) ts(ISO-8601 또는 epoch 초)를 넣으면 같은 문서의 판을 시간 순서로 이어 닮음을 잽니다. "
+                L.append(head + " — " + nm("ts") + (". (나) ts(ISO-8601 또는 epoch 초)를 넣으면 같은 문서의 판을 시간 순서로 이어 응답 유사도를 잽니다. "
                                                     "이 로그에서는 대신 %s 를 봅니다." if ko else
                                                     ". (b) With ts (ISO-8601 or epoch seconds), a document's versions are put in "
                                                     "order and similarity is measured. On this log, look at %s instead.") % cache_pointer(e))
                 continue
             if stt == "not_measured":
-                L.append(head + " — " + nm(e["missing"]) + (". (나) output 또는 output_token_hashes(--hashify)를 넣으면 닮음을 잽니다."
+                L.append(head + " — " + nm(e["missing"]) + (". (나) output 또는 output_token_hashes(--hashify)를 넣으면 응답 유사도를 잽니다."
                                                             if ko else ". (b) With output, or output_token_hashes from --hashify, similarity is measured."))
                 continue
             if res.get("upper_bound_only"):  # no section 5 without a body
@@ -7675,22 +7754,22 @@ def zero_lines(res, ko):
                         " On this log, look at %s and section 5 (answering without a call) instead.") % cache_pointer(e)
             by = e["blocked_by"]
             if by == "no_pairs":
-                a = (("(가) 답 쌍 0개 — 문서 %d개 중 호출이 두 번 이상 온 문서가 없습니다(본문 있는 호출 %d건, 답 길이 중앙값 %s 토큰). "
-                      "(나) 같은 문서·같은 건의 id 를 group_key 로 넣으면 답 쌍이 생깁니다." if ko else
+                a = (("(가) 응답 쌍 0개 — 문서 %d개 중 호출이 두 번 이상 온 문서가 없습니다(본문 있는 호출 %d건, 응답 길이 중앙값 %s 토큰). "
+                      "(나) 같은 문서·같은 건의 id 를 group_key 로 넣으면 응답 쌍이 생깁니다." if ko else
                       "(a) 0 answer pairs: none of the %d documents got two or more calls (%d calls with a body, median "
                       "answer %s tokens). (b) Put the document or case id in group_key to form pairs.")
                      % (e["keys"], e["calls_with_body"], _n(e["answer_median"])))
             elif by == "length" and res.get("upper_bound_only"):
                 a = (("(가) 출력 토큰 중앙값 %s(최대 %s, 호출 %d건) — 길이선 %d 토큰 "
-                      "이상 0건. 닮음은 %s. (나) 같은 문서로 %d 토큰 이상 답이 되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜집니다." if ko else
+                      "이상 0건. 응답 유사도는 %s. (나) 같은 문서로 %d 토큰 이상 답이 되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜집니다." if ko else
                       "(a) median output %s tokens (max %s, %d calls); none reach the %d-token length line. "
                       "Similarity: %s. (b) This applies to traffic that keeps producing answers "
                       "of %d+ tokens for the same document (documents, reports, amendments).")
                      % (_n(e["answer_median"]), _n(e["answer_max"]), e["answers"], sw["min_answer_tokens"],
                         nm(e["overlap_missing"]), sw["min_answer_tokens"]))
             elif by == "length":
-                a = (("(가) 답 쌍 %d개의 답 길이 중앙값 %s 토큰(최대 %s) — 길이선 %d 토큰 "
-                      "이상 0개. 닮음 %.2f(닮음 선) 이상 답 쌍 %d개, 닮음 중앙 %s. (나) 같은 문서로 %d 토큰 이상 답이 "
+                a = (("(가) 응답 쌍 %d개의 응답 길이 중앙값 %s 토큰(최대 %s) — 길이선 %d 토큰 "
+                      "이상 0개. 응답 유사도 %.2f(응답 유사도 선) 이상 응답 쌍 %d개, 응답 유사도 중앙 %s. (나) 같은 문서로 %d 토큰 이상 답이 "
                       "되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜집니다." if ko else
                       "(a) %d answer pairs, median answer %s tokens (max %s); none reach the %d-token length line. "
                       "Pairs at similarity %.2f+ (the similarity line): %d, "
@@ -7700,7 +7779,7 @@ def zero_lines(res, ko):
                         e["pairs_ge_overlap"], "—" if e["overlap_median"] is None else "%.3f" % e["overlap_median"],
                         sw["min_answer_tokens"]))
             elif by == "overlap":
-                a = (("(가) 답 쌍 %d개 중 닮음 %.2f(닮음 선) 이상 0개, 닮음 중앙 %s. 답 %d 토큰 이상 답 쌍은 "
+                a = (("(가) 응답 쌍 %d개 중 응답 유사도 %.2f(응답 유사도 선) 이상 0개, 응답 유사도 중앙 %s. 답 %d 토큰 이상 응답 쌍은 "
                       "%d개. (나) 같은 문서의 다음 답이 앞 답을 크게 되풀이하는 트래픽(개정·갱신형 문서)이면 켜집니다." if ko else
                       "(a) 0 of %d answer pairs at similarity %.2f+ (the similarity line), median similarity "
                       "%s. Pairs with answers of %d+ tokens: %d. (b) This applies to traffic where the next answer largely "
@@ -7708,7 +7787,7 @@ def zero_lines(res, ko):
                      % (e["pairs"], sw["min_overlap"], "—" if e["overlap_median"] is None else "%.3f" % e["overlap_median"],
                         sw["min_answer_tokens"], e["answers_ge_length"]))
             else:
-                a = (("(가) 답 쌍 %d개 중 답 %d 토큰 이상 %d개, 닮음 %.2f 이상 %d개 — 둘 다 넘는 답 쌍 0개(길이선·닮음 선 둘 다). "
+                a = (("(가) 응답 쌍 %d개 중 답 %d 토큰 이상 %d개, 응답 유사도 %.2f 이상 %d개 — 둘 다 넘는 응답 쌍 0개(길이선·응답 유사도 선 둘 다). "
                       "(나) 긴 답이 앞 답을 되풀이하는 문서가 생기면 켜집니다." if ko else
                       "(a) of %d answer pairs, %d have answers of %d+ tokens and %d have similarity %.2f+, but none have "
                       "both (the length and similarity lines). (b) This applies once a document's long answers repeat the previous one.")
@@ -7718,13 +7797,13 @@ def zero_lines(res, ko):
             L.append(head + " — **0%**. " + a + look)
         elif ax == "replay":
             n, f1 = e["on_pairs"], e["on_pairs_first_of_key"]
-            why = ((("줄일 수 있는 답 쌍 %d개 모두 그 문서의 첫 답 쌍(이력 없음)" % n) if f1 == n else
-                    ("줄일 수 있는 답 쌍 %d개 중 %d개가 그 문서의 첫 답 쌍(이력 없음), 나머지 %d개는 같은 문서의 앞 답 쌍 이력이 선 아래였거나 재전송 창 "
+            why = ((("줄일 수 있는 응답 쌍 %d개 모두 그 문서의 첫 응답 쌍(이력 없음)" % n) if f1 == n else
+                    ("줄일 수 있는 응답 쌍 %d개 중 %d개가 그 문서의 첫 응답 쌍(이력 없음), 나머지 %d개는 같은 문서의 앞 응답 쌍 이력이 선 아래였거나 재전송 창 "
                      "안이었습니다" % (n, f1, n - f1))) if ko else
                    (("all %d reducible answer pairs are their document's first pair (no history)" % n) if f1 == n else
                     ("of %d reducible answer pairs, %d are their document's first pair (no history); for the other %d, "
                      "the document's earlier pairs were under the line or fell in the resend window" % (n, f1, n - f1))))
-            L.append(("- 엔진이 판단했다면 — **0%%**. (가) %s. (나) 문서마다 답 쌍이 쌓이면(더 긴 기간의 로그) 켜집니다." if ko else
+            L.append(("- 엔진이 판단했다면 — **0%%**. (가) %s. (나) 문서마다 응답 쌍이 쌓이면(더 긴 기간의 로그) 켜집니다." if ko else
                       "- If the engine had decided — **0%%**. (a) %s. (b) This changes as answer pairs build up per "
                       "document (a log covering a longer period).") % why)
         elif ax == "fact_input":
@@ -7733,7 +7812,7 @@ def zero_lines(res, ko):
                       ". (b) With the request body (prompt, or prompt_token_hashes from --hashify), it is measured."))
         elif ax == "zero_call":
             z = res["zero_call"]
-            ref = (("답을 보고 센 상한(참고): 직전 답과 완전 일치 답 쌍 %d · 숫자만 다름 포함 %d." if ko else
+            ref = (("답을 보고 센 상한(참고): 직전 답과 완전 일치 응답 쌍 %d · 숫자만 다름 포함 %d." if ko else
                     "For reference, counted with the answer known (an upper bound): pairs identical to the previous "
                     "answer %d · allowing digit-only differences %d.") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]))
             if stt == "not_measured":
@@ -7741,7 +7820,7 @@ def zero_lines(res, ko):
                          (". (나) prompt 또는 prompt_hash 를 넣으면 돕니다. " if ko else ". (b) With prompt or prompt_hash, it runs. ")
                          + ref)
             else:
-                L.append((("- 5절 호출 없이 답하기 — **0%%**. (가) 답 쌍 %d개 중 프롬프트가 있는 답 쌍 %d개, 그중 직전 호출과 숫자만 빼고 같은 프롬프트 0개. %s "
+                L.append((("- 5절 호출 없이 답하기 — **0%%**. (가) 응답 쌍 %d개 중 프롬프트가 있는 응답 쌍 %d개, 그중 직전 호출과 숫자만 빼고 같은 프롬프트 0개. %s "
                            "(나) 같은 요청이 되풀이되는 트래픽(고정 템플릿·FAQ)이면 켜는 조건이 고릅니다.") if ko else
                           ("- Section 5, answering without a call — **0%%**. (a) %d answer pairs, %d of them with a prompt; "
                            "none match the previous call's prompt apart from digits. %s (b) The rule picks traffic that "
@@ -7772,13 +7851,16 @@ def zero_lines(res, ko):
                               (pct(w.get("over_min_hit_rate")), pct(w.get("line")))),
             }[ax]
             nxt = (("7-7 캐시 적중률을 보세요" if ko else "look at 7-7, the cache hit rate") if ax == "cache_min" else
-                   ("이 로그 범위에서 이 항목으로 줄일 몫이 없습니다(낭비가 없다는 뜻)" if ko else
+                   ("이 로그 범위에서 이 항목으로 줄일 비중이 없습니다(낭비가 없다는 뜻)" if ko else
                     "nothing to cut here within this log (no waste)"))
             L.append(("- %s — 없음. (가) %s. (나) %s." if ko else "- %s — none. (a) %s. (b) %s.")
                      % (t, why[0][0 if ko else 1] % why[1], nxt))
     if len(L) == n0:
         return []
-    L.append("")
+    L += ["", ("이번 분석에서는 위 항목의 예상 절감액이 0원으로 산정되었습니다. 이는 분석 오류를 의미하지 않습니다. 항목별 판단 근거와 추가 "
+               "분석에 필요한 정보는 위 표를 확인해 주세요." if ko else
+               "These items came out at 0 on this analysis. That is not an analysis error; each line above gives the "
+               "reason and what more would be needed."), ""]
     return L
 
 
@@ -7846,7 +7928,7 @@ def limit_lines(res, ko):
     cr = int(lv["cache_read_tokens"] or 0)
     # PM 10-23 07:32 item 3: a log with nothing to remove and its cache already well used says so first, as a result
     good = lv.get("already_good") and not lv["items"] and lv.get("nothing_found")
-    top = [("- **결과: 이 기록은 이미 잘 쓰고 있습니다.** 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 몫이 거의 없고, 토큰을 덜어 "
+    top = [("- **결과: 이 기록은 이미 잘 쓰고 있습니다.** 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 비중이 거의 없고, 토큰을 덜어 "
             "낼 항목도 찾지 못했습니다." if ko else
             "- **Result: this log is already used well.** Cache reads are **%s** of input. Little is left for caching to "
             "cut, and no item here removes tokens.") % pct(lv["already_good"]["cache_hit_rate"])] if good else []
@@ -7879,7 +7961,7 @@ def limit_lines(res, ko):
     if not lv["items"]:
         L.append(("  - 이 기록에서 토큰을 덜어 낼 항목을 찾지 못했습니다." if ko else "  - No item in this log removes tokens."))
     if lv.get("already_good") and lv.get("nothing_found"):
-        L.append(("  - 이미 잘 쓰고 있는 것: 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 몫이 거의 남아 있지 않습니다." if ko else
+        L.append(("  - 이미 잘 쓰고 있는 것: 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 비중이 거의 남아 있지 않습니다." if ko else
                   "  - Already done well: cache reads are **%s** of input. Little is left for caching to cut.")
                  % pct(lv["already_good"]["cache_hit_rate"]))
     elif lv.get("already_good"):  # WRONG-SWEEP (10-24, CS): 7-7 is fine but another item of section 7 still saves
@@ -8056,7 +8138,7 @@ def input_checks(recs, ko=True):
     # 7 groups that stopped after the first call
     one = sum(1 for rs in by_g.values() if len(rs) == 1)
     if by_g and one:
-        L.append(("- group_key 묶음 %d개 중 %d개는 호출이 1건뿐입니다(첫 호출 뒤 끝남). 답 쌍이 없어 판단에 안 들어가고, 접두·세션 "
+        L.append(("- group_key 묶음 %d개 중 %d개는 호출이 1건뿐입니다(첫 호출 뒤 끝남). 응답 쌍이 없어 판단에 안 들어가고, 접두·세션 "
                   "판정에서도 따로 세세요." if ko else
                   "- %d group_key groups, %d of them with a single call (ended after the first). They form no answer pair. "
                   "Count them separately for prefix and session checks too.") % (len(by_g), one))
@@ -8162,7 +8244,7 @@ def peek(path, field_map=None, lang="ko"):
     if chk:
         L += ["", "입력 검사 (앞 %d줄):" % len(recs) if ko else "input checks (first %d records):" % len(recs)] + chk + [""]
     if readable and not timed:
-        L.append("ts 를 못 찾았습니다 — 시각이 필요한 항목(2~5절 답 쌍·7-2 간격·7-8 접두 수명)은 못 보고, 나머지는 봅니다. 시각이 있으면 "
+        L.append("ts 를 못 찾았습니다 — 시각이 필요한 항목(2~5절 응답 쌍·7-2 간격·7-8 접두 수명)은 못 보고, 나머지는 봅니다. 시각이 있으면 "
                  "위 후보를 `--map ts=<경로>` 로 지정하세요." if ko else
                  "No ts found. Items that need time (answer pairs in sections 2-5, resend gaps in 7-2, prefix lifetime in "
                  "7-8) are skipped; the rest still run. If the log does have a time, point to it with `--map ts=<path>`, "
@@ -8195,10 +8277,10 @@ def share_text(res, lang="ko"):
     L = ["링클비 진단 — 호출 %s건" % "{:,}".format(res.get("calls") or 0) if ko else
          "Linklbee scan — %s calls" % "{:,}".format(res.get("calls") or 0)]
     if s.get("share_of_bill_low") is not None and s.get("share_of_bill_high"):
-        L.append(("줄일 여지(추정): 청구액의 %s ~ %s" if ko else "room to cut (estimate): %s – %s of the bill")
+        L.append(("줄일 여지(추정): 분석 기간 비용의 %s ~ %s" if ko else "room to cut (estimate): %s – %s of the bill")
                  % (pct(s["share_of_bill_low"]), pct(s["share_of_bill_high"])))
     if res.get("bill") and res["bill"].get("output_share") is not None:
-        L.append(("청구서에서 출력 몫: %s" if ko else "output's share of the bill: %s") % pct(res["bill"]["output_share"]))
+        L.append(("분석 기간 비용 중 출력 비중: %s" if ko else "output's share of the bill: %s") % pct(res["bill"]["output_share"]))
     if W:
         L.append(("낭비 점검 %d개 중 발견 %d개%s" if ko else "%d waste checks, %d found%s")
                  % (len(W), len(found), (": " + ", ".join(found)) if found else ""))
@@ -8904,12 +8986,12 @@ def _report_bill_fit(res, ko):
 def report_usage(res, lang="ko"):
     ko = lang == "ko"
     t = T[lang]
-    L = ["# " + t["title"], "", "scanner %s · %s" % (res["version"], res["input"]), ""]
+    L = ["# " + t["title"], "", head_line(res, ko), ""]
     tk0 = res.get("tokens") or {}
     ti0 = sum(tk0.get(f) or 0 for f in ("input", "cached", "write"))
     if ti0 and not res.get("error"):  # CACHE-HEAD: the same "cache read / input" as below, first
         hr = _hit_range(res.get("models") or {})
-        L += [("**캐시 적중률 %s** — 입력 토큰 중 캐시에서 읽힌 몫입니다(공급사 사용량 집계 기준). 자세한 것은 2절." if ko else
+        L += [("**캐시 적중률 %s** — 입력 토큰 중 캐시에서 읽힌 비중입니다(공급사 사용량 집계 기준). 자세한 것은 2절." if ko else
                "**Cache hit rate %s** — the share of input tokens read from the cache (the vendor's usage totals). "
                "Details in section 2.") % pct(tk0["cached"] / ti0)
               + ((" 모델별로는 %s ~ %s 입니다." if ko else " By model it runs from %s to %s.") % (pct(hr[0]), pct(hr[1]))
@@ -8918,12 +9000,12 @@ def report_usage(res, lang="ko"):
     if ac and not ti0:
         a_lines, a_range, a_inp = _report_anthropic_cost(ac, ko)
         if a_inp:
-            L += [("**캐시 읽기 금액 비중 %s** — 입력 쪽 금액 중 캐시 읽기로 낸 몫입니다(이 파일에는 토큰 수가 없습니다)." if ko else
+            L += [("**캐시 읽기 금액 비중 %s** — 입력 쪽 금액 중 캐시 읽기로 낸 비중입니다(이 파일에는 토큰 수가 없습니다)." if ko else
                    "**Cache-read share %s** — of the input-side dollars, the part paid as cache reads (this file has no "
                    "token counts).") % pct(sum(v["usd_cache_read"] for v in ac["models"].values()) / a_inp)
                   + ((" 모델별로는 %s ~ %s 입니다." if ko else " By model it runs from %s to %s.") % (pct(a_range[0]), pct(a_range[1]))
                      if a_range else ""), ""]
-    L += ["## " + ("0. 읽은 것 — 입력 등급 D(공급사 사용량 집계)" if ko else "0. What was read — input grade D (vendor usage file)"), ""]
+    L += ["## " + ("0. 분석 대상 — 입력 등급 D(공급사 사용량 집계)" if ko else "0. What was read — input grade D (vendor usage file)"), ""]
     L += [("- 형식: %s · 집계 줄 %d" if ko else "- format: %s · %d summary rows")
           % (" + ".join(USAGE_KINDS[k][0 if ko else 1] for k in res["kinds"]), res["rows"])]
     if res.get("error"):
@@ -8943,9 +9025,9 @@ def report_usage(res, lang="ko"):
                 L.append(("- 기간 %s ~ %s · 모델 %d개" if ko else "- %s to %s · %d models") % (ds[0], ds[1], len(ac["models"])))
             L += [("- 공급사가 모델·토큰 종류별로 매긴 금액입니다. 본문·요청은 없습니다." if ko else
                    "- Dollars the vendor billed by model and token type. No text, no prompts."),
-                  ("- 이 스크립트는 네트워크 코드가 0줄입니다." if ko else "- The scanner has no network code.")]
+                  ("- 로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다." if ko else "- The scanner has no network code.")]
             L += ["", "## " + t["s1"], ""] + a_lines
-        L += ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        L += ["", ("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
         return "\n".join(L)
     per = res["period"] or ["—", "—"]
     if res.get("n_calls") and res.get("kinds", {}).get("openai_activity"):
@@ -8959,9 +9041,9 @@ def report_usage(res, lang="ko"):
     L += [("- 기간 %s ~ %s · 모델 %d개" if ko else "- %s to %s · %d models") % (per[0][:10], per[1][:10], len(res["models"])),
           ("- 호출 하나하나가 아니라 공급사가 묶어 센 값입니다(가장 촘촘한 것이 1분 묶음). 본문·요청은 없습니다." if ko else
            "- These are totals counted by the vendor (1-minute buckets at the finest), not one row per call. No text, no prompts."),
-          ("- 이 스크립트는 네트워크 코드가 0줄입니다." if ko else "- The scanner has no network code."),
-          ("- **이 파일로 볼 수 있는 것**: 출력이 청구서에서 차지하는 몫 · 모델별 토큰과 금액 · 캐시 읽기 비율 · 시간대 몰림 · "
-           "써 놓고 못 읽은 캐시의 하한 · 캐시 최소 길이 미달 신호(요청 수가 있는 파일) · OpenAI Flex 로 보낼 수 있는 몫의 상한(3절)." if ko else
+          ("- 로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다." if ko else "- The scanner has no network code."),
+          ("- **이 파일로 볼 수 있는 것**: 출력이 청구서에서 차지하는 비중 · 모델별 토큰과 금액 · 캐시 읽기 비율 · 시간대 몰림 · "
+           "써 놓고 못 읽은 캐시의 하한 · 캐시 최소 길이 미달 신호(요청 수가 있는 파일) · OpenAI Flex 로 보낼 수 있는 비중의 상한(3절)." if ko else
            "- **What this file shows**: output's share of the bill · tokens and dollars by model · the cache-read share · "
            "busy hours · the least cache written and never read · a cache-minimum signal (files with request counts) · "
            "the most that could go to OpenAI Flex (section 3)."),
@@ -9001,7 +9083,7 @@ def report_usage(res, lang="ko"):
                    % b["as_of"]) if src == {"bill", "table"} else
                   ("파일 비용 열과 가격표" if ko else "the file's cost column and the price list")),)), ""]
         if bd and b["priced_models"] < b["models"]:
-            L.insert(-1, ("- 청구서 합계는 %s 입니다. 위 전체는 단가를 아는 모델 %d개 몫입니다." if ko else
+            L.insert(-1, ("- 청구서 합계는 %s 입니다. 위 전체는 단가를 아는 모델 %d개 비중입니다." if ko else
                       "- The bill says %s in all. The total above covers the %d models with a price.")
                      % (usd(bd["usd_total"]), b["priced_models"]))
     else:
@@ -9019,7 +9101,7 @@ def report_usage(res, lang="ko"):
                "and amount a line."), ""]
         for m, mo in sorted(res["money"].items(), key=lambda kv: -kv[1]["total_usd"]):
             L.append("- %s: %s" % (m, usd(mo["total_usd"])))
-        L += ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        L += ["", ("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
         return "\n".join(L)
     act = bool(res.get("kinds", {}).get("openai_activity")) or bool(res.get("kinds", {}).get("fireworks_usage"))
     L += ["## " + ("2. 모델별 토큰" if ko else "2. Tokens by model"), "",
@@ -9096,7 +9178,7 @@ def report_usage(res, lang="ko"):
                  "{:,}".format(int(cs["calls_with_count"])))]
     f = res.get("flex") or {}
     if f.get("status") == "found":
-        L += [("- 7-9 OpenAI Flex 로 보낼 수 있는 몫 — **발견(상한)**" if ko else "- 7-9 what could go to OpenAI Flex — **found (upper bound)**"),
+        L += [("- 7-9 OpenAI Flex 로 보낼 수 있는 비중 — **발견(상한)**" if ko else "- 7-9 what could go to OpenAI Flex — **found (upper bound)**"),
               ("  - Flex 를 쓸 수 있는 모델(%s) 집계 줄 %d: 입력(캐시 포함) %s · 출력 %s 토큰, 금액 %s(가격표). Flex 는 같은 모델을 표준 단가의 "
                "절반(Batch 단가, 가격표 %s)에 답합니다 — 다 Flex 였다면 **최대 %s** 덜 듭니다." if ko else
                "  - %d summary rows on Flex-table models (%s): %s input tokens (cache included) and %s output tokens, %s at "
@@ -9116,7 +9198,7 @@ def report_usage(res, lang="ko"):
     cw = COLLECT_WAKE
     L += ["", "## " + ("4. 호출 기록을 켜면" if ko else "4. With a call log"), "",
           ("- 기록 도구(코드 두 줄, 본문은 남기지 않음)를 켜면 새고 있는 것·더 줄일 수 있는 것을 호출 단위로 봅니다. 답·요청 해시까지 "
-           "켜면 바뀐 부분만 고쳐 쓰기와 호출 없이 답하기도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 몫:" if ko else
+           "켜면 바뀐 부분만 고쳐 쓰기와 호출 없이 답하기도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 비중:" if ko else
            "- The recording tool (two lines of code, no text kept) checks what is leaking and what could cost less, call by "
            "call. With answer and request hashes on, it also checks rewriting only the changed parts and answering without "
            "a call. Of what a full day would find to fix, the share seen after:"),
@@ -9125,7 +9207,7 @@ def report_usage(res, lang="ko"):
                      for m, _, a, b in cw["rows"]),
           (("  - [합성] 매트릭스 칸에서 잰 값입니다(%s). 트래픽이 적으면 더 오래 걸립니다." if ko else
             "  - Measured on [synthetic] matrix cells (%s). Less traffic takes longer.") % cw["basis"][0 if ko else 1])]
-    L += ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], "", CONTACT[0 if ko else 1]]
+    L += ["", ("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"], "", CONTACT[0 if ko else 1]]
     return "\n".join(L)
 
 
@@ -9134,39 +9216,139 @@ def report_usage(res, lang="ko"):
 # Markdown's, checked by html_numbers_match), with a summary, item cards, a colored two-axis table and a range bar on
 # top. Standard library only, inline CSS, system fonts, inline SVG, no external reference of any kind.
 REPORT_CSS = """
-:root{--bg:#fff;--fg:#111;--mut:#5b5f66;--line:#e6e7ea;--acc:37,99,235;--found:#b42318;--none:#2f6f3e;--more:#6b5b00}
-@media (prefers-color-scheme:dark){:root{--bg:#121316;--fg:#ececee;--mut:#a3a7ae;--line:#2a2c31;--acc:96,145,255;
---found:#ff8a80;--none:#7fd18b;--more:#e3c75a}}
-*{box-sizing:border-box}html{background:var(--bg)}
-body{margin:0 auto;max-width:880px;padding:32px 16px 64px;background:var(--bg);color:var(--fg);
-font:16px/1.7 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
-word-break:keep-all;overflow-wrap:anywhere}
-h1{font-size:15px;font-weight:600;color:var(--mut);margin:0 0 4px}
-h2{font-size:20px;margin:48px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
-.meta{color:var(--mut);font-size:14px}
-.hero{margin:20px 0 8px}.hero .lab{font-size:15px;color:var(--mut)}
-.hero .big{font-size:46px;font-weight:700;letter-spacing:-.02em;line-height:1.2;color:rgb(var(--acc))}
-.hero .note{font-size:14px;color:var(--mut)}
-.syn{display:inline-block;font-size:13px;font-weight:600;border:1px solid var(--fg);padding:0 8px;border-radius:4px;margin-left:6px}
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}
-.card{border:1px solid var(--line);border-radius:8px;padding:14px 16px}
-.card .n{font-size:30px;font-weight:700;line-height:1.2}.card .t{font-size:14px;color:var(--mut)}
-.card ul{margin:8px 0 0;padding-left:18px;font-size:14px;line-height:1.6}
-.card.found .n{color:var(--found)}.card.none .n{color:var(--none)}.card.more .n{color:var(--more)}
-.bar{margin:8px 0 0;color:var(--fg)}.bar svg{width:100%;height:auto;display:block}
-table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;font-variant-numeric:tabular-nums}
-th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}
-td.heat{text-align:center}
-ul{padding-left:22px}li{margin:4px 0}li li{font-size:15px;color:var(--fg)}
-code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(var(--acc),.08);padding:1px 4px;border-radius:3px}
-.badge{display:inline-block;font-size:12px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid currentColor;
-margin-left:4px;vertical-align:1px}
-.badge.found{color:var(--found)}.badge.none{color:var(--none)}.badge.more{color:var(--more)}
-.wrap{overflow-x:auto;max-width:100%}.card,section,header{min-width:0}code{word-break:break-all}
-footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13px}
-@media (max-width:640px){.cards{grid-template-columns:1fr}.hero .big{font-size:36px}body{font-size:15px}}
-@media print{body{max-width:none;padding:0;font-size:11pt}h2{break-after:avoid}.card,table,li{break-inside:avoid}
-:root{--bg:#fff;--fg:#000;--mut:#444;--line:#ccc}.hero .big{color:#000}}
+
+:root{
+  --ink:#312723; --bg:#ffffff; --fg:#312723; --acc:49,39,35;
+  --f1:color-mix(in srgb,#312723 4%,transparent);
+  --f2:color-mix(in srgb,#312723 7%,transparent);
+  --mut:color-mix(in srgb,#312723 62%,transparent);
+  --faint:color-mix(in srgb,#312723 42%,transparent);
+  --line:color-mix(in srgb,#312723 14%,transparent);
+  --line2:color-mix(in srgb,#312723 26%,transparent);
+  --found:#a3261c; --none:#1e6b3e; --more:#8a6d1f;
+  --sans:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --ink:#f2efed; --bg:#241d1a; --fg:#f2efed; --acc:242,239,237;
+  --f1:color-mix(in srgb,#ffffff 5%,transparent);
+  --f2:color-mix(in srgb,#ffffff 9%,transparent);
+  --mut:color-mix(in srgb,#f2efed 68%,transparent);
+  --faint:color-mix(in srgb,#f2efed 46%,transparent);
+  --line:color-mix(in srgb,#ffffff 14%,transparent);
+  --line2:color-mix(in srgb,#ffffff 26%,transparent);
+  --found:#f08b80; --none:#7fd18b; --more:#dcc06a;
+  color-scheme:dark;
+}}
+
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0 auto;max-width:880px;padding:40px 24px 72px;background:var(--bg);color:var(--fg);
+  font:400 15px/1.65 var(--sans);word-break:keep-all;overflow-wrap:anywhere;
+  -webkit-font-smoothing:antialiased}
+
+header{padding-bottom:28px;border-bottom:1px solid var(--line2);margin-bottom:8px}
+h1{font-size:26px;line-height:1.18;font-weight:600;letter-spacing:-.02em;margin:0 0 6px;color:var(--fg)}
+.meta{color:var(--faint);font:400 12px/18px var(--mono);font-variant-numeric:tabular-nums}
+.syn{display:inline-block;font:600 11px/18px var(--sans);background:var(--f2);color:var(--mut);
+  padding:0 7px;border-radius:3px;margin-left:7px;vertical-align:1px}
+
+h2{font-size:19px;line-height:1.3;font-weight:600;letter-spacing:-.012em;
+  margin:46px 0 14px;padding-top:0;border-top:0}
+h2::before{content:"";display:block;width:26px;height:2px;background:var(--line2);margin-bottom:13px}
+h3{font-size:15px;line-height:1.5;font-weight:600;margin:24px 0 6px}
+
+.hero{margin:26px 0 10px}
+.hero .lab{font-size:13px;line-height:20px;color:var(--mut)}
+.hero .big{font:600 44px/1.08 var(--sans);letter-spacing:-.03em;color:var(--fg);
+  font-variant-numeric:tabular-nums;margin-top:2px}
+.hero .note{font-size:13px;line-height:20px;color:var(--faint);margin-top:4px}
+
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:26px 0;
+  border-top:1px solid var(--line2)}
+.card{border:0;border-radius:0;padding:16px 20px 14px 0;min-width:0}
+.card + .card{padding-left:20px;border-left:1px solid var(--line)}
+.card .t{font-size:12px;line-height:18px;color:var(--mut)}
+.card .n{font:600 28px/1.2 var(--sans);letter-spacing:-.025em;
+  font-variant-numeric:tabular-nums;margin-top:2px}
+.card ul{margin:7px 0 0;padding-left:16px;font-size:13px;line-height:1.55;color:var(--mut)}
+.card.found .n{color:var(--found)} .card.none .n{color:var(--none)} .card.more .n{color:var(--more)}
+
+.bar{margin:10px 0 0;color:var(--fg)}
+.bar svg{width:100%;height:auto;display:block}
+
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
+th,td{padding:9px 12px 9px 0;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th:last-child,td:last-child{padding-right:0}
+thead th,th{font-size:12px;line-height:18px;color:var(--faint);font-weight:600;
+  border-bottom:1px solid var(--line2);padding-bottom:8px}
+tbody tr:last-child td{border-bottom:0}
+td.num,td.money,td.r,th.r{text-align:right;font-family:var(--mono);font-size:13px;
+  font-variant-numeric:tabular-nums}
+th.r{font-family:var(--sans);font-size:12px}
+td.heat{text-align:right;font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;
+  -webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+ul{padding-left:19px;margin:9px 0}
+li{margin:5px 0}
+li li{font-size:14px;color:var(--mut)}
+
+code{font:13px/1.5 var(--mono);background:var(--f2);padding:1px 5px;border-radius:3px;
+  word-break:break-all}
+pre{font:12.5px/1.55 var(--mono);margin:9px 0 0;padding:12px 14px;background:var(--f1);
+  border:1px solid var(--line);border-radius:4px;overflow-x:auto}
+pre code{background:none;padding:0}
+
+.badge{display:inline-block;font:600 11px/17px var(--sans);padding:0 7px;border-radius:3px;
+  border:0;margin-right:6px;margin-left:0;vertical-align:1px;white-space:nowrap}
+.badge.found{background:var(--f2);color:var(--mut)}
+.badge.none{background:var(--f2);color:var(--none)}
+.badge.more{background:var(--ink);color:var(--bg)}
+
+.wrap{overflow-x:auto;max-width:100%}
+.card,section,header{min-width:0}
+
+footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
+  color:var(--faint);font-size:12px;line-height:19px}
+
+@media (max-width:640px){
+  body{padding:28px 18px 56px;font-size:14.5px}
+  h1{font-size:22px}
+  .cards{grid-template-columns:1fr;border-top:0}
+  .card{padding:14px 0;border-top:1px solid var(--line)}
+  .card + .card{padding-left:0;border-left:0}
+  .hero .big{font-size:34px}
+}
+
+@media print{
+  :root{--bg:#fff;--fg:#312723;--mut:#555;--faint:#777;--line:#ddd;--line2:#bbb}
+  body{max-width:none;padding:0;font-size:10.5pt;line-height:1.55}
+  h2{break-after:avoid;margin-top:26px}
+  .card,table,li,pre,.hero{break-inside:avoid}
+  .badge,.card.found .n,.card.none .n{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  footer{margin-top:28px}
+}
+.lead{margin-top:26px;padding:22px 22px 20px;background:var(--f2,#f3f1f0);border-radius:6px}
+.lead h3{margin:0 0 5px;font-size:17px;line-height:25px;font-weight:600}
+.lead p.l{margin:0 0 15px;font-size:14px;line-height:21px;color:var(--mut);max-width:62ch}
+.lead .row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+.lead input,.lead textarea{font:400 14px/21px var(--sans);padding:9px 11px;border:1px solid var(--line2);
+  border-radius:4px;background:var(--bg);color:inherit;min-width:0}
+.lead input{flex:1 1 210px}
+.lead textarea{flex:1 1 100%;min-height:54px;resize:vertical}
+.lead button{font:600 14px/21px var(--sans);padding:9px 17px;border:0;border-radius:4px;cursor:pointer;
+  background:var(--ink);color:var(--bg);white-space:nowrap}
+.lead button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line2);font-weight:500}
+.lead button:disabled{opacity:.5;cursor:default}
+.lead .note{margin-top:11px;font-size:12.5px;line-height:19px;color:var(--faint,#9b938f)}
+.lead .msg{margin-top:11px;font-size:13.5px;line-height:21px;font-weight:600}
+.lead .msg.bad{font-weight:400;color:var(--mut)}
+.lead details{margin-top:13px}
+.lead summary{font-size:13px;line-height:20px;color:var(--mut);cursor:pointer}
+.lead pre.peek{margin:9px 0 0;padding:11px 13px;background:var(--bg);border:1px solid var(--line);
+  border-radius:4px;font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;max-height:270px;overflow:auto}
+@media print{.lead{display:none}}
 """
 ITEM_KEYS = ("failed", "resent", "truncated", "prefix_unstable", "cache_min", "billing", "cache_hit", "shared_prefix", "flex")
 ITEM_NAMES = dict(ZTITLE, flex=("7-9 OpenAI Flex 후보", "7-9 calls that could use OpenAI Flex"))
@@ -9188,31 +9370,94 @@ def _inline(t):
     return t
 
 
+# LEAD (PM 10-26 handoff lead_block.py): the 'free deep-dive request' block at the end of the HTML report. The page
+# sends nothing itself: the button fills the numbers-only summary (share_text) into the reader's mail app, and the
+# reader presses send. Kept to mail and copy so the scanner's no-network proof stays true for the page it writes.
+LEAD_TO = "bee@linklbee.com"
+LEAD_T = {
+    "ko": {"h": "새는 돈을 멈추는 것까지 봐 드립니다",
+           "p": "위 숫자를 저희가 받아 보면, 어디부터 손대야 가장 많이 줄일 수 있는지 회신해 드립니다. 무료입니다.",
+           "email": "회신받을 메일", "company": "회사 이름 (선택)", "note": "하고 싶은 말 (선택)",
+           "send": "무료 정밀 진단 요청", "what": "무엇이 전송되는지 보기",
+           "never": "원문·프롬프트·답·문서 이름·키는 들어 있지 않습니다. 아래가 전부입니다.",
+           "manual": "진단기는 아무것도 보내지 않았습니다. 버튼을 누르시면 메일 앱에 아래 숫자 요약이 채워지고, 보내기는 직접 누르십니다.",
+           "mail": "메일 앱이 열립니다. 보내기를 눌러 주십시오. 메일 앱이 없으면 요약을 복사해 bee@linklbee.com 으로 보내 주십시오.",
+           "copy": "요약 복사", "copied": "복사했습니다", "bademail": "메일 주소를 확인해 주십시오.",
+           "subject": "링클비 정밀 진단 요청"},
+    "en": {"h": "We will help you stop the leak, not just find it",
+           "p": "Send us the numbers above and we will write back with what to fix first for the largest cut. Free of charge.",
+           "email": "Email for our reply", "company": "Company (optional)", "note": "Anything you want to add (optional)",
+           "send": "Request a free deep-dive", "what": "See exactly what gets sent",
+           "never": "No prompts, no answers, no document names, no keys. What you see below is all of it.",
+           "manual": "The scanner has sent nothing. The button fills the numbers summary below into your mail app; you press send.",
+           "mail": "Your mail app will open. Press send there. No mail app? Copy the summary and send it to bee@linklbee.com.",
+           "copy": "Copy summary", "copied": "Copied", "bademail": "Please check the email address.",
+           "subject": "Linklbee deep-dive request"}}
+
+
+def lead_block(summary, lang="ko"):
+    """The HTML block: email / company / note, a mail button, and the exact summary that would go (summary =
+    share_text, counts and shares only). @media print hides it."""
+    import html as _h
+    t = LEAD_T["ko" if lang == "ko" else "en"]
+    e = _h.escape
+    raw = json.dumps(summary or "", ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    js = (r"""(function(){var $=function(i){return document.getElementById(i)};var T=%s,TO=%s,D="";
+try{D=JSON.parse($("lb-share").textContent||'""')}catch(x){}
+$("lb-peek").textContent=D;
+function say(s,b){var e=$("lb-msg");e.textContent=s;e.className="msg"+(b?" bad":"")}
+$("lb-copy").onclick=function(){var ok=function(){say(T.copied)};
+ if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(D).then(ok,fb)}else{fb()}
+ function fb(){var a=document.createElement("textarea");a.value=D;document.body.appendChild(a);a.select();
+  try{document.execCommand("copy");ok()}catch(x){}document.body.removeChild(a)}};
+$("lb-lead").onsubmit=function(ev){ev.preventDefault();
+ var em=($("lb-email").value||"").trim(),co=($("lb-co").value||"").trim(),no=($("lb-note").value||"").trim();
+ if(!/^[^\s@<>()",;:]+@[^\s@<>()",;:]+\.[^\s@<>()",;:]+$/.test(em)){say(T.bademail,1);return}
+ var b=(co?"company: "+co+"\n":"")+"email: "+em+"\n\n"+D+(no?"\n\n"+no:"");
+ if(b.length>1800)b=b.slice(0,1800)+"\n...";
+ say(T.mail);window.location.href="mailto:"+TO+"?subject="+encodeURIComponent(T.subject)+"&body="+encodeURIComponent(b)};
+})();""" % (json.dumps(t, ensure_ascii=False), json.dumps(LEAD_TO)))
+    return ('<section class="lead"><h3>%s</h3><p class="l">%s</p><form id="lb-lead" novalidate><div class="row">'
+            '<input id="lb-email" type="email" autocomplete="email" placeholder="%s" required>'
+            '<input id="lb-co" type="text" autocomplete="organization" placeholder="%s">'
+            '<button id="lb-send" type="submit">%s</button></div>'
+            '<div class="row" style="margin-top:8px"><textarea id="lb-note" placeholder="%s"></textarea></div></form>'
+            '<div class="msg" id="lb-msg" role="status" aria-live="polite"></div><p class="note">%s</p>'
+            '<details><summary>%s</summary><p class="note" style="margin-top:7px">%s</p><pre class="peek" id="lb-peek"></pre>'
+            '<button class="ghost" type="button" id="lb-copy" style="margin-top:9px">%s</button></details>'
+            '<script type="application/json" id="lb-share">%s</script><script>%s</script></section>'
+            % (e(t["h"]), e(t["p"]), e(t["email"]), e(t["company"]), e(t["send"]), e(t["note"]), e(t["manual"]),
+               e(t["what"]), e(t["never"]), e(t["copy"]), raw, js))
+
+
 def _md_html(md):
     """The report's own Markdown subset (headings, bullets two deep, pipe tables, bold, code) to HTML. The two-axis
     table's cells get a background whose strength follows the cell's share of output."""
     out, i, lines, in_sec = [], 0, md.split("\n"), False
     while i < len(lines):
         ln = lines[i]
-        if ln.startswith("# ") or (not in_sec and ln.startswith("scanner ")):  # title and version: in the page header
+        if ln.startswith("# ") or (not in_sec and ln.startswith(("scanner ", "진단기 "))):  # title and version: in the page header
             i += 1
             continue
         if ln.startswith("## "):
             out.append(("</section>" if in_sec else "") + "<section><h2>%s</h2>" % _inline(ln[3:]))
             in_sec = True
+        elif ln.startswith("### "):
+            out.append("<h3>%s</h3>" % _inline(ln[4:]))
         elif ln.startswith("|"):
             rows = []
             while i < len(lines) and lines[i].startswith("|"):
                 rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
                 i += 1
-            heat = rows[0][0].startswith(("닮음", "overlap"))
+            heat = rows[0][0].startswith(("응답 유사도", "similarity", "overlap"))
             h = ['<div class="wrap"><table><thead><tr>' + "".join("<th>%s</th>" % _inline(c) for c in rows[0]) + "</tr></thead><tbody>"]
             for r in rows[2:]:
                 cells = []
                 for j, c in enumerate(r):
                     m = re.search(r"([\d.]+)%", c) if heat and j else None
                     if m:
-                        a = min(1.0, float(m.group(1)) / 60) * 0.85 + 0.06
+                        # capped at 0.36 so the text keeps >= 4.5:1 on the darkest cell in light and dark mode
+                        a = min(1.0, float(m.group(1)) / 60) * 0.30 + 0.06
                         cells.append('<td class="heat" style="background:rgba(var(--acc),%.2f)">%s</td>' % (a, _inline(c)))
                     else:
                         cells.append(("<th>%s</th>" if heat and not j else "<td>%s</td>") % _inline(c))
@@ -9256,8 +9501,8 @@ def report_html(res, lang="ko"):
     import html
     ko, md = lang == "ko", report(res, lang, cache_line=False)
     t = T[lang]
-    head = ['<header><h1>%s</h1><div class="meta">scanner %s · %s%s</div>' % (
-        html.escape(t["title"]), html.escape(res["version"]), html.escape(res["input"]),
+    head = ['<header><h1>%s</h1><div class="meta">%s%s</div>' % (
+        html.escape(t["title"]), html.escape(head_line(res, ko)),
         ('<span class="syn">%s</span>' % ("[합성] 예시 로그" if ko else "[synthetic] example log")) if res.get("synthetic_calls") else "")]
     s = res.get("savings") or {}
     if not res.get("error") and s.get("share_of_bill_low") is not None and s.get("share_of_bill_high"):
@@ -9280,20 +9525,20 @@ def report_html(res, lang="ko"):
         head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
                     % (("이미 잘 쓰고 있는 것 — 캐시 읽기 ÷ 입력" if ko else "Already used well — cache reads / input"),
                        pct(lv["already_good"]["cache_hit_rate"]),
-                       ("1절 — 이 기록에서 캐시로 더 줄일 몫이 거의 없습니다." if ko else "Section 1 — little is left for caching to cut in this log.")
+                       renum("1절 — 이 기록에서 캐시로 더 줄일 비중이 거의 없습니다." if ko else "Section 1 — little is left for caching to cut in this log.", ko)
                        + ((" " + _inline(ch[2])) if ch else "")))
     elif lo is not None:
         head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s ~ %s</div><div class="note">%s</div></div>'
                     % (("이 로그에서 줄일 수 있는 것 — %s의" if ko else "What this log could save — %s") % what, pct(lo), pct(hi),
-                       ("4절 — 링클비가 다른 공개 문서로 잰 범위를 이 로그의 해당 구간에 대입한 추정입니다. 이 로그로 잰 절감이 아닙니다."
-                        if ko else "Section 4 — ranges Linklbee measured on other public documents, applied to this log's "
-                                   "reducible calls. Not a saving measured on this log.")))
+                       renum("4절 — 링클비가 다른 공개 문서로 잰 범위를 이 로그의 해당 구간에 대입한 추정입니다. 이 로그로 잰 절감이 아닙니다."
+                             if ko else "Section 4 — ranges Linklbee measured on other public documents, applied to this log's "
+                                        "reducible calls. Not a saving measured on this log.", ko)))
         head.append(_range_svg(lo, hi, pct(lo), pct(hi)))
     elif not res.get("error") and (res.get("bill") or {}).get("output_share") is not None:
         # no section-4 range (no answer text, or nothing in the diff cells): the bill's output share is the headline
         head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
-                    % (("청구서에서 출력이 차지하는 몫" if ko else "Output's share of the bill"), pct(res["bill"]["output_share"]),
-                       ("1절 — 링클비가 줄이는 것이 이 출력입니다." if ko else "Section 1 — this output is what Linklbee shortens.")))
+                    % (("분석 기간 비용 중 출력 비중" if ko else "Output's share of the bill"), pct(res["bill"]["output_share"]),
+                       renum("1절 — 링클비가 줄이는 것이 이 출력입니다." if ko else "Section 1 — this output is what Linklbee shortens.", ko)))
     W = res.get("waste") or {}
     if W:
         # the same groups as section 7 (PM 10-22 19:15): found leaks, found cheaper ways, needs more data
@@ -9305,7 +9550,7 @@ def report_html(res, lang="ko"):
                 g = "cannot_judge" if W[k]["status"] == "cannot_judge" else "found" if WKIND[k] == "leak" else "more_found"
                 groups[g].append(html.escape(ITEM_NAMES[k][0 if ko else 1]))
         names = {"found": ("새고 있는 것", "leaking now"), "more_found": ("더 줄일 수 있는 것", "could cost less"),
-                 "cannot_judge": ("더 주시면 볼 수 있는 것", "more data would show")}
+                 "cannot_judge": ("분석이 제한된 항목", "more data would show")}
         head.append('<div class="cards">' + "".join(
             '<div class="card %s"><div class="n">%d</div><div class="t">%s</div>%s</div>'
             % ({"cannot_judge": "more", "more_found": "none"}.get(g, g), len(v), names[g][0 if ko else 1],
@@ -9320,11 +9565,20 @@ def report_html(res, lang="ko"):
             % (("네트워크 코드 0줄, AI 호출 0, 본문·키 없음(개수와 비율만)" if ko else
                 "no network code, no AI calls, no text or keys (counts and shares only)"),
                html.escape(res["version"]), me,
-               (("소요 %.1f초" if ko else "took %.1fs") % res["seconds"]) if res.get("seconds") is not None else ""))
+               (("분석 소요 시간 %.1f초" if ko else "took %.1fs") % res["seconds"]) if res.get("seconds") is not None else ""))
     return ('<!DOCTYPE html>\n<html lang="%s"><head><meta charset="utf-8"><meta name="viewport" '
             'content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body>%s\n%s\n%s</body></html>\n'
-            % (lang, html.escape(t["title"]), REPORT_CSS, "\n".join(head), _md_html(md), foot))
+            % (lang, html.escape(t["title"]), REPORT_CSS, "\n".join(head), _md_html(_lead_net(md, ko)),
+               lead_block(share_text(res, lang), lang) + "\n" + foot))
 
+
+
+def _lead_net(md, ko):
+    """The HTML page adds where to send the report; the sentence names the mail address, so it holds on paper too."""
+    head = "로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다. " if ko else "The scanner has no network code. "
+    add = ("이 리포트를 %s 으로 보내 주시면 더 깊게 봐 드립니다. " % LEAD_TO if ko else
+           "Send this report to %s and we will take a deeper look. " % LEAD_TO)
+    return md.replace(head, head + add, 1)
 
 def html_numbers_match(md, page):
     """Every number of the Markdown report is in the HTML page as often (the page adds the summary and footer only)."""
@@ -9333,6 +9587,14 @@ def html_numbers_match(md, page):
     text = html.unescape(re.sub(r"<style>.*?</style>|<svg.*?</svg>|<[^>]+>", " ", page, flags=re.S))
     a, b = collections.Counter(num.findall(md)), collections.Counter(num.findall(text))
     return not (a - b)
+
+
+def command_name():
+    """The command the guide and the report tell the user to type: the pip entry point when started through it,
+    else the single file."""
+    if os.path.splitext(os.path.basename(sys.argv[0] or ""))[0] == "linklbee-scan":
+        return "linklbee-scan"
+    return "python3 linklbee_scan.py"
 
 
 def demo_log():
@@ -9394,16 +9656,16 @@ def collect_first(lang="ko"):
         L += ["", ("  1시간만 모아도 하루치에서 나올 고칠 것 %d개 중 %d개가 보입니다(%s [합성])." if ko else
                    "  One hour of records already shows %d of the %d fixes a full day finds (%s [synthetic]).")
               % (((hour[3], hour[2]) if ko else (hour[2], hour[3])) + (b[0 if ko else 1] if isinstance(b, (tuple, list)) else b,))]
-    L += ["", ("  모은 뒤 이 폴더에서 다시 python3 linklbee_scan.py 를 치세요." if ko else
-           "  Then run python3 linklbee_scan.py again in this folder."), "",
+    L += ["", ("  모은 뒤 이 폴더에서 다시 %s 를 치세요." if ko else
+           "  Then run %s again in this folder.") % command_name(), "",
           ("  바로 보시려면: 공급사 콘솔의 사용량 파일(OpenAI Usage API·Costs API · OpenAI 콘솔 사용량·비용 CSV · Anthropic Admin API · "
            "Anthropic 콘솔 비용 CSV · AWS CUR · Azure 비용 내역 · Fireworks · Together)을 이 폴더에 두고 다시 치세요. 지금 바로 일부 항목을 봅니다." if ko else
            "  To see something now: put the vendor's usage file (OpenAI Usage or Costs API, OpenAI console usage or cost "
            "CSV, Anthropic Admin API, Anthropic console cost CSV, AWS CUR, Azure cost details, Fireworks, Together) in this folder and run it again. "
            "Some items show at once.")]
-    if demo_log():
-        L += ["", ("  리포트 모양부터 보시려면:  python3 linklbee_scan.py --demo" if ko else
-                   "  To see a report first:  python3 linklbee_scan.py --demo")]
+    if demo_log() or DEMO_LOG_GZ:
+        L += ["", ("  리포트 모양부터 보시려면:  %s --demo" if ko else
+                   "  To see a report first:  %s --demo") % command_name()]
     print("\n".join(L) + "\n")
 
 
@@ -9425,7 +9687,7 @@ def unread_lines(path, ko, blank=None):
              "JSON such as {\"data\": [...]}, CSV, raw vendor responses, and Langfuse, LangSmith, Helicone, LiteLLM, Bedrock, Vertex, Gemini and Azure exports."),
             ("  지금 읽게 하려면: %s --peek <파일> 로 칸 이름을 본 뒤 --map model=<칸> ts=<칸> output=<칸> 처럼 알려 주세요." if ko else
              "  To read it now: %s --peek <file> shows its field names; then pass --map model=<field> ts=<field> "
-             "output=<field>.") % "python3 linklbee_scan.py",
+             "output=<field>.") % command_name(),
             ("  이 파일의 첫 줄(본문은 지워도 됩니다)을 보여 주시면 다음 판에서 읽습니다." if ko else
              "  Show us its first line (blank out the text if you like) and the next version reads it."), ""]
 
@@ -9433,7 +9695,7 @@ def unread_lines(path, ko, blank=None):
 def guide(lang="ko", empty=None):
     """What to do with no log: the ways in that this package has. Printed instead of an error."""
     ko = lang == "ko"
-    me = "python3 linklbee_scan.py"
+    me = command_name()
     L = [""]
     if empty:
         L += [("%s 에서 읽을 호출 기록을 찾지 못했습니다." if ko else "No call records found in %s.") % empty]
@@ -9462,7 +9724,7 @@ def guide(lang="ko", empty=None):
     if os.path.exists(os.path.join(HERE, "linklbee_collect.py")):
         L += ["", ("  4  앱에 한 줄 붙여 모은다 (본문은 적지 않습니다)" if ko else "  4  Collect with one line in your app (no text is written)"),
               "     import linklbee_collect; linklbee_collect.attach(client)"]
-    if demo_log():
+    if demo_log() or DEMO_LOG_GZ:
         L += ["", ("  리포트 모양부터 보시려면:  %s --demo" if ko else "  To see a report first:  %s --demo") % me]
     print("\n".join(L) + "\n")
 
@@ -9477,7 +9739,8 @@ def main(argv=None):
                     help="read this machine's Claude Code records (~/.claude/projects): a trial on a log you already have")
     ap.add_argument("--out", help="report path (or hashed JSONL with --hashify)")
     ap.add_argument("--json", help="also write stats JSON")
-    ap.add_argument("--lang", choices=("ko", "en"), default="ko")
+    ap.add_argument("--lang", choices=("ko", "en"), default=None,
+                    help="report language; taken from this machine's settings when not given")
     ap.add_argument("--pricing", default=DEFAULT_PRICING)
     ap.add_argument("--mode", help="declared task mode, e.g. regulatory_revision")
     ap.add_argument("--share", help="optional: also write a statistics-only summary JSON (no text, names or keys)")
@@ -9496,11 +9759,13 @@ def main(argv=None):
                          "(cutting tokens does not change that bill); 'all' marks every call")
     ap.add_argument("--quiet", action="store_true", help="no banner")
     a = ap.parse_args(argv)
+    if a.lang is None:
+        a.lang = _default_lang()
     a.logs = a.logs or a.logs_arg
     if a.claude_code:
         a.logs = os.path.join(os.path.expanduser("~"), ".claude", "projects")
     if a.demo:
-        a.logs = demo_log()
+        a.logs = demo_log() or embedded_demo_log()
         if not a.logs:
             ap.error("--demo needs examples/calls.sample.jsonl next to linklbee_scan.py (it comes in the package)")
     if not a.quiet and sys.stdout.isatty():
@@ -9547,15 +9812,15 @@ def main(argv=None):
     first = next(iter(_usage_docs(a.logs)), None) if not fmap else None
     if usage_kind(first):
         res = scan_usage(a.logs, a.pricing)
-        md = report_usage(res, a.lang)
+        md = renum(report_usage(res, a.lang), a.lang == "ko", SEC_RENUM_USAGE)
         if a.out and a.out.lower().endswith((".html", ".htm")):
             import html as _h
             open(a.out, "w", encoding="utf-8").write(
                 '<!DOCTYPE html>\n<html lang="%s"><head><meta charset="utf-8"><meta name="viewport" '
                 'content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body><header><h1>%s'
-                '</h1><div class="meta">scanner %s · %s</div></header>\n%s</body></html>\n'
-                % (a.lang, _h.escape(T[a.lang]["title"]), REPORT_CSS, _h.escape(T[a.lang]["title"]), res["version"],
-                   _h.escape(res["input"]), _md_html(md)))
+                '</h1><div class="meta">%s</div></header>\n%s</body></html>\n'
+                % (a.lang, _h.escape(T[a.lang]["title"]), REPORT_CSS, _h.escape(T[a.lang]["title"]),
+                   _h.escape(head_line(res, a.lang == "ko")), _md_html(md)))
             print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
         elif a.out:
             open(a.out, "w", encoding="utf-8").write(md)
@@ -9579,8 +9844,8 @@ def main(argv=None):
     if a.out and a.out != os.devnull:
         print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
     if a.demo:
-        print("[합성] 예시 로그로 돌린 리포트입니다. 자기 로그는 python3 linklbee_scan.py --logs <파일 또는 폴더>" if a.lang == "ko" else
-              "[synthetic] This report used the example log. To scan your own: python3 linklbee_scan.py --logs <file or folder>")
+        print(("[합성] 예시 로그로 돌린 리포트입니다. 자기 로그는 %s --logs <파일 또는 폴더>" if a.lang == "ko" else
+               "[synthetic] This report used the example log. To scan your own: %s --logs <file or folder>") % command_name())
     if res.get("error") or not res.get("calls"):
         guide(a.lang, a.logs)
     if a.json:
@@ -9599,6 +9864,662 @@ def main(argv=None):
 # ====================================================================================================
 o200k = types.SimpleNamespace(encode=encode)
 minhash_lsh = types.SimpleNamespace(LSH=LSH, signature_oph=signature_oph)
+
+# examples/calls.sample.jsonl ([synthetic] demo log), gzip, hex
+DEMO_LOG_GZ = """
+1f8b08000000000002ffecbd7b73eb469667fbfffd140c774cdc99081c05124f1211a81b5d76b9dbddb6bbda75ce9c997b6b
+a28247a2658d29512625b9351df5ddefde99009f9044520009902ba2cad2a1f800f148ac95bf9d99fff9d5c3ecabacf755e0
+07c9077ff0c1371f4d98f969e6fbffef575eefabdbc9d568ac4fb81c0f1faf461f6693bbbbd1c387f843ac7fbd9e4e1eefff
+f6ebe8599ff1309adece3ef8befee17e3ab9bd7fd0473f4f6f1e46bd875f46bd1f27d3875f7ebfb9bbeafde561321d5e8f7a
+1ff515bdc9cfbdbf8ca64f3797a3de7ffdd3a7ff76d1fb34b32f90ff3e0dc78fa359d6fb32bcfcf5f13e1ff85eefcb7434bc
+fc254f03af7739bccf13f931799c3ee49f6fc6b73777d70f933baff7cd683cfc7d381dc9dfa6a3ab9b873c96df1ea7a3dce8
+2fcf97e351fedbe3702a1b3c7ef67abfc8eb67f90f93bbabe173ef61d2fb767a23bf79bd81ec03fdb7e9cb2f5eefe64e9e3f
+9a3de4c6ebc9dbe7fa957e1add3f7e19df5cea77f86e2a9f7a77e5f564ffe4917cd0dde441be937ef6fd547e29fe19ca5bdd
+3f4eaf47f639d3d1c3f0e62e3791d79b8d9e8cbeb7fc0c72fdf778980f0617f2a4d9e397e2c5fa3cddcdb2272e74374f1e1f
+ee1fed6efe876d77ef5feffe7af70fffd03317f347c7a3a7d178f6d7bb8ff285fe3c9d3cdd5c8da6bddf6fc6e3deedf05777
+e8caa70e9f8637e3e197f1a8a75bf65ff4bdf5cf0f37b723d93f3d3d327254c623d995d3deede4eee117af37fa8fcbf1e395
+1c9adeecf297d1d5e37874256fac7bf36e78a7ef79773779945fae7ac307d996e1eca117f7e400ccf41d87574ffaa48bde77
+3f971f7e33be7978eefd3c1c8f67bd2fa3f1e477d9849b99fb169edd9caf1f670f935bf912b77240e5bcbdb9ed0d65b7baaf
+e0ce08ddf2c5f6db2d1dcb9b8e46bd9f2753fbd8f0e79f47970fbaadfac78b62b70517bd6f47a3996cf455ef7ef87c3bba7b
+f8eb9d7b64aabbe06972a3df647e762d7d07fb1a7d96bcceeec2df6f64c3ef7a51f16d8b6d29de431e7b90affdbdfcb7fc20
+f98ccbcbe9e3687e26ea0e33ffa5773f2af675afd8f4dbe17fdcdc3edef6a6f6c57212dc3ce817f9f2ace7add7fbfd971b39
+104ff22add6d93df47d30b39eef29933b7c37e19dec9c933d14dd6b7be94b79e0e2f1f7acfa3e1d46e742ff4e79bfcfb54df
+fcae38d9cbdd145ef4be193e0cf5f4960dbf99c8a3f38372a57f904f76a7be6c97ee7113b9771cfe2c5fcd9ee23777437d61
+6f3691ef245f74e5c05e0ee564fb8f7b39e37b370f17bd7f74afd2a7c916df4caeecb3e7e7b2b460b21d33fba0fdf49fa575
+928b7272f578e93ee379f630924b65ed88e801b34f75cdcffcef03f7f5bddee3dd783493e7c95e945d362d3fdc7eb9df1e6f
+a6f39d5eee9748af3a6989e40c5ebbdeec1521ffd74f95032cfbe4b6f8fec5f3757bafa7c35bf7356feef4a292ef34babb9c
+3edfdb67cad1b0df4efeecce0ed97cd95a397877b39b074fcf1edddaf1e4fa5aae46cf9d8f77778fc3b16cb8345a53f781b2
+a71ef46a952db79b723592bf5ec961ecfd7c33bd5d7c01dd869b2b775eda6b455fb47a94f56c9f8ef430c99e7898ac1ec362
+67a6816b8075f3e554d3cfb0db51eeb2583ef1f18b7c79ddf8c974b6b1df9e651f5c6b73375b7e9a7e9c1cf79ba7d174b905
+bbe8e9abe50b4cf50b8d6f6437c9d1b28df84c1a27bbbf96defeff96f799ca06f7a4f97ed0eb64e5b3afe5dd678b56ab3c87
+dda5206d931c44b9eaaf6cdb375cd93cb7f337daaac997ff2dfb512e3dd96b43b9d3da66c2ee4979e5c3c89dac7acfbdbb9a
+f5aee428c81b2f9df5e52e4b7497ddeb6effebdd5f1e86da185fc9c7dfbbeb65b6d48abf71d3d373602467e6d86eeeefa32f
+7aadda534076ab9e0246de6e267768d9decb91ec0df99a720067f604bc9fdccde68d9c290eb2becffcd541f9eaf2ba734fba
+90db6af16abdb1b8a6f55676c8a35e50c5d72ebf4e71eedc8d9fcb6f9f5ed81b5fd17efcf5ee4ff2e67a6d4a8bfc6cf772d9
+bab85bdbf07a3a1adddad37b621bbba7d1ddcd481b3fdbd415d7fa7a3bd77be55d6f6e6fe51623bf69f3ef1af5c9ca93e5a9
+3772fb7a2e58a66899161b62db1dd9ebf624566eb17f774f9eefd0c55d63b5e9edcb4de3a6b84bca97ff8fcbd1bdfb6af30f
+2b2f34bd76653bf448b8a6e26a747b77f3f3cda56b0726724d5cdb5fa5a5b31f6db75f2f89c983b419e3f253ec6de4466e32
+8b8bfc67bd23de0f6fe61754e2ee50b3f2aad0c7e434902f2b17911ecfe98d1e6ef76a7bcbbee8fd385adec7f643ec49ab5f
+4636569a57bd56ec319b4973ebbe8dec955b690c66e5ee185cf4fe6922e7db9d7e88b4c4aef958ec6b79db6bfb77d756ebc7
+cbb3e677e30ac0935bdbcd4ca8ab3831e54c9f8c9f16afb6346a5f5f4da4baab177bd36dbcb6a1eebbdf4c1d2fcdf462fadf
+72aacfae6e2e8be65081efe64e3ef96f0f935f47778aed268de714b878343602c75f5dead1befadbda2b843ebf9a3d0c1f1e
+2df55f0aa5ebbdf14adffbe79b3b6904ffe69a1efdab34fb7f7b789cda0fd61b9adc18e4e1ff7cc309843e161f17f983443f
+d1de60f525ff73f238bfd7c9b9ed1abf0f3f0f2fedf1195deb119c5c3e3aded1232d0de7e4e707dd773ddddae1ddf345ef5f
+47a37bbbb367459b78f778fb6564db05ddbdbf8c86dae64a43f275c93272b1fd5e5244f1557ac3d9afc547c86b7ed5b7d486
+e9b9b858f5a8b8666032758ca2bf086bdccd7e2fee5eee547f1c2f36594ff71f86d35faf26bfdfd9b7956bf317dd2c01ec91
+257669cf667a7ecabef8fffef3abe9643cd2bdf22874aa7f55d692b7c19b9af4a6bfffafbfdb5352daa391fc5576b6dce347
+7fffbffe73538583200b4c6d2afcd3e8e9c61da2c509630d46ceaafbfbf17371f01c80cfd64ecbc5792427ae50afb45cd226
+b8137c96fdf5ee4371843325aa0f7fe805913e668f7156d914e993be9783a7f7c80fc50ecd1462e4f1d0d7c7caabab9f29c5
+f4fefad58f766fce847baf2c5649e3593e476f815f461689ee16d8b0c67c72ef1066bdb9d6dba4b0e7d5adb638ca9d93e9c5
+5fbffaabb5044766f28d67f2b6f2bd105bc416b1456c115bc416b1456c11db93145b920c80ef2480af7c4780efdc802f8800
+3e800fe003f8ea06be46fbdd8e8e93ae13b2e6642409fb55c94890928c743d19a11b9d6e74ac8a6e74ac8a6e74ac0aabc2aa
+b02abad1c582b62e6c093efa7e160dba52d8622b8fb2256812b42e904cff2c7b2e7be960e853ff74773d76f7b2abde6781cf
+d932a80baac8534cb40ceaa604f54de22dee04da5c5b5594a3745db404e54d630543dd85e3ee833dc15021ef67181d4627f9
+80d1493e6074181d4687d1493e289de906403665043b9169b9a570297dc770295c0a97c2a570295c3ae7d28d1ecf23d7e2c4
+a6aa1627f2a9c5a116879e7f7afee9f9a7e71fc3c2b0302c0c0bc3c2b0e8f9afb9da27c8f47fdda8f6711784f8a1ada0d747
+96a6012ab13d292aeb9f84d88d3ee0307e3ccc2cdbea23f27310eba3fa2d326d0aa8c827ac21ac21ac412550095402954025
+5009c29aa3960f0d9a43d210243d47244d40529014240549b746d2a8ab481a82a42069159202bcbb54270d82aaeaa4989982
+a84e22a920a9400b492ad042b4102d24a920a9400b492a8e226ebb943b851d5ab5ab985ad4ed2105ff6fb465b79389ea7594
+e96533d701db74646fb68176ded2b2f9ead927a4051f489338fa55dfaa24b2c24acc853510bbc25aa63831ffccca294d0b7d
+19ccfd65595606cba32856ee16736d94af7dffbc4064dbfcea0d6be3b62eade6eded508db2843b65ba36a90a1116ae428485
+abe02ab80a11161116ae428475da355bf0eee9f2ae262fa740bcad1a923cdf188817e23d69e27db5db09de6d2def2ec5a3f0
+2ebc5b1fefbadeecf7f06e839dc855e5606914569583a511e560948391e490e460b6243924392439782d490e490e490e664b
+9273809ab6288bc2aed4b4954b68075634a2fe42818a4977e3356f71e360cc7c4edf8da3a27fb677a7076d38b45fa15830b1
+185c1388e9d8b70856a4a66274cd62544e5bac03e9204e234e234e433bd00ee234e234a403e9e86e9cc67462c0343df8a034
+28bd81d2511f9406a5b54f3a68214b2774e0c3d2dd63e9ca5ee1132e4f0b2a672b4b43cad3284f23942194c1230965304942
+194c92508650865006913cf75066872a33136541ba7f959959ad32fb2c0d803b6fff387e1c7db99106f5073dac95ec7ed1fb
+e4e447fefb3494e7cfb20221f28128acbb14f320f28463ee73514cbbfff372df3bf4cd8d3c552fff3cd45f74f5f8bcc04acf
+b57bf9abadb73707c5dc787a66e41b6785d7939d909bd82b1a913cf596a77db61b6bc7dee4913cc7f15a9ec8833a05741ed8
+9f41def7d48772350d4f6f72c58b8d7c3ddd97f2828bf5306d8b7dd805ff490fe23fc66f6e79f8ed3dc5742fef1ad46e2909
+8bc3632958ca895a4ab08da5f489bbb094fa2ca5cba45f11e99824ad8a747c16a0e97ca48301bdcb807630d720cca2a03673
+6d388a2bcff8a89c5ee16b7bec5cebb3d6e3214d919eed72e77976e7f9b229cd7e915ba5d5a557e651401c1147c41171441c
+1147c41171441cbb2a8ec401501d5407d59d1cd5d5e1bfa02168081a8286640abaa8bd6faa32053320536098087dd3580c16
+83c56031f44d232008080282801c6822dbf0a3ef6761670a35aac64c572fb7513dbab984e9b084e94fcaf8bde117398876a3
+ef1fa7b26d33392cf763bd7bc929271cebd0d21e5d6df16d718dc5557bdf2aff6621568e9f3802840d6143d8103639013901
+980ea683e9607adb4a4862d8f0f86c789ca96fa0c3dde9b03153843b779f9e15ee843be14eb813eeacab3e25ae5c653bf2a9
+4fa13e852e79bae4e99247bae892a74b1e35428d5023d488ca195d023af0bb523963775256ec210570b75c76b13280117e9f
+2f2ee0560ae85b9cb7ff2e2783c9b4a19547437f19dcfb25b8373a9dec57951f79eaae40464346832e90d190d12022880822
+8288501b0477c29d7027dc0977c29df3450c7db8b39a3b4d5757ed823b59b5ab725dad866f3647e165d7195d734d53ea572f
+cd9c50d3444d1361096109d28ab422ad482bd24a58425882b412969c43d5569cf9a633555b723a677af6aa6ed8e112b2bbb3
+cd7dad7fd76df869649be64bddaddf4d47fa247d516924a9159295b118713918634d5e8acfb44ea35f5da7b0ddd41953f3a4
+a48b770eca77ded480e2eea3b708ebea72be5c17ed4f79a35af90c77b9ba1b784fd05c14e979edd3e2837e5a8a9161641819
+4686916164c488c488181946468cd89618f10457750b5b89cbf5dd6261eeb798bb29b105e68179609e78a51ae69b6d75b084
+ba2c216ca9252cdd86e777b2861b56fce3dcfde38520e5b8c58c7ddfaf28664c428a19296624432443244324432443a4db81
+6e07ba1dc810e91d2043c4e1c9108f9321ee528ddacf4cd4956a548752d516971ec07e4e7af66e225a225a225a5c095722a2
+25a245c288688968d1bb5647b4148a62215848b3161262215808168285602158485b2ca4d9b315bd416f5a58819a46a6aa02
+356689602a50c90d31768c1d632737c4d831768c1d63c7d8c90d116bc4fa3dc5a1a6ffaea94a83d5e2d0cfd200b8e3f1af72
+f3962f2e7a391c3fcb36ccaaede7a2f7c949a1fcf76928b634cb0a7cca07a2f6eea2c983c81386bb773f7547e59f6fc6723e
+5c3fe88efa46f6affab457b8441ec49e6d1172a3bf3c5f8e47f96f8fb21347d3b134deb631cc5f6dd2bd398ee7c6d3039b6f
+d4fa7a3dd9337928dbe85a963cf4dce955fc53b75ecec9eb511ec9463878cd1379501777c803fb33c8fb9e8e70cc55debcc5
+a846fbb6ba83e55d2ed643e02d772c5a596a65103737386e7e5a6de1844b2309f6714206c77543dcd0ab6abd9a37b89b7ac5
+e833d61438aec00c3a24302dd60c39cdce6951816a08ad35103369e5fa728640acf38118ae54bf2b6d2dbed1473fac537c9b
+9e5f470f4cb6a41b1ffe50caccca2c39c52439f12b93e494575458f39438d50128b68aad62abd82ab68aad62abd82ab67a52
+b67ad4602206f56a285503f4ce02f4ea2b6182164f9816592f195a8416a1c543641b491855651b4140b6c1601fbac3e90ea7
+3b1c4ba23b1cc1a13b1cc14170109c760bce0eb52726e850ed893b29333d3f849aa3fedbab3b4973f66007d494fb555fb254
+f093e925bb344aff29c8a461d1375face234a818c79f2c8fe35f6993e7562447ecfe79418cb699d3dbc2c6cd535aa7dbdba1
+0a5389504a4e6d4277e20de20dc09d7803fa27de80fea17fe89f621868115a5ca3c5105a84163b328f12b4784eb4f8ee998a
+1aece639f7599020d17a49b4b2dbb355c5366958556c13319098621bfaffe9ffc7e8e8ffc7e8303afaff313afaffb12efaff
+9babfee96771d899996786f725fa27fa6f7b39676fb44af2e41f26d2a63deb9efb767a639f3290afacffd619677d281bca26
+3781b2a16c7213289bdc0482273769476e42150f340a8d42a3d028347a2c1a7da3f3041e8547dbcfa30938da40194f5c5dc6
+c39c3994f1d0918f3aa14ea813ea843ad1914f473ee24447feb99ad30ee5384190f9516726e3b137ffb23c3ef1e7649fd829
+2d03fb6fb90a323de9e705f425a3c9a3f6696e464cf962e55c9851bc5c676f96ebec5719bcb8af68e36f9d520ecd7571f597
+b7a0156070178bbbabf6048c1f26d3675b64bff8b4fe61aafa171f386018015e8417e14578115e44a444a48419112951e104
+8e3681a34d2954439c1bc5efe25c3dbc90ee8149378174215d4817d285745f26dda57b441748d7044740ddc64fb593c1e826
+f75445d5571a56567d0da8faa2ea8bbc88bc0841272fc2a2c98bb0682c1a8bc6a2c98bc88b0e5d48177ff4a32cec5c215d62
+7d66b0102313e803819d8a76be60b43e146fcc621b2ebd76367a120db2af35cbf21094f2f0497db037fc2287dd7ea9fbc7a9
+6cfb4c0ee2fd58efa672920a9c3b5eb6e783de81ecc75906b7f7d1f26f96cce5688b4fa20e647b647b647b58095682956025
+647b647b647b6dcef64eb4fc2e06d1cf14d15f5bafa231eb259200fe817fe0bf09f837c03ff07f4a83fb81ffb616f6d989db
+d60bfb126328eca3b08ffc8afc0a3926bf22bf426151581496fc0a8525bf42618fa9b0bb9403265964f62f070c57cb013fcb
+35ebceb47f1e4ebfc889f2470b1ad54a70d1fbe4d44bfefb341ccbb7cf0a30c913116877f5e441e4a932e5461cdc1e8efc7b
+699ef53038a4ce83d8b3976c1eca8b2e9f2fc7a3bca055cfb583f91bedb93727d05c8c5e0e6d5e79aa783ab4ca7e88bbfc73
+f9dc2551b37f11ddba76bf3918cc8d6cbd4a5b1ed89f41de979fe361ae1ee3e9cdaf78b13e4f77a97cf38bf5f8718b5d49f4
+c8c0a2d62950497ead50a0f2ebd5aa40d80b4bd1632f9d5b8c3ec1303a6b18c7b580123d6b5d2dc8a47ed5bc11fe8078a9eb
+f1123e54870feda0b3c66451549bce369c0ebe10f355e76c58201688056281582016880562815860c72d902e7ee0ae3d4380
+803be00eb803ee803be00eb8abbb8b3fb61de874f13382843e6234823e6234028d4023d00834028d4023de3fa9af09b2c074
+a5ec6169007462ffad3b2d2bf6983e5a35d6c23ed1b25b26e4660740db11d1f2d7acfa50e973fe74773d7637baabde6701d3
+d90652bb2557dc822a8e49326dcae7cbb068914a266dd37c1d16dd65ab03ba3706611f7e8195c63f6dbebaca8f76bfcd047e
+aeecbd552ea0f239da0e7e19d9fbe2dde2deb176e3970644c0e5e65adb4a392e57b72ab30a1f93d7d657416c101bf211c406
+b1416c101bc406b1a1f8e53ce1cef8c05dedbdd6cd4eb1d4edb983a046a8116a3c3c359aa085d838001bbbbae25db3f7b877
+e0e8461fedd1e6e469b46fb37262d96050551614c79405511644864286428642864286820d63c3d830190a190a190a19caee
+c56171e6875d290e73a762a66dbfc841d48766098d088d088dc06430194c2634223422343ab3d0885a29b017ec057bc15e96
+48037bc15eb017ec3dbf5aa924a4568a5a292205dc0ab7c2ad702b2205dc0ab7c2ad702bdc6a37b7daa574a8dfa1e5b4ec5a
+67d99c1e85f5dd8d74fcfcca44aa1f168b8e958316dc40063746c10d6d4898711567c01970069c813c0667c01970069c8132
+24b0f7e8d85b1acef90d26857be15eb8b756ee2d4f1bb8f794b89761aa702fdc5b5f1d52d2a70e893a24f209448d7c827c02
+4fc3d3c827f034f2093c0d4feb424d53106471dab5e990223b7b6a10598f90ebb4540413bf301b6bb232ad6ab83cd1e9ca9d
+606e667230ef9f17f86b9b56bd196ddcb2a541bcbd1daab49544a820c8c4a384458445480812425884841016212148084552
+702fdcdb34f726706f7bb8b741bf86a94f7eb0324c0d531f8ea94d0c53c3d4dd2bc0ea475505586940011605588429482552
+49984298429882f8217e881f610ae277d2155dc9473f7ad72c55d16a45d767b95add49f6ef8f7ae0bf995cceaa41fba2f7c9
+d98afcf7693896e6282beef7f9409cd35d3479d4f774b9ee3c106db54723af3e120e5b73137bf6ba75bfe89091bc6057cf35
+58f91b2daf37a7c7dc5cc87bc8fbe795cb157a3dd93179282f70ad401e7acbf263ff72ff38bd1ee591bc8d632efbe06cf464
+f2c8fe0c7223de3d1b0f73d5056f31582537f204ddc1b22b2ed693b1b7766c170c263c8cc19cc23ad47a14da3528653fd308
+db641a51fcba690c300d4c83b123bb9846c4d891f38e9882e8ec96a2aedb0a2a021b932655818d0222814db7031b5ca97e57
+da417c4d9085696de27b84f44d36b00cdf221bbecd2740d087ec236e5f96cf4a2ae73e5864737199cd7dd213b837fc228da6
+fd46727064c367d204de8f9518a5899713d6099d6d4d95b2ec11b5926859b1fc9b55473919e402782599436a915aa416a945
+6a915aa416a9456a4f4a6a4f2dbf88cf08f5a218d46b5ba514a8c710998ea25e637d0b4024836f80c8f3494692c4af4a46c2
+906484a12c74a6d3994e673a9de918169de974a6e34174a6e34127e141bb14b82499dfef4a818b1b4a2e27f47c8d0e7b5167
+6f364f96e0cb96a5679f9016b76e69ad46bfea5bc97ecfaa0fa4be7c6354d032c60725c6373a62e7a4519eb084b00494272c
+01e5094b084b900424818a1b20f29c20b2d9d90e40541015443d7b447db51708406546a57306d4f6cc7c5439296d5055c913
+a554f250c9436a406a80f0911aa06428194a466a8094911a901a1cb5b428fde8fb59187666ee1c7be35eadd2bf1cca0372d2
+e803faef92a732a529bb9c05b5fca03c284f768328200a8802d90d9a407643764361d119c329687a6268ca826aa0e9d9a129
+d00bf4b2041cccfb8e7aa534adaa574a5893817a25a2086c8f2802df238ac0f7f03da208ac0c2b238a3872b5529099416726
+42b214590e6a8817a31cdcb4a3269e0f4dd83818faf7ca9ab2f904a7d1d24889a515d8ca371f1433983e1979aa1d23b198e3
+345979866bd107c8083242f4848a103da122a808d1139283e4103d516e756ce63d8569fd8f81bc039017e40579415e90774f
+e40d58e4e0bc4722270c447e27f636d76454d472a5615c55cbd5a7968b5a2e821a821a821a821aac156bc55ab156821a821a
+821a829af715a3a5991f756deaac65a728bd275e58cee634bc97cf976379a8c44e79fcb747d9aba3e9f8796d8c8b7d978b78
+cf09779796ed362b8b74bb2d3651e14941a6cd973cd2af9ca6f7e3facd696eb8721adc3f2fb0dcb69d7a7fdca00869f16e6f
+872abf25a92aa05a315a7c6078a87981171f991ee63b227f24962496b81fee87fbe17e24962496b81f89652d892525806d4b
+53e62ebb05539b2e8ec23f1e553768a97b127b493ba73bc2ff009e840fe003f8c0e9f8401f1d785714d4f86d0ed538bd98e9
+a085917d935414462661426124859184868486848684868486848684867412d049402701a121a121a1612b6c7e8772541367
+d13be6468c57cb513fcb45e5becdf7aa95bdafbff9b19ae12f7a9f9c81ca7f9f86636934b28223f2c4f78a533b4f034fa747
+cf8dfed403917fa3f72239008e817323cfd5eb290ff517d5c7bc0057cf3524f91b4b507b7318cd8da7274a5e799278ea8cf6
+43dcb599a7def2b03cfb17397ed7ee37c76eb9893c3b442f773f03fb3566e3612ee631883dbde5152fd767ea0ecd07fec57a
+e2fbc68eac4f8606cdd9507a98c4d747876a1f3f77029969f9f5109603084b1a202cf509cb8ef0ffc6cd8ef162dd0a095b8c
+ff726ccf8dff4bf4ac752929939aaae947946b49d9ba9db2e142ef77a11d44363099dfaf4d641b8e48cbd95c521b7e6e3bc9
+8b59cf25a3972234a41169441a9146a41169441a9146a4b1d3d2786a794008da75b53c0ab403ed403bd06e15edcc36681741
+76901d64f75a1c9004097100836ee851a647991e65b403ed403bd00e7a94f10ebca346efd8a5aa22cc4cd895aa0a772a66da
+f8eb9238d11663caeb183d3e1b0f3347ae96b1e597caa577beb684e80eefda805139d67ac8e5fa7e7602b38ca4b35fa441b2
+5cfaca98695201f09c54003c07cfc1735201e81c3aa7de6357b203ecda30e12f6807da31630d6807da8176a05d4b66727d3f
+d6d5d1fb575931124755152381a162848a117acbe92da7b71ca542a9e82d47a9502a940aa53ad75a96fe47df6491df955a96
+1288cdf24cfcabe85934c9da6e5a9d93bd775d5c9265ebbd8283ee0c7637a49ee0e0c364fadc0a488691091ea0642899e001
+4a8692a164828736060f14a51c800d9ba27ca013e8043a814ea013e8043a81ceae56bb98b4aada258ca976a1da85fe74fad3
+511bd406b5416d501bd406b5416ddaaa363b94ad1893854157ca56ecc23f65c17714c3c2e4074036900d6403d94036900d64
+03d914ad009d4027d0b9029d510c74029d4027d00974029da756b432a06885a2157ad3111bc486de74c406b1416c101bc406
+b139d5929534f33bb36a905e14ab5314aeac9c39b07f089756ce34c542998ba2f2b82c2affd1be682637f32b7baf9013a27c
+8e5ed75f46b69dbf5bb4856b373239227223beb9d66b5fce95ab5bb53dbd994ea6b6b27cf19169f9919fd4547ac32f72ded9
+b71267903d319397df8ff59e2b578980ab636d7b42ea7dca7e43cbeff66e5bfecd52bd9c72623a6b1fd73fc4c76137d80d76
+436c83dd6037d80d7683dd6037d40a019d40e76ed019029d4027d0d942e86cb47fa8b5481b81b4f522edd23d69deb037d631
+072cafc172c37b9aeaa9955aa8b47aca9f814ff514d553043b043b38368e4db08363e3d83836c10ec10eae4ab0b367d95a3f
+0bdf51b696ac96ad7d96cbc56df89fe51e2fdf7ba4aef6500dbb17bd4fce84e4bf4fc3b1b4085971cbcd13f15977e2e651df
+93fbfe7d1e449edbd379b9971d2ce641ecd9ab250fe5457631df7cce619e6b28f2371a3c6fce56b9b990b7933321d72ff1d3
+c8de222e75cbbf9b8ef4acf07475dfdcc893dcf597cb6f4b8a6537c20e61c923f98b831dfb7554b7f2c0fe0c72f92eb3f130
+574ef7f40e51bcd8c8e3ba63f3817fb19ece6db143bb600ff141ec21884f623ad58bf834a2b4c407f3cf13f3a33e987ffa98
+1f80f9678df922f3dd5cc6b702f00eb990ef66f263d2a82af93101c94fd7931fdca83e37da5a70071ffde05d2b6027471d97
+551d22a182a8202a880aa282a8202a880aa28227a182f4f68378201e8807e2817820de990f6d01f1cea0b73fb67de9f4f633
+ce838e622c028bc022b0082c028bc022e828c622aa2d6297d207bd623b53faa0d529d9122909d9ba7bd1f879695d08b91317
+2398415e9017e40579415e9017e4a5e31ce4a53602c43b24e295780ee17592f058a60bc283f0203c080fc26b5d6944e28794
+46501a4147321dc97424d3918c66a01968069a8166a01987a99d186471d295da097747556952a61dd8e9dded8ecb8abda60f
+7f2fad935ec11f7ae56cf08e803726897755c5c9d224f1c16292f8f130b3c06a3f487eda39e6e7b37464da6c2fcd30bf36bd
+fbc7f5267a2e2cb2b9f7cf0b84b46d9ede2536eea5f259b7b743759992a814a4d626781f1c7e0afbc1f1e694c754c8431015
+f2104405514154101544858a97f7105edcf1a58340bcfd112f396fc41b807820de26e295a70d88c742b74741bc063bcec0c7
+96e1a3eba77d0f3e36bbe276734b0157ad841b9aaa32a024a60c88322032113211321184994c844c0461261321134198c944
+28defa68c22ce8ccc43725c4648a30763ec76586ee1f0adbdbc0d1244f244f244f8034204df244f244f204a4933c1d2c79a2
+e0eabcb117e8057a815ea017e8057a81de83416fb3c80852b7a8982b49e3aa62aebe4f3117c55c6424c8221909ba882ea28b
+e822ba882ea28b64246d12ba5d0ab0e22c1e746ce5b1393c8a5e1464ba3c3024d4c7d38d81216e784939b6e3291089d407fa
+cb7e122c8ff55885fde20ea8b729abb9723a5d172d6079b35c01707751bbfb7f4f4e1d39e8cf6ba32ed27319758109119be1
+4178101e8407e1417810b119b11995682d45eab4f3485dbee14912f56bc3989bb256501d5407d541f57d50bd0faab716d59b
+832324000938d789d022bfa2762e3121b573d4ce116f116f116f116fe1cc3833ce8c33136f116f61b6986d878b088dffd137
+5914ed5f4498ae16117e9616c67d9b7f7c188b2afd51be811ef94a8cbfe87d724626ff7d1a8ee52acf0a4ac907e2d5ee7acc
+83c81354bacf4de0b9839b97d3dc390ace63cfb62fb9d15f54c3f282843dd7b0ca3b940d77cfde1e8a946c283783d1afde9c
+44737321ef20675f6eefb50fda0ceaa47a72d6a92e7b3dd915f6435c5b9587deb2c5e5896cb25df53e0fe5370786f6579dc9
+3a0feccf20972f331b0f73550f6f317bb57d9eee5179978bf570728b3dd98559960fe343a7104d9ecab0a7101f3a531f9ab7
+b8f8d0e17de8d5db1d332ccf1b3a66587e97b198a0a3039336c8eec06b4eae2548261954cdd7e00fc89cba9e39614335d8d0
+2e2e3b78d780b8f41803e24aabf8f087de6f8fd29c8ca62e323c64ee571dc4e19d7827de8977e29d7827de8977e29dddf64e
+3285f6b1dd1cf9cf91ee5a36e4096c041bc146b0116c041bc1c697e28a447b9e37e38a8021320c91a1c31b29a2c39b0e6fcc
+0573c15c3017cc05733996b9ec5036623a5536a23b292bf69042f4e79bb15c3cd70f3ad4a5dcd1102eddfe74fb03cfc033f0
+0c3c03cfc033f04cb508d80836828d6023d80836828d6023d8b88c8d55fd8875d78ef86965ed484ced08b523f47aa32fe80b
+fa82bea02fe80bfa82bea02fad2d1909c22c883a533232bccff494106c0e22bbf8804ecc9269fb290f45b1adbe1e0f338baf
+fa90fc8c974bb2234ab24177d01d7407dd4177d01d7407dd41f776270f472b5f898148201288dc0922a318886c0344367b8e
+42a7d02974da6d3a3dca3255a75f171357cea91232053c753174edd3b58f95616574edd3b58f3c214fc8135dfb672c4f5bd7
+e8988fbe9fc569576a74dcbd35d39baa507ae2dbc7ecc99a69f3248fa5813e261b9de9793fa7fba54597748085fe21f49709
+df9484dfd87ac35f2d7f5c587edcd7165edd09b2b628b29c2d7ad2480bf1eccc6d19a866bf4893669179ed9d0735bf730bb4
+84b0082d414b088b088b088bf01d7c87b008dfa194e94874da981f35c6bd5117b937847b1be1de641feead43a581e717e039
+0d8067e01978069e81e763c0732d37b78a72add4544e63d40f28d7a25c8b9487948794879487948794879407514554115544
+1551adadaa2dcd4c67162b9b8d9e444cecf0143b3a4537a2f497817fe871281592d1a42d611e24782478380d091e091e6284
+182146881162749c048f1a3a081c0287c0217008fccd131db407ed5f47fba8ab683f00ed41fbd341fbe670b3aaec2f082bca
+fe12c3ea8594fd1183118321e14838128e8423e1b832ae4c0c862be3ca6d8ac1762832347e1687fb1719f6578b0c3fcb05e4
+36fcdfa65f8468bf9d28ed5732ff45ef93f330f9efd3702c2d4456e0419e884dbb13398ffa9ece7c9d0791e7f67a5eaefee9
+98390fc4c9f5eac955ce2f9f2fc7a3bc2067cf351bf9ab8d9f37c7cbdc787a4ee47fbabb1ebb7bf155efb368835c17b20ff2
+48dede5d8379e82d0fd2b25b6be7e2b6cf7130961bd95e75c1dcfd0c7213783a3d77ae3354cbd3e42e51be9bbc5c77a6fc72
+b19e5fbeb9136b9c36bbebe614343876a97cc3c6f5a66de396f67310139dba83a00fd5fa10f599db9a444cc9356821e68760
+fed962fe06d61d72b9f9cd84c92449d5c4127e42c2d4f58409077a9f03ed22af5116a5b5c96bd3338214b37f0823cd67ffd0
+a3564effe166f9280f853caa0f1ab786931c946cb309d32754765fe84bdc41c814c6e7139094575dffb05388cc3fee477bb8
+6782da5796e4e4fdcbe7e86df7cbc852d8dd8255d63053ee5782c937d77a6b966dbabad5864f5177327d2580c4a2b1682c1a
+8bc6a2b1682c1a8bc6a23b6bd18423678c75ed9bd66d3fb04b7cc08eea2ac00eb003ecb601bba5ea5bc0ee05b06bae10bcd1
+3ebb23576f3512ed247d5315ed440c1e62f010090109012a494240428048921020928824090109416d32b64be9503f0bfa5d
+291d721210da59048cc5fd79edd4fce1a8728da0a6797af191e94156f381d4097d087d6075421f581d5627f421f421f4394a
+e84325d261a0f4006722c80bf282bc206f15f296110bc80bf21ea37bbabec9eee066b8b98dc5524155b1541a512c45b11499
+0899089908828820228864220822990899086ed752b7dba1f62a3099e94eedd5f03ed353597d22582ce9e20c43074d00e564
+42203fc80ff2930981fc203f9910de8037504b0537c3cd7033dc0c37c3cd27cbcd09dcdc1a6e9613046e3ee75aaa24a5968a
+5a2a320e5c0d57c3d570355c0d57c3d5c838c83870b5ced4460559e477aa364ada3ab584f924b4957bbb9c88f6a791bd3f5d
+eadfbe9b8e74aa307de1d25a829922893c7b50cc47fb64441cf5012b26b3f130733e609f33b8581ff9e126b30d71169c0567
+c15970169c0567215fc259c89770966ed46581cd607323d83c009bc166b09911cc5b6273003683cdefc6e6046a3e28355774
+311fb72e2b35097559d46591af90af208ae42b8822a248be42be8228228ae42bd484bd5513167cf4fd0ed584b9a123ce31c2
+9535c5c37236dc8febf785b9ecc91ebc7f5e30b16d6af5d6b471039706f2f676a81e58629cd2dbdaf4bbc9f207ae9a457147
+d4db96f56c3980d7459358de3c57da1077f13b1ee8c9a92c27e1733ba6e445829020d232240809222d232d438248cb70a04e
+a5655499c1cd70f3797373833d0230394c0e9337cbe44df5af310a1ed807f64fb934ce0f2b4ae3123fa6348ed23862266226
+74195d46978999505a94969809f3c43c31cf668bed8c9f8583fd8bed06abc5769fe55a2faea0c997e1f8a1f7dffffc6335aa
+5ff43e395d92ff3e0dc7d29865052be48948afbb5af2a8efe9a8a03c883cb787f2ef27775713d93b0e757323eaacd7b9fbe5
+f9723cca0b80f45c0397ff202fd04666d2fb767a635b6afdbafa6fbb28a73787c2dc787a0cf3ca5249af273bc27e886b3372
+11f9a55146769be504bf1ee5913cc7f1591eca833ae2288feccfc0fe1c0f731dcce32d4619e5461ed7fd990ffc8bf588f0ad
+fd58e3f8a28e2b8f69c55af7e67d52721ac37f4294e44c9524ea33fce7684af2c6adeec00380a2163ac9a0434ec274ceab3e
+71dc21302577d69a0799d4544d95607cf2a0aee74198d0bb4d68178b4db328a8cd621bcef25e9fd6e24f77d763c77257bdcf
+e25eb31726b408ab27b4a84a050f1ad221ac082bc28ab022ac082bc28ab022ac5d1656a208c8ee80641742767b0d266a6e34
+02c808329e2532062023c8d83564dce83c3c6ebe91447e55be1184e41b8c77a18f1c93c2a4e823a78f1ce14178e823477810
+9eeef591ef50a412f859d8992215773f5d5d3dc5aecf1258903696a41da7657aa6eb63ee495a7a94cde14a1effed51f6ea68
+3a7ed63fdbc6207bb35553567f6d80dd06f087f63589dd045b7e942923ac39805d5ac62c3b803980032c3e2d3acc587da403
+e920be21bec166b019e21b6c069b21bea1daa7395cf477c3c566eff85b72e85ccae8feee2089ce37e605121d40a2dd26d1c6
+67888672bb3f37948171cf9a718fb282e2899528a5615a55a21407942851a24442424282f2929090909090e0a524242424d8
+2309c9d9dae3d6b55ee1473fc98ce94cad973d0d336df7ad552c49ca222690bf1464063e93189118911841e62446503f8911
+cc4f624455148c7b028ccb90600817c23d26e1ce4108c28570215c0817c23dc2b44d213551d44491246059240978169e4592
+8067e15978169e85671da27ac8f89989ba3653d460697c81dd7159b1d7f4e1cf3763b998ae1f741f96d374e9134b58cba441
+d1910717f1d2f004376221b20fcdc6c3cc02bb1d6c213fe3e5610303860d602b6442b80aae422684abe02ab80aae82ab74b0
+ea2906714f18712f62209741b7402e900be402b9402e90bb2fe4567528bf07799b6c63aba69df283aa12ab9495f128b1226e
+216ec145895b885b30514c1413c54431514c94d230571a16667ebf2ba5617a3e9773df86dbcc7dbbe42717f17c2a5a073ca5
+a09868594582834e4f1b1e467c2ae6c3fdd15ef83321a72b7b8f9353b97c8e7efc9791bd3fdd2d5af1b59bbb5cca022737d7
+da6ac9597e75ab7d06ba399396b816c11fc11fba45f0876ea15be816ba856ea15ba710fc5147c7c0f633482f9addff3b737a
+890b70face3bbc71e8c401dae2008d762a61181806865169184bab4061181846cda58571d5ec6d8919505a486921711d711d
+fd0bc475c475740310d711d721d3c834711d328d4cef5a87f9ae053e8dbf5a87f959ae297726fccbe3dd8d6ed2d73ffd50cd
+f017bd4f4e01e5bf4fc3b17cf7ac00893c119177e7769e069ed0cc7d6ef4a71e8cbc2c5375089cc79ebd9e72a3bfa8e5e505
+5c7aae21c95f6d0ebd392ee6c28a9e9e27b9bdb33ce8652f5bbc38d4b223f2489ee2aecd3cf5a4fd965f8a7f86b2c976f899
+7d8e6337fbe06cf46472637f0679e4e980b45cbdc3d37b47f162238febfecc07fec57ad4fae67eecc230b1f4202a14ef6642
+cd084bd445610911969d8505afa8f68a3478d12b607fd81ff687fd8fc3fe955c77dc058a4cea57cd9e617c22aeae475c98d0
+bb4d686b8b8d3efa7e16d567b10dc7934b7bab0c1707be4bdf9e4c31a349f45234860fe283f8203e880fe283f8203e880f76
+d907e9e987ec0e4a7603c80eb283ec20bb2dc92e82ec203bc8eedd3dfd899fd2d3cf60167a8b710a7a8b710a9c02a7a0b718
+a7c029708abae7568e3efa69160dba520d612fdaec8db64718f707d9857a694d7adf4e6fec53f42beabf8dce23ad6f250725
+ab3e50fa06fa879f46b671bfd4bf7d371de95890054a47faac607918b439d430e88aa1de5f5b327527d6da5bc959a6279bb4
+2ccf4e8b965178f68b34859687d7de3939e6623788082242b8818820228808e10622828850b602d9bd4e760798d5126e841b
+f7e3c63af414f8043edb079f6f7434d5879fc141f0b3f1c99c405bd0b63eb4ade8a13d6ee54eea4755953b719fca1d2a7748
+364836f05f920d0c956403b9442e4936d03ff4ef1c4aacfa59d09912abcdf530e63e51a10dfaac8d7972f545e52084d4be8f
+1d9ba0f3fc647afb9ebfb3138ea058440364263202c801722223a89ec888c80867c0194e30323ab97aa810b8056e4f156ee7
+1b03dc02b7c06d6be0d600b72cfd0ddcd6b15a59337318f583ca4aa8944a282aa10820082070341c8d000247c3d108207034
+02080288b6952d193ff33bb34e963b1933bdb3e8f08568b9e4bf5f96fc7f52c1e90dbfc8e1b11b2246209f37935d7d3fd6db
+9e9c4c02e98e9bed71d35b859d53d5b2b8bde1957fb3842ec74404e9d40bfe09789007021ee40179401e08789007029e730c
+78a85b026bc15ab016ac6d066be7a33dc15ab016ac056bbb81b58df5a99e5c455452b9aa5b9a5011454514d9061288042281
+4820d90612880422814820d946fb4aa24c6692ae9544057646d7a83f1f4ab1b1b7df981756bed5eab089f90ad3fa50bab1f0
+f4c05f1961111473ca9a0093c02430094c0293204ec22430094c0293204e621d3d80f95dc0bcd4ae740798438019606e1330
+477d801960764f0a20668819623ec925fa4ce5c4542913535186459e429e429e429e821ea287e429e821790a76881d9e629e
+b24bcd579405d1fe355f66b5e6ebb35c43ee48fc30148fec0950caf7ad84f48bde276733f2dfa7e1581a88acc0843c112775
+e7729e8ace5e0eef73d55abb8bf272f738c8cd8d3c572fa0dcc4f2cbf3e57894fff6283b6c341d4b3b6adba5fc8df6d59b13
+612e38e8e921cc5ff01b4fedc67e94bb2473f96d4966f250decc4ec46b7f7380969bc8b353f1e681fd19e47df9391ee6e217
+f272b921152fd6e7e96ecd07fec57a24f6e6eeaccf79e2c69c273e88f318bfb9b5b5e7a7d616626262722bd9ec92c74e574c
+700a467b300deeab4ed1677d6da6aa65aadad7b31b938655d98d3164375dcf6ef0a2babc6817b58db3d0d4a6b64daf0ba387
+285b128c0f7f28f565118cf56d34f7522e8623e28838228e8823e28838228e88239ed87aea005e2b006ffbda24f00ebc03ef
+c03bf0ae86b222f00ebc3bf50820f1890018be41ff31fdc7f41f23180806828160d07f8c6020188d8f0348b2b83bc512c3fb
+4c4f8af97a11f63acede6c90ecf3cbb6a4679f504cd33494f669f4eb7cf8b2b1c397a3581f70a4916903bd344ed9b5a661b9
+3e4583639ebe5afec0a8fcc04687eaae7c647af88f3ce2b21f4810190b0a8402a1402810190b0a8402514203de1d0fef22f0
+ee3ca6f7697cd610d07117743cc0546080698360fa6a3f1758da292c3dc0b5d84ee89593983985da3ee36ce457ce383ba064
+899225521c521c521c349f148714871487148714075d26c521c569b0902d08b328ec4a215bb9e8461a2c16dd706826a6e24c
+67c55e42fb98899631db2cdbcb2ab9160dbab6bad6b765cf5f171774d9f6afe0a43bffddedac2738294cffbc06f5c1013e0d
+a627ba23ba23ba23ba23ba23ba23ba23ba23ba23baa312ee58381decb88c5e536a04a76fc7e9cdee7f3af51180762fe88e00
+200008000280002000afd7ee0555d38d253eabc553bb477045704570457085b7e2ad0457782bde8ab7e2ad786b8b8bffe28f
+7e9c99a42bc57f2534668a8c568f3008b23ab23ab23a9c87ac0ee7c179701e9c07e7a1580f014000ea1100f01ffc07ffc17f
+f01ffc07ffc17ff0bf2b2b830eaa4bf5624af528d52366c2328999f04c3c13cfc433f14c3c13cfc433f1cc5a4beb06991974
+6a81d8c04ef56d82f97ce0515ccefd8dffe03fa46cd80ff683fd603fd80ff683fd603f14d981ffe0ff121382ffe03ff80ffe
+83ffe03ff80ffe776ee91ff07fc722bb3e457614d91138619c044e1827c68971629c1827c689711238619c872cb73326f3a3
+fdcbed82d572bbcf729dbae3f1a3340fbffc7ea30d8e9cc07aac36c5e3d35ffedb45ef93b325f9efd3702ccd5156704a3e10
+e775e7751e449e9a4f6e02cfeda8fcf3cd58ae8feb07dd51dfc8fe55d1f40a8ccf8d78b45eb8ee97e7cbf128ffed5176e268
+3a9636d6b659f91b4b717b73eecd8da78736ffd3ddf5d8f1c055efb3d88c5c38b26ff2509eea9a805c3ecc9e60c53ff52f72
+565ebbdf1c27e646bec96cf46472f733c8fbf2733cccc59c06f27ab94715afd627ea3e96dd70b11e206eb96feb93ba41e7e7
+fb8e9b9bef7b7e6a9d5fe077069634d8c79230996a9399e3eea6c9e01a4dbbc61b77bcfa6c23dac636fad8c6bb6c83046ad5
+07de4bed1b78b735af57a368ad799149a38abc283686bca8eb7911c6d48831ed66c0517d06dc70fee7beab5cfb1af8a595eb
+4e35d633f2e2c253f8283e8a8fe2a3f8283e8a8fe2a3f8e8a9f9e8a9a60f29b4d75dda6b38028623e14838128e8423e14838
+b2915c23094c55aea1bdbfe41a8c83a11f9c7e70cc887e70fc057fc15ff017fc057f39a2bfec5253926661dc959a123dbb33
+3d998b31e41f5c114ea6f76079288af521ddb24cafc4f9934ae04e4ae06e706ce8592037610461046104300fcc03f3c03c30
+0fcc53d40247c29170e4faec5570241c09477688231b9f36ac5e460d5bcaa84b370e18f52c0b66e2a4aa60264a2998a16086
+4e7ee40c3943cee8e447ce9033e48c4e7e3af9a9d8d9aa6227f9e88799feaf23b3c0e8a20fcbe0eea820d3c67409dd9f8c08
+995d2aa212e51b9db0189807e681799216601e9807e6495a485a1005aa8160d48619f5c4d6376b1ba3cefb7861541815463d
+3946359d67d403acc2050143c0e7506b54bde84012516b44ad11f104ea473c413c81faa17ea81ff104f10472869cb5a18e29
+cde24167661e1ade677a72880304911d93b0580dac3488810faa93d280eaa434a03aa80eaa93d290d22002d42951a704011f
+9480071030040c0143c01030040c01ef49c0d23e41c0f5d629253e754ad429113f205fc40fc817f2857c215fc817f2857c11
+3f1cad0ec944599876a60ec9226a393d6a60c72c94c8278fda310a17f1f228057398f950171f38283ff06bbbadeed0afb549
+721ee8e920d7fdb373ba657e9ffd224dac8578463fe034044a380d4e83d3e034380d4e43a044491525557b1270b02301373e
+04ac7d747d11c3d7f0357c0d5fc3d7f0357c0d5f9f0d5fd7d15d5d55f595fa4155d5d720a6ea8baa2fc21ec21ec21ec21e64
+141945469151641419454691d15d0ad882308b93fd0bd8c2d502b6cf72debba3f5c7f1e3e8cb8db4813fe8755949dc17bd4f
+ce7fe4bf4f4379fe2c2beefaf9402cd69d81792a027c39bccf83c873bb2cafde5d0e5f732366ac1781fbe5f9723ccae7c8e9
+b9962b7fa305f6e618991b4f0f6fae5fe8a791bd635deab7f86e3ad243ede914c079282f7017559e7acb636becb7b0cb8fdb
+e738f6b2bfeaa4c079607f06b97cafd978985b71f0f48e55bc5a9fa87b59dee6623dbedb62efe2334cdddbaccf9c8075b098
+f701ad230d4ec53acad306ebd8b48e601beb8858ccfb5417f3ee24bbbf00786d1aff6fd2b82a0932014950d79320aca9216b
+dada83d38fbe9f45696d1edc70b6e78e77a6b7ac0f7fe82576a1197bd4b2251f91bf14b66317ab29a67b48f5f178b1324db0
+5899a6dc87e59c10c64e16a15f70f5933696b039545ed82f3fb0b124e5c51011e146b8116e841be146b8116e841be13e3de1
+3ec58025ee3cef956f08ed9d1eed25d01eb4475157ed455dd199ad5f9840929d25c986aba24f3b144a06a62a148afa84420c
+0f22422042204220422042402a914a22042204c48f08a105a36e525dbede8fbb526de428dfce181014ff0ec4ec2cdf079570
+bd49ab451bae0dad954fd9bdd7c5355c36f72b04e94e797707eb09413e4ca6cf47993d802088200866270882d90982088208
+82f00182208a9560541815468551615418f5bdfdca26005281d4b387d4a6fa4c4f8e7e9b9a6a39e98755b55469442d15b554
+04240424c827f2897c229fc8270109ee897b12909c42299649b230ecdac44f891d4b31f037177a899706729440280fcf4bde
+5f5e06c68dd270ef1cfa47581806bfc02ff00bfc02bfc02f08b7100c0483708b706bcf708bfab07d117a47826ebc7d6edfa0
+e68b1842675833840ea143e8dd23f4104287d021f4b6959fa5a65f557e3608293fa3fc8c508850885008e524144239514e94
+935008e5443951ce5d9473eb9ab8be2e86189aaed4c4d9b522cb0987236b2d0eb9aa26210e2b26210e4a93f9d1b60133c19d
+2b7b379553a47c8e364e5f46f64e78b7b85bacddeae57808aadc5c6b0326d7c3d5ad5ab8b6b993f569884386e690fb91fb21
+61e47e481812868491fb216148189579103a847e5284dea853efc9ff253bb582ffa3b801feafa5b14222900824028920c941
+22908876170f8655c5834910503c48f120e919e9196e8e9b939e919e21be882fe24b7a86f822bea75dc238c882b86bd3fa0d
+96fcca5da699de74d5ccfa760897b401e5982e371acb36a9d99b37079d993c2adbf59e7d425a8093dc2b46bf2e9960b4f4ee
+721f748d4aa677cce2616c095b22c924c924c944e8103a848e2413a143e8103aca21910824028968e19c144844831211f54f
+4522ca73af4312f16aaf1e0a719e0ab174d744215088b32b864c83ca62489f62488a21c9e15068141a85268743a1c9e1c8e1
+c8e190687238249ac2ca2d0b2b4d9c05ef981b325a2dacfc2c57bddbf07f957647f6a5a8e470fc2cdb30ab96978bde272780
+f2dfa7a1c88e5897e39b3c118d77d7601e449e40963ce4b95d9f7f2f8dbcee7287feb9893d7bdde7a1bcc64e8c9f3b0a184b
+f36f5bd3fc554ff3e6909c0b217b7a76e42f9c195e4ff6481ec9935c3392879ebb048a7fea565be5b3cf715469376b367a32
+79647f06b909e497f130b7d2e52d84d03e5377adbccfc57a9cbae52eed840f869d9f29bf3cc1b670b628eea0b325a73dd2ec
+2dab62b2fc1a8568def892299e6ca6181d4687c8fddaaa2cc9118ce5d8f85f72e8fec05f117899cac02b3686c0abeb81177e
+54a71feda2b9691685b569ee31568073cbbdcdade395f5de2e6cd4685e0a1fd7277aa969d6958a776eac3fa9fae39a5db96e
+f18183434d91531d09d30d403700dd007403d00d403700dd007403d00d7022dd00643d6d85bc5d0af4de49796d63bc5a02e9
+660b0b1aad8e613e45f016bc056fc15bf016bcdd176f9b2df2af1a34a691c76686964664680c1a237c217c217c217c217c21
+7cc14eb153ec143bc54ecf387cd9a1902c08333fea4a2199dd4959b187d442aa86abe91365abd744653ccc1c7e5a0b925f96
+21dc1c9afac3c67c293cac2f458d7d9178f9983431d6122722ab24ab24ab24abc406b1416c101bc406c92af7c92a8f5be877
+66ec7c8693fcc1e57079cbb9bce5a704dab0b336d437a324eeb18b7b343bb51a5283d42035a736cbe0e1cb31fb83aa39fc63
+e6f0a71c9308930893089308930893ae12ba4a883089308930b17d6c9f08b3ad7ebf75b9ece0a36fb2c8efdabc8bcbebc515
+fe59659dfa2477ac9cc43c0599b645f2687f6d95b7d0bea189daa31f84c084c0980d6643084c084c084c084c088c16a28584
+c0d4b9a238280e8a83e2d4331b098a83e2745f71dab00c388ab3a9387d0c07c321f83a66616b125615b6467d0a5b296c256c
+c4c431714c1c13276cc4c43171c246c246541c15276c3c66456a92059d5909fc72a82b51a8cf0551e518bc73590501854421
+5148149230178544210973097331480c92309702559c06a7c169701a9c06a7a9cf699abdf7624c1813c68431bd6c4c729aa1
+4c5da87f8d93aafad724a6fe95fa57a24dba01e806a01b806e00ba01e80620da44d41175449d68134f6f4f39ac0933d39972
+5877a667dab689374676e4a35e46f3418fb17de4f9722c0f2d005ffe52a8c97ca190e5e76f2c09d2b4792e3e323dcc2a24a8
+2eaa8beaa2baa82eaa8bea927823d28834224de28d4953247c3eca74803bfc964256ee8ab775ccb0bc213a868ea1636dd3b1
+a88f8ea163e8183ab6a58e2d91cc1c071abfdfa27aa8defec5cdfd20a82a6e1e0c286ea6b899a09aa09a5e17826a7a46e819
+a167849e11826a7a46e819a16784a09ade8b96977c275998ec5ff21daf967c7f96abc99d03ff3c9c7e9143f8478b3ed58a76
+d1fbe4ac5bfefb341c4b839115a8940f7caf38af735d3de972789f279e3b02f9377adc64ef3bc3c94decd96bc9fda2129dcf
+cdc173cd48fe831c30bd9427bd6fa737b6391cc857d67f9bbefce2cd6d20379e9e25b9bd613de8452fdbbc98f25a76461ec9
+c7b82b330f3d0747c53f13792321aa6bf983fce6f8d4fe3a1b3d197d675da8278fe4e77898ab587a8b957aecf3749fca57bf
+582f34d8625fa2bbfbea6e534a1a9d5658cf4a32d55e86f8ec1c09b3cacace56b123fcbf71bfab0fffcd36f81fb510ff071d
+0a4619f0593bfd6fb0ddd6ec5fd2e7feec5f912d9ad454648bb14fb6d8f96c1123aac588b635dac0ffe8fb999fd666b40d67
+c3f668646fdeb0edc458af74e8cd1362b18e2221ae4e4f514954129544255149541295442551c9aeab244141c7e9ce4077d0
+1d7407dd1d81ee0e542504dbc176b0ddbb6382a4720852eca7c4040c41a29b1911a19b191141441011ba995111540415a94b
+4576a9be88329374a5faa26accbdbb11b941f725df64d26c28ef5ed891f78e17cad1f8896f87c68f879965517d487eba21fa
+652dcb7ce4fecae26683e561f44d8c19fb0a3c272700cfc173f01c3c272700ce81736a406a65bb18b67b91ed4a91681eedf4
+309c02dc25c01d70d771b86bc31c34c01d7007dc9d02dc35369b545575491c5655970421d5255497d08d4e373adde874a363
+5a9816dde89816a685699d6f8d4b9c059d9961c4dd4c33bdb6e6985dae48213703792c0d2cc40fe54989c5eb60b14285b185
+dea1bf5444fe7a2326cf7ea396cf1691973cafcfb790bf346d4ca6c033ff54dd69e5d6bb474af08f0eb30cc5e203e3f203eb
+98ba7be59d93f29d1b9ba1fdab4a656a7acd90167813111511151115e284381151214e8813e2d4a188ea040b9b62a8b1e5d4
+189e37352650637dd498062f5263e3abe841a4bb10692dcbb19df7a8d7869717ac1799431600ab03994d0033b787990fbe2a
+7ada4faa8ac674b67a8ac6281a2397229722972297a287815c8a5c8a5c8a5c8a5c8a5c8a5caad3b9d42e9582699dab6b376c
+64e5e09bb8187c3388cf70980dc11fc11fc11f584ef047f047f047f047f047f047f077d475e64072901c2407c94172901c24
+07c9417290fcec91fca033c30d0615457e891f51e447911f91129112fe8abfe2aff82bfe8abfe2aff82bfe8abfbe1529ed50
+4567d2cc375da9a22ba7b54e96a6aa766385dce4d58395b142e6b0036cc2437c5c1b26cbc6b9702e9c0be7c2b9702e9c0be7
+c2b9702e32c3939caaefec58bfe1661a8b68c8224a4a3a5d8b68f8ccc44ff013fc043fe9849f0cf013fc043f696b4d631a55
+d6344601358dd43412f011f011f011f011f021d00834028d4013f021d008f4f90af40ed59a41908583fdab3593d56acdcf72
+f5bb73f6df1ff50b7d33b99c55cbc545ef93b33ef9efd3702ced665690539e88bbbb8b300f224fa794773ff58cc93fdf8c65
+2f5e3f4ce48c294f35af20f5dcc49e6d07dc2fcf97e3515ee0bae79ad6fc8d5b843707e6dc787a7ee7fa5d7e1ad90373a9df
+e1bba97ce8dd95d7931d9347f231ae55c9e5b7a5c9e7f350de4adaebeb917d8ea357fbc566a3279307f667901bfd653cccad
+22797a632e5e6ee4fbea1e96975cacc7b56fed59b4ed20da56bee1dbd616bdcfda70b6da9dad3c2238db019c6d3eeb36539e
+1f7ecaf3832951b08d1299a085b39e27cc7a5e87b9c865de4d73a9a0bbaddda59a46f737998ae8cba451d59a5d86e8abf3d1
+17b6d4802d6dedbe46e7fb37a636f76d38c8b40734ab6c7134c774bd28f689f6e8968baed9295cecc1cde6ca220ffff6284d
+d3683a7e5e5e47cdbe207d2931c43bf14ebc13efc43bf14ebc13efc43b4fcb3b4f2e63480fc27a0da2de1cd2813d600fd803
+f6803d600fd83b37d87b7f8154d52ce181a98c157c620546d4d0114d47341dd1b8096e829be026b8096e829b1ca8237a97f2
+8d7e16f89d29df18de677a8a08d826faef9270048fedc0f40bcbc7b2c999de9ce591b01898fe1464da6cc823fd9306627aeb
+2162881822868821628818223eefde7a8a31ba8c774bacc43c3d001e8007e09d2de0f5e1bb53e5bb04bcabab1883319e1463
+d0ad8c77d0ad8c75601d5807d641b732da41b7729ddeb143698589b2a0333363ac4ef15f006e393948a66de912f7aecdf3df
+e0acd12b33fd07e507363aa5e857a03c11021102300fcc03f34408b03c11021522e0dd3bf0aef1556540c7b7d1b1d96518f6
+03d31030054c3b0ea6e5390c9802a6802960da4c6d4b5c59db1225d4b650db42bf3efdfaf4ebd3af8f3ea14ff4eba34fe813
+fa4489ce76253a7116c69d99fda4980ad096a09ba512f4be7d20806f0936083608362073c89c60033287cc21732a6e4e034c
+8d0f9942a69029640a9942a60cec044d41d3a66b6e229f9a1b6a6ee8a8a7a31e1d4287d02174081da2a31e1bc28628a15994
+d0e8ea41fdae94d0dc3f4eaf47abb338ea7694e5f1031f3427aa80cd6173d81c3687cd892a8073e09c2a1ad01434054ddb8a
+a6f38d014d4153d0f4bcd174009a82a66daaa2090754d15045435f3d4284102144f4d52344081142445f3d424421cd6a214d
+90f9e1fe8534e96a21cd6739dddd51fa5ec9bcf7f5373f56d3f045ef938378f9efd3702c977356dc2ff381a8983be9f234f0
+7499d45c54c9ee9ffcf3cd58ae96eb8789ec9f6f64b7aafe780559e641ecd9d33e0fe51d2e9f2fc7a3dcdda8c6d242d90b3e
+7fa3e5f2e610960b81797a48f3170ea7a72bb3e6469ee4aea33cf5a4b9955f8a7feab7b02e61b7c6514b6e224f6bf24d6eec
+cf20d7658267e361ae54ef2d66c8b4afd13d2cbf5cac272f6fecd91a3da3e39a1134386f6479626d610226eea0090c6a9f36
+b29c72af13e1c50056af8fd5d300563f7d56379d65f5b0a5acbed41b03abb793d5ab79b4d628c3a4695594a1284994d1ed28
+035b6ac096b676dfe0a3efbf6ba9e4f4a0834864ef662fb5579a4c59047ad09b93f6211447db0e021f0f33ab7336bf1a5cc4
+8b4c2bb49956b2b20e43542e8bf0494fe2def08b349df6cde5f8c8b6cfa419bc1f2b364a432f0ee9b4ceb6a98a5af6a05a55
+b4c058fecd0aa46c975c04af2c8980d962b6982d668bd962b6982d668bd99e96d91e25c588613d580fd683f59a63bdc64c19
+8a8422a96582228f4a911b9d8a6d4a4792b872bad430241d61a007fde9f4a7e35838168e457f3a268409d19f8e099d4c7ffa
+2e752e6116465da97329973108dc3a06f1d2a06c87d7917dc81143a6b0b084dcbadc81b41cfaac65548f0b541fc4cb646e4a
+326f7468eb57cb1f19941fb949d8c57d476f0ed64ee594b82e9a9df216b582bdee2a7577dd9e6cb27cd8f3daa74587ff82fd
+e52fd8d098ed950f1c9c815e1161a157e8157a458485b8216e4458885ba723ace30ce6eefca4513b42e401e62b0251df44d4
+a63c774ff64dba346114ecdb75f63d401b04599f0d59478035605d1f58373eabe6c9407b7337888a8ab6b472bc7f62522ada
+a86823392339233923392339233923392339c3ef49ce107c04ff1c92b35d0a1e932c0aba52f0e8eedb99deb0e73e56aa9cb1
+fe1538955bcc97b6fae452e8dc0a35263afe7020b246b246b246b2466c81ac1117216b4445c81ac91a5b9035527a78885e78
+74e0503a907447075a151eb056253a800ea003e8003a800e507a58941e8686d2434a0fc9b0c8b09056322c322ca41569455a
+9156a41569455adb20ad3b14011a93c551d78a009dff0cac13b92b2cd35bb10a941d9765176acd16882c7ff8ed518ecf683a
+7ed6bfdbf62b7bb321b6ef57b6a13dfb84c24a86d22e8f7edd7035b75da1bf32017abc3c037a79a30e0f3a50eb40a3a69051
+12541254125412546414194546915164141925416549dbf3b281b96b9faa0e84e8407bb2a96677389eb1e119f33e313c03cf
+d8d6335eed48c532b00c2ca3ca32309856d680f64d5255031a25d48052034a84498449844984498449844984498449d70211
+269d0b742e10619e433d6d9845a633f5b48578067691833478697d8442365fefc39567bfd112eb5b95249c2907db4fd047e5
+e867d5a7933ee54f77d763c72757bdcf6242b3a5351ba278c957edfa0cf6bb98e0c82b311cc28e593680809d801d59256027
+60c78209d809d871601c98809d12e133319876cd5e73967e841d9df962708ded70b48bf011ed227c64713ccc0bf33aac796d
+244e6752d61cc75565cd2965cd943593249324d30f43924c924c924c924c924c970649324932fd19f467902477b3523bce82
+74ff4aedfe6aa5f667690cdcb7f9b3009dec8c91f6163c549bd345ef937371f9efd3702c674956f0559ef85e7159e641e409
+e4dde726f0dcc1c8bfd15b921c04671eb9893ddb16b85f74c0703ee779cf3583f91b22edcd193d1740f7f484c93724d9ebc9
+bec84379b26b57f2d05b1e346cb7d94ab47d8e635afba068b4c98dfd19e4f26d66e3616e47b97a7ae32b5e6de40fba4fe515
+17eb95005beccb4e0cbe0d5b590ed094282edd884e637cec092c0bf356f6cd30d6c36857c7f4a5ec93209145601a1798a50e
+c62e088c098e6030c74b364bf8dc9ffb2b124793861589636c0c8963d713478ca81623dac568d32c486a33da8613637bfcb2
+a255d1a0f57b392e7a6f9bcf7db5500ef96b21342f45958822a28828228a8822a28828228a8862d7459118a08d7457be216c
+07dbc176b01d6c07dbc176e7c376ae93aee61020d15e574200861dd1898c66d0898c68201a8806a28168201a7422ef2f1a5b
+574e841ffd208bc2ce544e38b22da14bb8b65cbbe8f5d5bc464f2693664497047b7b75afe430eb6d2d3e7070a891f5b03f11
+03e40ff943fe903fe40ff943fea718311cad7c04b4ab658dd54eb25d08dbc176b01d6cb735db050761bbc6a726811be1c6ee
+7363b313975515bed89975370a5fa298c2170a5fc800c800c800c800f0443c114f24032003c0e570b926aa7f4c9099a463d5
+3ff3aef4e5b2f65717c5d8381afa67ddca9f46b6fdbed41dffdd74a44fda9088d04ac4c05f9686d219064e1acae96b326dc8
+e7c6a1fba87490e2e5eb4b691cca2e82f2031b9b7f76e5e3e2437fbff4000b85547cdad7d608dc15bde6607279eb552ecdf9
+b333f5e5cf98fd22f71feb216d51328c8ce80e2543c95032948ce80edd43f788eee6d11df3111d0a4b1b6ff2da16421c8377
+07aff06e73ebb340d290f47992741bd6816bbc6185d2bb41e9830e517a636b86d6d16f8943d4ec102fe411a75c04d8f7fb15
+4580491052044811205120512051205120512051201d1874601005d2c9401448144814782c81dfa5ae34cafcb063ebf1b9fd
+af8af6f9662c5ffdfa418fc637a282aaef6b5e69ad52c78c319e8a989498949814cbc03288498949894989498949894929b8
+c42498f50197c02570095c0297c02570095ce2b45ca22a27e85401666aaa0b30530a3029c02433c374c9ccf05c3c17cfc573
+f15c3c17cfc573c9cc3a5f99187767c6cbe17da6a79c4e5a1f2d6957956ce993dcd2c1fa44f91ae578356347a6096e5ecf87
+b045f1624afc603e404efe1d8872db7f57cf913f581be3567c40b418e336b08f243e9287e41167a279681e9a87e6a179681e
+9a87e611679e4aa12462d172b1586a0e118b93178b28462c108b4eceec708e62b1d59a5e2660da08cce2d4cc421acff3330b
+974b74ab3472e0579646b24035a591847684768476b835a11d6e8d5b13da11da11daa1d68476847675566a062633fefe959a
+83d54acdcf72e5bb33e21f1fc6626e7f940b4b8f56a5cd5cf43e394194ff3e0dc7d2b06505f5e4da2de0cef23cea7b2a7b79
+1079ee80e4d507c3a941ae5d07da0ce4467fd1050cf2df1ee5f08ca663b91bd8d6359fdffe873d7b8f480bf4923bc2e8576f
+8ed1b930b4a7a750fec2e9e3a94be6913cc9352b79ea2d2f659087f22dac5cdae738f6cc137950f5320feccf2097ef273699
+ab94790b83cc8d7c5fddc9f22e17eb29ec163bb70b296c7a10530c1a9caa7e7e6a6de17351cc5cf55d4b340758577dd615f5
+49348f3657fdabf7bc037b51ffbd5ed480bb84cc264ff0d6123ba808ca4c1a560465b13104655d0fca70a6669c696b098e3e
+fa4116f56b93e086934f77b897f3c40fc581ccc47516b1a65d89ef85a3a0cfda5843631e8e46f16251bd32cf4cf5a1e5b874
+f9494b716954b9eede1196c16b7c55bafe21be5c75548cffe3fff83ffe8fffe3fff83ffe8fff9f9cff9f60dc13b7b230b0e1
+aab4064092458f29df032401c91acbf71aa9846a27a146102a847a68426d18328eb292f20152af3448aa52af2420f5627818
+21092109210921096e4b4882dbe2b6842428280a7a3e21c92ef55d6116845da9ef5aaa862ba7917879d208a221a221a221a2
+21f0197c261a221a82cb89864e331aa2200aea3d25ea4da05ea817ea857aa15ea817ea857ab729884aa20105511444912ae0
+57f815a9027e855fe157f8157e855fe1574d5610193f8b3a5341b4b4c28d2e6703e3c3f86428303e8c0fe3c3f8303e8c0fe3
+533904f542bddd1c6e0af542bd502fd40bf542bd502fd4bb65e51053295139449a80579126e05578155e8557e15578155e85
+57355331946441dab535e5128bf9037f690ad305f9db294c834c5a9e17a730fdda32ae3b2c6bebd5cb31d2432557fbb353a9
+e5e679f68b344f96ac4f7f424f1c83ec06c7c031700c1c03c7c031700c1c838aa553a3de3a4c08743e237466967dd019743e
+19748e4067d019743e7ad9533faa2a7b4a23ca9e287b2212410e8944f03a2211bc0eafc3eb8844f03abcaedb6557819f859d
+29bbba1c8a60c869a793b12eaf236d578d4e817e1221122112211221cc01732011c21c3007cc8162aa87b219039d4167d019
+74069d4167d01974ee223a279073676aa992945a2a6aa9c839c8399035640d5943d69035640d5923e7c0d6ba5221157ff4c3
+2cf0f7ae900afcd50aa9cf7245b9e3f26fd32f82a2df4e14d32b61fda2f7c93986fcf769389626232b6ef5f9404cd19dd979
+203a29be909bc0733b2cff469b54d9510e76f3d8b357536ef497e7cbf1289f03a0e71a92fcd5e6d09b235d6e3c3d96b96efd
+4f23db725fea467f371de971f574eadb3c928f71d7661e7acbcb68e7a16cb41d11627f737c9527f2eb6cf464f2c8fe0cf2be
+fc1c0f73550c4f6f4a4b2fd63d2a2fb8584fa9dedc935dd09ef020dab3a3f5b4542b581ffbe0c32e908a1aa562dede765e2a
+cad3e69852c1e8885ad93f81fdeb607f131c81fddf4be82f90ddd69c5ea267ad398a49fa55398a9f92a3743d47c1866ab0a1
+5d5c36c9e27e6d2e7b88144c9ad10f7f907bb67d408f57b6241af2170773e3673bddc062f796930ebc380f81dbe1e5740566
+652e82b09c8be047fb5e3361de2b8b54d27296cfd11be09791c5a1bb0534acf19edc3984576faef52629dc7975ab8d8f32e7
+64faca2405e82c3a8bcea2b3e82c3a8bcea2b3e86cb77596a8a26d6c574ac369a2dda076b42b4b474eb7fca951d3031c0147
+c01170a4060a707ccf789238a8ca4102c693309e849e747ad2e949a7279d9e74840821428810227ad24f4c88762873317166
+a2ae94b9c82ece5edabf4ad41ba36636007d60c93bf49769dc448bc736d6dc180f33cbac96ebe5670c401357105710571057
+40e7d039744e5c019d77a6ce25861ccf931cebef790d7dc81172841c21c7339aec07723c5f72dc7f4a9e864a5ce2ca129790
+12174a5ce845a7171d17a2171d17c28570217ad171215ce85c6b5c928fbee9508d8b03bc62010363cbc64b6212c8b60f5eb4
+029fc912c812c812e067f8197e264b809fe1e7ee6409d49f1c6629ac7642e371969a021bc146b0116c041bc146b0f1244a50
+4ce56cf3414c090a25287472d3c94d2737b682ad602bd80ab682ad602b2d2d0fe96791df95f210771a667a46687575dfd2b4
+eeb8acd86bfa70d51ac0455db6112bb27cbd3cf760703e730f92409040c0f4303d4c0fd3c3f4303d4c4fe10ad80836ee898d
+07c023a014286d0594467da0f4d4a1d400a540e9f940695547e96196228a588a882219bafa71369c8dae7eac8aae7eac8aae
+7eac0aaba2ab7fc7f21d13647ed299d95ddc6aa273fc123c2fd86e3e33e3c67ed727d926fc41af2fddbf4b9cffe2f2a31beb
+8a7e6dc1d21dbbb5dbb61c483d9e72e13e3bdb5a26d9d92fd2d2589cb55cbf78e7a47ce78febedf85cdfe498df3f2f20d636
+8d7a2bd9b8e14a8b767b3b54b32ba14e596eed03d3f2033fa99ff5865fe4ccb5ef7cff389503329373f17eacf76cb9cec40f
+1cb1db535aef73764f590bb077ebf26fd60d640bc5eff016bc85ac092bc28ac89ab022b226ac082b6a77d6443954fb10b57c
+c31325d401847a56845a47b701980be682b98d626e837d70e78ed08df53602e70d4c4bbfd14bdea662b0d40caa8ac1062cda
+453118c111c111564e7044708496131c61d41835c111c111c151fd5eba43715d60b2d0ec5f5c67568beb3ecb795f38c4e4cb
+70fcd0fbef7ffeb19a8a2f7a9f9c4cc97f9f8663b9aeb3e2a69c0f4489dde997a7812764709f0791e7f6575ebdaf1c62e646
+5ea957401eea2f2a5479c1999ebbf4f3571b306fce79b9f1f4b8e61bc7d4ebc90eb16fefaea33cf596452b4fe42fe21cd7a3
+3c8abd028872235bafc37572f733b03fc7c35c91ded376be78b1beadee57d90317ebe1df5bfbb30bcb26a787910cbf0dd1df
+12ae776546dc84659377760028bd9ad2d3004a67d04b4b297dd0524a5fba6740e9e738958049fdaaf4c81f901e753d3dc28c
+6a33a3aded36fde8fb59d8afcd6e9b4e0087f7e55c1026d00764ebcae4ce2da1e2f65aa65c2d8f85fe56f3407435ddab8edb
+f0603c180fc683f1603c180fc683f1e0531be604e1758bf04c7c528457df70184aa6c04430114c64981008da30829a0004ad
+7956e724aa8a62c23e510c0379e8c6a71b9f6e7cbaf1f133fc0c3fa31b9f6e7cbaf11974b243594e94c56167ca72dcc0fc92
+9504d0cba1c6c02d090609060906840c219360906040df241814d180a0fbcc490483c2a030280c0a83c2a030280c7a225534
+814f150d5534f4bad3eb8ef1603c180fc683f1603c180fc6736e352f26ccfcced4bcb89332d3fb8b907710cdcbd805dae625
+ebba65995e894b45ecae9535875eff2139c4fa0f15cb4d343a053cc5f3843ba80eaa83eaa03aa80eaa83eaa03a14189d3c83
+36de3cd5cfb727363a14be856f0fceb773c4826fe1dbd6f26dc34b65d74bce6187c8f9008b49c2e5e75174959acaa98b0686
+a22b8aae887d887d506e621fb4182d26f6418bd162621f621ff4b2860ab720c84c672adc66e36166515735467fc6cba41f41
+fa846b846b58041641b886456011846b846b846b14bd1d8ccb63c01c3007cc01f3b305f303dcb4c17eb01fec07fbc17eb0ff
+8d9a3a3faca8a94b7c2632a3a68ea089a0099fc567f1597c96a009e3c438314e8c13e36ca4ccaeffd14f32fd5f37caec64d7
+649bfb5955c8dec61ef46a95fd59ee437d896d67dc15a586bd1866542e9bee96524fca65d38362d9f4feb2570d0e3132e8e8
+4e454888542155481521212121ca86b2a16c281bca466d20d80ff6ef8cfd613bb13f01fbc17eb01fec6f0afbfb603fd80ff6
+b71afb2bc382a3a17f73176555e5611c54551e06541e527948f646f6868493bd91bd21e14838124ef6868423e14838e5928b
+7249e367e13bca2583d572c9cf7255b9a3f52f8f7737da467cfdd30fd5ae71d1fbe4e44efefb341c4b639415a4920f44d1dd
+f99747e2f197c3fb5c14daeeaffc1bbd1dc97e72a49e07b167afa83c94d75c3e5f8e477981eb9e6b00f3579b716f8eb4b9f1
+f448e61b47d1d329def3483ec75d97b9fcb6e481f683a5c5bb76bf392ccc13f955fccfe8bbaa07e6f23566e361ae66e4e9dd
+ae78b12e45a07b52bef2c57a62fae61eecc2e8b3f820b216c4cd4d685ebee1db3e15c527156a9e401e39f73254a879158afa
+a732b6cb44c8ca311343a60b6f2b982767c5e5256bd63a558649d2aae5a7fc94c0aaeb8115f6f30efbd9c559e3ccf46b73d6
+8663c695cc70391f2c33c3a462a9b079465847a8f1621c8861629818268689616298182686896176d330490d60bab654619d
+4001154c07d3c174301d4c07d31d85e96aa964ae881e92a06aac4c6c06440f8c95a1131be14178e8c44678101e8407e14178
+109e837562ef50fc11f859d499e20f7bbd666f343b02ce3f4ca4d17ad63df5edf4c63e65205f51ff6d0b5df4ad4a08caa475
+9157988b62a19c27533c12bcb49c0edc0c371314c0cd7033dc0c37c3cd703341c15a5070ac0a9218323c3e195ec4b0216c08
+1bc2867bb1e11b7d17f5d161001d4287d0e1f1cb48e2ca11ac4148190965247487d31d4e7738ca83f2a03c7487d31d8ef020
+3cdd129e5d6a514c16255da945797dbd839f46b635bfd423f1dd74a44f5aaee58eca5aee0627126e45893789048904780e9e
+83e724122412003a804ebd0a74081d4287d0e121e8b0f175e4204fc813f2843c8fb34a714537e32954c4845155454c64a888
+a122864e79b40bed42bbd02e3ae55123d40835428dceb86a66f0d14fb220ed4ad58c5e13e59487c6d698cbe665ca52f30774
+bb32bd7a3766404c4a406f7425e7af963f322d3fb2b155b90fff7108080282802020e43ee43ec80d7283dc90fb5077047fee
+ca9f06fe843fe14ff813fe6c377f36da5dd604dd862da5dba53bdefca6d1584f5d83ef0c9143e45b5562a57631ab8d4a2c5b
+fd4425169558043d043d8836410fa28d6823da8836410f410f5a8956ee5bcb66a22ed5b23d5f8ec5714a8e138b7177caf1b3
+25fdc72fe50abfd230178a0391137d41e41039440e9143e4445f445f445f380ac568107935919742059283e4203948fe7e24
+2f4f49901c2407c9417290bc43f382f5fb54a3518d4654831812d5e08578215e48548317e28578215e4839d9663959e067e1
+60ff72b270b59cecb35ce76ec37f188a47f6a4c1929d56690117bd4fce66e4bf4fc3b1349359c138f9409cd49dbb79243a7b
+39bccf4de0b9fd9c7fbe194b4b71fd3091fdfc8d1c1e1541af40ea3cf6ec159f1bfd4585262f28d8730d69fec60dc19b936d
+2e58ebe98991bf7052783a5ac77e906b41f2d473d76cf1cf44de4c2ef4eb511eca6f0e34edafba62781ed89f412e5f6f361e
+e6d665bc8565d927ea2e965f2ed693b737776d27042b3d8860e157f8157ec534c864630c2039094b6931f19be00c91bf1a47
+f717808a4cc7a47155a66342329dae673af85213beb4adfe86fe473fcc7c539bfe361dd10def336d653ffca197d87feb01ce
+2a9b207d8eeb8db04fb4475bda0c7d3888abe3bedf1ea5ad1a4d5dde678f7ef6263be8db45e56dbf679f5078dd505062f4eb
+7cc1a1174e0a7d838d99e8e73361987831efc5d2a992a99b2c4d88f164b29edd296679fa88e0304b152d3e305efec055c92e
+d8539b39db2acb6de1ba608f125357c4d7ddaa1d79f7447c1f26d3e757a6aba043800e013a04e810a043800e013a04e810a0
+43e0c43a04487fda575e37d7a52d786f692698eef05ef80aef355e15054bc292b0e41158b2a9ce8b5d21f5d56ea5fa10d580
+a8678da82cddf9ee782a0d2b27c0b68f124f31e4883c833c833c833c833c0307c5417150f20c64913ce37cf38c5daab30659
+9c76a53acbdd5fcbd57a127f5954024bfecba2b2880fe40f056915f82fa4dfd747a3c50a40e1d27b6eac8fd3f40a40403a39
+1439140e8003e000e450e450a80539541b7228aaa23adc650c8a82a2cb289a80a2a02828da15148d5a88a2498750f40033b9
+01ba275a7095f483aa82ab98399e29b822a220a220a2c00b8928f042bc102f24a220a2c0dc8e636e3b143a997e160f3a53e8
+64cfc24cef2676bc44e5a081a689bf4232ea983b7be59dfb87197281bc9068612e245a980be682b990689168916851ba05e8
+02ba802ea07b66a03b472240b7cda07b00da01a3c1e8ba4fac5a961784c55758bc717a38a1a9c2fcb4a2722df1032ad7a85c
+2373227342c55171541c15277342c5c99c9065322732a743d7e205268b92ce2c09e9a64c767b48d5e8fbc9ddd56473926413
+cf672176037522fb805d7073f52137ba27b22f0aec03e5229be5f34c843fe00ff803fe803f10e511e511e5612744794479a7
+1de551b2b71fe79b56807e1403fae704fae5f106f401fd1d40df4480fef981be09207d481fd2ef3ce9bbceffdad7f73414ed
+51b447384538453885b3124ee1ac8453382be114ca8ab2a2ac1da9ed33fe07df7cf4c32cee4e6d5fe148c649929d59fb5e61
+74d578063ec6434c87f210d3a13cc474280f311dce83f3e03ca71ed35190b727e9fb90fe9ea43f80f4217d481fd287f4217d
+481fd287f48f5090970cfa14e4519047a244a244a28467e29978269e8967e29978269e8967365f45674c16eeb35aedd5fdf0
+83efafd7d069d3ee8efd8f72dafef2fb8db658720168536f41eccfeecea3fbf31fafe4fcbc12f4b46833bb94a372f9cb420d
+6773399c65ab47c12b9b676f83afbd35dcbb580fd776d8acff3a755fe7aa14a17d4f057bdbb73b466b2447f2b09c00073c1d
+1abf4ccef26e790010d9c61e1d389fee18aca3c694bbb96372f203b09adce1159da3fdb0a26f341818fa46bbdf37da3e52d8
+059ae22c485a0f4d734bf036f64ad175b2b95b6a052634c56a4a7deaf71e02fd69647b602ef5dfdf4d472a275b33e8e79bb1
+dccbae1f94434b806d3791d2b9b9d2b999062f766e36bb96c33608fbdba39c3fa3e921229036126c233bbf8aa6822a9a4a06
+d01434552f42ec4052419819d37a925a097ebce5bdb29a8c7bcb7de7b5a214d1534b16276a21d30651a7a1f6bdc525e73686
+a1be3d5f63d017b634e85beaf33c48b7611577554db917a4ade1aed0f7c1ae7661d79ebcb13577051ffd4ef4606d76da2ded
+8ad5febbe6d0ab6e857d670c730c854d5e51d803e46030d781ea1d98707033ef6a4e25ce00bfaaeaac3ee9ddb537fc327972
+afb87f9c4a133493fd7e3fd6be50b9a4644f3b0eb79dd86aa8b6b2ddb2bdc5e1f26f96f8e5cde5eebc4ba7573f05be80afda
+a16307fe325116c6fbf2977999bffe387e1c7db99123f283de6adfc5a06ba4b9b95b96befb3c68dd20af2d3768b3c3abb5bd
+02712b479c34ce060c6539ee509633a585b6142ffe30913f3eebc67f3bbdb1e58b5a35abff367dfde5b0e58bfdf7562fee4c
+b6dbb295039af7b3d51225415747a5abe323c52e5cd5cfe27673d52b30b9d6edb792b8d606561465d9be9403745bedd69b52
+46a7540fbfe3564e48be4348dee8b1e8e2b8a916f44ca57d7aa660a73ab16107780a4cdb3ba556f9705e8236aff29fefa5da
+70e94c6b240e8047d4686f3d010523389b18c1595f21550b9d4a76cfa94955d57aa6834a880aa96987a2dec90f5b7353f8d1
+f7b3206c7998577ed5572afa6b4ff0b8bf6f797fa786ea60b7a8e61cff887384d43d3eb3c6e2fe568165d421b0acea32f22b
+47f0257419013befbde9ef823be93b6ac7839771e75fe5f7e9682c7b7d387e966d98d5f4edd763c739edbd3157d40edb03fc
+ec3f00bd3d23c9061d1f4916c4c71a49d6aedb7c7098db7cc328d9e1f8b891898b0f3a5742e598bd01b3f29f146a1d1d3876
+83ae78d07ae8daace87a715faca496b5b257cbe69c695fad32c405717592b8a8206b4f05d9618ba5aa66020d8d0f8fc163f5
+b3c80e586692cc37adc7b2572690d8e80f6c8acaa83b67dea4a38e903cfe34acfbd736d71df01da2bcaf1b28557ad279a354
+d007a540a9faf9616b928a3e0a4685610752c53584dcac217b734af5f7e58a6ded70895bd9e1d2ec0c3ea4bc5ba7bc07218e
+33ac356ac5bc1f3b2c4264ba37817be35de9dbcfad400009a5d5cb26bb105a3f33c1be8416be4c68ff3c9c7e91c3f0475b23
+f0ce7953ab3af4f6582670cb4daa98a6bd73b7a07e7b8651d165d09249ee6bbee77770d1968465071b993864b04fe5576390
+4595d71940561bf06207ca3251160d5a4e596f7cfba5eec2d72665df1fb2c0842d31a1258b141f707afcf655db355c26cedc
+037507eb354ef992302ffb4ee8450a097ad5cb1cbb90579cc549bbc9ebc54517ab8adb5eabe4da9bbd48bc7699b4e9b85d34
+079b8efd6c96d52583df63c1c28601181d6cc5acafdb425ee8c7401e905733deec807941904569ab31efed6fbf328f594359
+66dd1d3b86255f761d8df65ed068aec43f6c2569b0084f4717e139e1b92e06ad9feba2bad4cc4069505a0374b235a9c55a70
+e6ef3d1f7df432a9fdfba35e51df4c6aaeb75b9f97bf6247bdda27b7cd66d53f20a0f38cb0e38880d62dfc73faf53bc7ef09
+3df9003a39cc742f74b5313d06087724846b0bb6ec4070c664a64304f7da60d637fbd98e836f673681d601e8ed3d53b8ff34
+b277b04bfdf777d391cef6b0f51c0fdfe82b5bba7e1d9363b569780633c3aefac5c1971daa9e43636098881fdcaa97317661
+ad240b8336b35619eeaeed8103759351b7d696c5068f0558ef5f20b853a32edfd98fd5b69a3ee0f6e4e176fbd9ca18a2096a
+d589185b6356a2f394ed3f4aa079cc5a9eaa6d152d5f98fdb61ebe6276d7ba6777e57e74fca88584bd9555781d5cad3cead6
+9a928308c002b0ea808b5dc82acda2bdc92a7e99acbed73ddbfbfa9b1febfaee9b38b9c69bafcd7ab1c5d64057d574d592d9
+2c4e7a58e55127be3a56cf6007a7d73fd3492a1ac3a0ca7ea6d427d13b210a3a3208ec804226cac2b4b528b45e31b652efbf
+3cebec6b31de3e1cb45be143781685d58c777bdf5d6629266b64814c72e72d57086071c773993770ebf9c0faf017fc550f7d
+ec025f4966dadb0ff562c8b9c4a56f54aaef835edcc8dab4d44d774ba80eb0739811d57597326bc381676d68c10caa694870
+0732d5c10c3b0053e067c67421b85bafbd5fc0e24a7c4966d7c68aa8c3afbafcfe117974249ddcc4bbacc0daa611bb5b8351
+92d0950417d58006bb7151dcdfe0a2eb7b392f2e920fe3c7bbe10612c93bfe2ae78deffbab58f4590b3ba4259536e4e1f95e
+2e27d5a3ef7a8ff7e3c9f0eaff59e5153da1f4cfee8fbd3f7ff3add0ddbf7dfd3fbcdefff8fe2ff2df3ffff84ff648fccb9f
+ffc9bea39c15ff28a2e27aa1e5a49223641bfd7bb9082e2a2e309356d60cd633fa554efffb172faef55da7d755f176724017
+1f189bc07ea4bced6d7180e4df0f93c9b838cb7e96a6535f62df5eeeeac35bd9a0e9ccfe53f7af7e98eb452f0e8368dfc3cd
+c83d414fcdbfdd5cad3c593e4bce9daffefef762d3550cf5a3e64fb667cd9d7c8e3e7b3c99886cfe4d76b2b4e1f623a489bb
+9cdedc17dbf4d5b73745bfbebe5c5a40eb8f7acc66a387077b217fa5ef577efafcebc883effc7285f06ff7e5ca27af7c3979
+3b3914f63caef866ff267f9516ccfd7d7ed7284b5e1fe480bdf4d5fed78b6d45d196aeb6167a1594d855befd509a0839118b
+88b2aa1d2dda32e59fdf27aee84a10d3f1d8bc01940be6d3ccbdb33da7a4211d39c2b6e7ac36bf5a88fc452e91e583685b40
+77c895ab3552d20b5c997b3afad986310ad20e192fdcb17ca5397ca349d8a59d325990eed94e99d576ea6bbb0d459dd9edb3
+edf0b0adbddedad7daa9ad9b966d53208d7aab9b953bb925d5dca8084acdd65a958d73d6ebad5e8c755effbadb0fd370fddd
+9e895b7fb9f75fff7b7cb53d9badbfd3aaac7dc1372ee0dd5b95f0c0adcaffd41df94f13d5883fbaa759bd1158942f39bc7c
+98398315bf1c0f2f8b8290e5b7bbe87dfbf8f0b8a8f7d58e85d249ee46bf6b102f9a3cdb018cc2d682116d186d186dd8eb6d
+58b4afc105ab6dd83f4f7e172996ed9276e5e6418793e989a2356c6b0d986bbb3eca1f3df90e9389ec84efec4b8a8ec83b17
+84d97e47d7607dfc65f4bc344c4dbeebafaebb6ff41ff772c29491db4cfb7a6d1fd10e8d57d021aba3eda2edea7adbf55a33
+b15bc315fb7b365c215d4f1016ad14add441fa9e822c0af66ca8a217086be42a9e652f6a8cf2205f6c3cb9beb95b6babec39
+f697e24a99a3d6a2e3df96563f4eefb48efae3da5b5df4fea2dfd8c5c5574594a817dfa3aae683a6f77a90efefab1b31d32d
+d2a211a3113b65d47ab1bdd8a51d0bb330dab31d8b5f6ac75cf9a318ac96456cd57c691aea1597cf584b73fe64dfe3a2a747
+73a1889ac65a42b3ae388fdeed61b87970d58dc3abe793f0445a2f5aaf936ebdd65a89ad1badf4a3ef6766df462b59b7c4a1
+6d37ec1776f637bbf93f235793b8d674fd458eb69610aa005a72fca2afd15eafa0f74f7f54deb2558b7a2db90a6de3fbbd1f
+ec1f6c7d891e12fde3891627d03ad13a755f105f6d0e766ba3e27d05315d6da3beb3dba383697bb7932f2aaf62689bf1a1e7
+8a9bffed2ff652f9c7bbabe9e4e64a8cefe65aeb5a17756e3339b5ca7dd67b96232afba16ca37e1f7da96c9d924155ebe4d3
+3ad13ad13a1dac757aa121d8a5553259b86fff7a9f5689824e0a3a69959a6895e2c19eadd260dde7744bac60feace7eeed73
+5910b5d6347d579649e96ed711ada3ab62acc76af9d53f17c3687a7fd2e12e93bb51697e655f948eeed081b67ffee6dbedc5
+cef44127d009743aa0d8bddc2eecd25289d2ed6975c6a7bb9cee72da2ddaad837797075513436dd768196a1568be68be68be
+8e5eab20ed5858355fcb76ed58c0c81c9a319a319ab1a38eccb16d58b46757970961317ac068c368c35a80625116ec598165
+22c6e9d054d154d154353e4cc7b5537b0e84363103a169bb68bb68bb0e3f105a1aae380bc23d1bae044fa4b38b168c16ac0d
+a29864c19e05a7267da11d13221ad924f45ef6bbcee5ba470b56d44dfc64dfaa7c1f394c0ebeec64bf723485e39e278fd379
+5dea62e57539dacfb3ded3707ce3a694d5c2309dd87907324bbad4b051a84aa1eac9346c150dc86e4d5abc2f9af5a95685c1
+603018ec40e5aac9de85f566007dd1a4d1a4d1a4b58cbed22cda33790ca8c0a7dda2dda2dd3a7c057e7fef0afc8039e54923
+69bc68bc8e5db82a1eb967f17d1010484260346234626d08240759bc2f8a51804f3b463b463bd68676ccf85910efd98e45f4
+83513d41f504d51387ee0793462bdc73fa9c2066e266e00ab802ae9a9eb9591aa978df9eae84fa2ebae569ac68ac0e52de65
+4c16eedb9795e280345b345b345b875640f1bf7dfbadfacc1c410b450b450b75809923a49d327b96ce0703d88afe75fad7e9
+5f3f025c457b765d857e559de9fd5097e1914d993d7e991ff7b5866beb9579b65d98e76769baaadb93bbc7f198ee70400810
+daaef0f385cb77e716c50c0edaa2d8baf54fabdddf050ffd595f6ee9676a9b47dd97bf8a95d9abaaac6e55ea98f5644f0a02
+3d5b4e925365b4fd126266407a47734573d5c1e62accfc3de766080d05063451345134518d1718847b4f9e1c064c4a4ae345
+e345e3759459498d365b7bb65c21cb47b37c34fdde344db52f1f2dadd2be43fa4216a3809d6027d8e9303505f1fee2c7f017
+ea9e68a368a31aef9c8af72f214898aa0acea20da30d3bf25c553ad7debe42c8b8186a37e9c3a20febf0b59bc9de2b7e857d
+26a6a2f9a2f9a2f96ac3c4544916a67bb66303a64f4015514554f140f327a47b2f4e18f9f4c7d342d142d14235de219f66f1
+9e132644866a511a2f1a2f1aafe3548bf6b3604f138c02eab268a568a568a50e5297d5cfc23de77a89581382468c468c46ac
+155def83bde7038d22bade2934a5bda2bd3a4ccffb208bf6edd48aa9d0a2c48112074a1c0e5da115ecbf7a4d94d09fc53868
+5a285aa8037467693bb5e730c3284503d14034100d3c88064a4b15efdb52f5196c880f425bd0d691071b06260bfa7bb66103
+6648262884b820aec3cd902ccd55bce730c39809dd69ae68ae68ae0ed95cedbf0c574cf53b5d5bb45cb45c47297ed7b91cf6
+6db802c616d240d140d140353ab4b0ff51e772dfb3eb2a0e812bbc90c68bc6eb0874655b2eb367fd684ca53b98454b454b75
+88120769a94c66f69c63268ecf734966da13da137ac45f6f50c2f0a00d0a011ead15ad15add55eadd59e73c0c40903fd28ec
+a4b093c2cec30ef4b38dd6be1357c52988455f388c05631d94b1f65dff34ee332e99668a668a66aaf981c9d250057bafcb15
+0fa889a2bb8a36eaff6fef7e76da4882388ebf8a1f80c374f7fced5bb45945ac564b14f6902bacad608960cb8bc2f2f6dbdd
+1ea28400b17fd83d63e77bc905b0a219cf47553555d518b5ef9e282bcfc7d405bb40295d51baa27435f82ed0e098f346eced
+ac0d492149210117015796a4b0941ba46a4bc005622006626308b84a5faa01d773c334ab597806e2bb8165b8ee778bd57483
+3ecf2703a403e9f3248b238b3b1a549e7878b7e7a4cec9c9260151df3ff5217dd4c3e7841bb46e990ad737de8d585bbf8fdd
+0afd75edfba8d2dfdf5edcff3bf972713d9fa6bb1de763aec2af6e91ecd56c264634443b40d1d43685bae4ed1f6fffc8e3c8
+e3f6fdf6af924f84af1f0dd79ca6ffcf2ab6957f5e5cc642d9c572f963cfe749ba01f3b3f3f4a8bcb999ae16f3104f9dcf3f
+ddc46b9fea4ae9c685afd6d7702af677c6aeb1dea8bbd9e5e67d9eb6a0cc044ff0948fa76724d88e252736a4d735eb0e500a
+a5502ad3be83da1bb57faa61a714d91f7001d7202ba56a5f19112ecea2a1bc4e799df2faa047d104c2428e281ea75577f47c
+126711671167e568f96ce4034a1b666ca8728118888da2e5b3918f2f6d0ccbadd00bbdd02bfb72abd63bb1c5a1b1a0055aa0
+055ad9d1ea7c213640348eca164441144465296d75deaa296149032985777442a79df78f9ac21b71f4a6e1cc089cc2299cca
+b7cf3868558987fb3535c91ec91e4cc1548e64cf18efc4952f4da3b78c1edbd6175001159a38bf47c5d9cca8d0870e611006
+613b21ccfaf8c24e8a8b5a36bd60144661d49e37bd04a38cfaa2ae23cca2fe84611836749ce5e4aea8f67573341b4fb85082
+c2155c39bcd196352de500b430a20763300663bb62cc898d4fad61711ef91c6001569ec579a6940fec6b2d54411554415526
+aa2abdeee41872610b1e5bf0a069f7432e95bc55aae57c194a52844d844d7bef3aa87c6545a32acaea43e57e04580458d4d5
+bf75ac960f3b6e6b4e79a0764510461036c8310fa6d16b57cdf6b5ab8d0b4e344a2109921c4aa92921e25c26442880a3122a
+a1d2cf552ad50278fb0bb7839330010a059f4d6cb103d842e11ac7700cc776e4581b10136324c67e610cc6606cf0b1df563e
+76aa63360fc4400cc446118b75be1487f33ac35672ccc22ccccab7963ce68d2a57f657ddf68b29984232f75355a45682d7a8
+42410ac3300cc3766598736264e4c4d5058445900229c7b95f60ed8916133956a1401554415536aa4af1a8838ea503088550
+08b5f7ad03d6782bcebc75958ed4d1a568ac01600d00aa7caf8acbad0aa10f488114486d8894f5563c4bbc7b6e51c9ecbf74
+c543c618bb84366a917c1b7ef1a4ff965f876fe7e4f7f419a9d9e89b0d250f35a4f5aa92cbfb752d7e7d0fe6e98a84e77e7a
+cf9a12b236b2b6b177483e52623bb4e406ef86066ff8822ff81a418377744cad3b3134cc32151883b13130e6bc55dff175e4
+90e0055ee0953b8574bed2f61c98a2a0ad9c0c12bdd06bd0b6f2eeef22006644c30c4bc6c10bbcc06b8025e3492ed78a7259
+361bd026419b046d12b9361b04ae8c3795c8952359e4d04f0003b0817345a3d7bb4a082365246524651c81619d685845bd8b
+f88bf88bf86b907297f58515e1aad9d740ad0baaa02ac7be8644959c27d25a4f5717792279e2e02da98131e7ad13196b1f47
+5cf31018c571ea49bcbfeb99ead37eecf271b92bdca4f8e37e2633844c2793b767bf7d3c997cfcf33cfcfbfeaf77e961fae3
+fdbbf58076b843ab7fae42a6b88ed36e16b7f192ce968193a398bf862aa83ac658eb4512b671aaf4460db73ab1a475d86b67
+1005512834bdc889753939a1420e5cc0055caf83ab52cf8e31a6a0424e2302544155a60a79704a6c06359cca875668855639
+7bd76b6f4b912bcb1652523f8442a8bd2e214d4655627f9471341d10668118888da1eba0511761195352c5a2cf933e4ffa3c
+3355b11a5f8a0d52a662671f9334b0055b5977f605b35addac9a1966b244b244b2c4a167985b5fa986315f43b91ec3306c0c
+95ae4e5ee0675a2a5d045d800558792a5d71be467db9d841154579aa5b54b7b25165c485eeb6607c87a490188b186b88f19d
+009713c777ec732751044966e93dc1325cf1bbc56a2ad4b3fa978a1fd2473d7c4eb8416bb4c2f58d7723fa771fbbe7fbebda
+bf5c4c7f7f1bf89a7cb9b89e4fd3dd8e11da55f8d52d44ab491b210dd20620ed0940b621cd78db88a43dea9b3f4d3db2aba8
+ebe7c565dc1a71b15cfef892f1245dfdf9d9797a4ededc4c578b79c0ea7cfee9265ef854734f772d7cafbe5a158779e28840
+df377f37bbdc7ca8c716d8844dd894cfa66724d88625ebadb830c672140599227441d7c02d10c679a34656251389c4572005
+52fb1e4934a537629f96ade8d322d0c2300c1bbe4fcbe87bb56c4dac0553300553fb0eb58251622fa96de87ac02eecc2ae41
+ba1e4264a5e6882d3922852e0443b0312489c1317145a0ed708c400cc6606c148c5562adcb1562132a67e9800aa81c670368
+e2c4999c9cd0d38e688886687b12adf14e6cbc724ce950c08234481b1f6972ce679535a6879df0810998b05cf40549a4a353
+354958880c5aa0055aaf424bdf88ec1c191d9ee1199e8d2ca3ebf42255c980334576fcc2af61079c6de18d7842b4ab88cad8
+4cca665236938e2b2a0ba4a9271bba9a191dc231c231c2b1216674acf1568dc51ad6f851eac2266cdafd1a3f6be5f532aea5
+ca855dd8855d4397b98261e2d8a0ebc80939449a6216c5acbde784ff03b135fe0179ad1600
+"""
+
+
+def embedded_demo_log():
+    """--demo where no examples/ folder is found (a pip install carries this file only): the embedded log,
+    written to a temporary folder that is removed when the scan ends."""
+    import atexit
+    import gzip
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp(prefix="linklbee-demo-")
+    atexit.register(shutil.rmtree, d, True)
+    p = os.path.join(d, "calls.sample.jsonl")
+    with open(p, "wb") as fh:
+        fh.write(gzip.decompress(bytes.fromhex(DEMO_LOG_GZ)))
+    return p
 
 # o200k_base.tiktoken (tiktoken public file, sha256 = RANK_SHA256 above)
 O200K_RANKS = r"""IQ== 0

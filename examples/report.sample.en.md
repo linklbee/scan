@@ -1,18 +1,19 @@
 # Linklbee diagnostic report
 
-scanner 1.4.3 · 1 file
+scanner 1.4.4 · 1 file · 한국어: --lang ko
 
 **Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
 ## Summary
 
-- Leaking now: **$0.00** — the sum of section 7 'Leaking now', 3 items (1 without an amount left out)
-- Could cost less: **$0.00** — the sum of section 7 'Could cost less', 3 items, ranges at their low end (2 without an amount left out)
-- Of that, a one-time fix you can do yourself: $0.00 · needs ongoing tuning: $0.00. Rewriting only the changed parts (section 4) and answering without a call (section 5) also need ongoing work: answer pieces are kept and compared on every request.
+- Leaking now: **$0.00** — the sum of section 2 'Leaking now', 3 items (1 without an amount left out)
+- Could cost less: **$0.00** — the sum of section 2 'Could cost less', 3 items, ranges at their low end (2 without an amount left out)
+- Of that, a one-time fix you can do yourself: $0.00 · needs ongoing tuning: $0.00. Rewriting only the changed parts (section 4) and answering without a call (section 6) also need ongoing work: answer pieces are kept and compared on every request.
+- The example log is a small one: its whole bill is $1.06. The leak found in it is $0.004, so the money lines, which show two decimals, read $0.00. Your own log gives amounts at the size of its bill.
 
 This is the floor. Once switched on, the amount actually saved shows on screen.
 
-## 0. What was read
+## 1. What was read
 
 - **[synthetic] This is the example log.** 322 of 322 calls are made up, so these are not a real company's figures. To scan your own log: `python3 linklbee_scan.py --logs <file>`.
 - 322 calls (322 lines, 0 not JSON, 0 rejected for missing ts) · 2026-09-01 to 2026-10-09
@@ -23,11 +24,11 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
 - The scanner has no network code. To check: `grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py` -> 0. Answer text stays in memory. This report and the JSON hold counts and shares only — no text, no document ids.
 - 14 calls have no body, so they are not in the answer pairs or similarity
 
-## 7. Checklist — what is leaking, what could cost less
+## 2. Checklist — what is leaking, what could cost less
 
 ### Leaking now — money going out
 
-- 7-2 the same request sent again shortly after — **found**
+- [code 7-2] the same request sent again shortly after — **found**
   - Fix: when an identical request (same full body) comes back within a set time, the engine can return the stored answer without calling the vendor. Streams and irreversible actions are excluded. A regenerate would also get the stored answer, so the engine proposes this with the amount first, and you decide whether to turn it on.
   - You can do this yourself: a one-time fix.
   - How: find where the same request is sent again shortly after (retries, double clicks) and stop it from going out again before the first one has finished.
@@ -36,13 +37,13 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
   - Split by the earlier call: after a successful answer none — the engine's stored answer can fix this · after a failure $0.00 — fixed by the service's retry settings · after a cut none — fixed by 7-3's larger cap.
   - The Linklbee engine does not reduce the share after a failure; it only shows the retry chains. Changing the retry settings in your service code (interval, maximum retries) is what lowers it.
   - Engine: the Linklbee server records each response's status and request signature. The engine's usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff interval, maximum retries, switching route after repeated failures).
-- 7-3 answers cut off at the length limit — **found**
+- [code 7-3] answers cut off at the length limit — **found**
   - Fix: if the same request is often cut and then resent with a higher cap, the engine can send it with that cap from the start, so you stop paying for the cut first attempt. Answers may get longer, so the engine proposes this with the amount first, and you decide whether to turn it on.
   - You can do this yourself: a one-time fix.
   - How: send the calls that are resent with a bigger length limit after a cut with that limit from the start.
   - Of 322 calls that can be checked, 1 were cut off (0.3%). Their output was 300 tokens, 0.3% of all output, and they cost $0.00. max_tokens of the cut calls: 300×1.
   - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. The engine's usage view shows the cut share per limit, with a suggested limit.
-- 7-4 request prefix serialized inconsistently (tool definitions, system instructions) — **found**
+- [code 7-4] request prefix serialized inconsistently (tool definitions, system instructions) — **found**
   - Fix: the engine sends tool definitions and system blocks in one key order. It can turn this on when usage records show a gain, and turns it off when they show a loss (judged on Anthropic and OpenAI GPT-5.6+ records). Changing parts such as times and ids are not handled yet.
   - You can do this yourself: a one-time fix.
   - How: send the tool definitions and system instructions in the same order and the same text every time, and move changing values such as times and IDs to the end of the call.
@@ -50,7 +51,7 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
   - **Block `tools`: 2 serializations with the same content in a different key order, so the vendor caches it as 2 separate entries.** Of 154 calls with this block, 29 were not in the most common form. The forms first differ at character 4 (the block is 409 characters, 87 o200k tokens).
   - Source (vendor documents): Anthropic's prompt caching guide says "some languages (for example, Swift, Go) randomize key order during JSON conversion, breaking caches". OpenAI's guide, in its table of settings that affect the cached prefix, says of tools: "Changes tool names, descriptions, schemas, ordering, or tool-specific instructions."
   - Engine: the Linklbee engine sends tool definitions and system blocks with sorted keys. List order and strings stay the same, so the model reads the same content (a structured-output schema keeps its field order; only its other keys are sorted). It can turn this on when usage records show a gain, and turns it off when they show a loss. Set `"prefix_normalize": false` in the engine settings file `waste.json` to keep it off.
-- 7-7 prompt cache hit rate — **none**
+- [code 7-7] prompt cache hit rate — **none**
   - Cache-read tokens / prompt tokens = **0.0%** (322 calls). For calls above the cache minimum only (the 120 that pass 7-5): **0.0%**. Below 0.0% is reported as found (a design value).
   - That line is half of what this log could read: of the input of the calls above the minimum, **0.0%** is a prefix shared with an earlier call of the same model within 5 minutes (the 7-8 replay, a perfect cache's ceiling) x 0.5. A log with little shared prefix is not held to another log's line.
   - claude-sonnet-5-5 (anthropic): 0.0%; above the minimum 0.0% (120 calls); 168 calls with no cache read.
@@ -60,7 +61,7 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
 
 ### Could cost less — cheaper ways, even with nothing wrong
 
-- 7-5 prompts shorter than the cache minimum — **found**
+- [code 7-5] prompts shorter than the cache minimum — **found**
   - Fix: the engine counts how many tokens each request is short of the minimum. It can pad a short fixed prefix up to the minimum, but only with text you provide. It can also send short calls that share a prefix as one call (OpenAI and Anthropic, single calls without tools). The answers can change, so the engine never turns this on itself; you decide.
   - You can do this yourself: a one-time fix.
   - How: for short calls that share a start, lengthen the fixed instructions past the cache minimum or send several of them together as one request.
@@ -70,14 +71,14 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
   - Anthropic runs a prompt under the minimum without caching and without an error, so nothing in the log shows it.
   - Engine: the engine's usage view reports the same share from your usage records, using the same constants, with a suggested fix for those calls (grow the prefix past the threshold, or drop the cache marker).
   - Thresholds as of 2026-10-20 (vendor documents). Gemini prices change on 2026-12-01.
-- 7-8 prefix shared between calls — **found**
+- [code 7-8] prefix shared between calls — **found**
   - This needs ongoing tuning: when the gap between returns of the same prefix changes, the value has to be picked again, so a one-time fix does not hold.
   - Share of prompt tokens in a prefix already sent by an earlier call (same model): within 5 minutes **3.2%** · within 1 hour 17.7% · across the whole log 30.1% (322 calls, 22 of them sharing a prefix within 5 minutes).
   - Shared prefixes that came back after more than 5 minutes, once the cache had expired: **26.9%**.
   - Shared within 5 minutes but shorter than the vendor's cache minimum (cache_constants.json), so it cannot be cached: **3.2%** (22 of 22 calls checked).
   - Compare: actual cache reads (7-7) 0.0% vs prefixes shared within 5 minutes 3.2%.
   - Method: only whole items count, in the order tools → system → conversation items (without a request body, the prompt in 64-token blocks). Partial matches inside an item are not counted. Where the vendor actually caches (`cache_control` markers, its own block sizes) is decided separately, so this share is how much a cache could read, not a saving.
-- 7-9 calls that could have used OpenAI Flex (not streamed) — **found**
+- [code 7-9] calls that could have used OpenAI Flex (not streamed) — **found**
   - Fix: the engine works out which calls could have used Flex and how much that saves, and proposes it first. Once on, it sends the chosen traffic at Flex. If Flex has no capacity, it retries once at standard (the refusal is not billed). Flex answers come later than standard ones, so leave it off for calls a person is waiting on.
   - You can do this yourself: a one-time fix.
   - How: add `service_tier: "flex"` to the calls no one is waiting on (overnight jobs, batch work).
@@ -114,7 +115,7 @@ Span chosen per length tier (answer-token edges [532.0, 558.0], this log's terti
 
 ## 4. Estimated savings (expected range)
 
-This section covers only calls that can be answered by rewriting the changed parts. On a log whose documents do not resemble each other, 0 is the expected result; see section 7.
+This section covers only calls that can be answered by rewriting the changed parts. On a log whose documents do not resemble each other, 0 is the expected result; see section 2.
 
 **This is not a saving measured on this log.** The ranges Linklbee measured on other public documents (below) are applied to this log's reducible calls. Everything else counts as 0.
 
@@ -129,7 +130,7 @@ Ranges Linklbee measured (three public document sets (product copy, drug label r
 - similarity 0.78-0.95 · answer 200+ tokens: output 15% – 65%, cost -5% – 50%
 - The saving ranges in section 4 were measured on other materials (the public documents named at the end of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison
 
-## 2. Answer pairs by similarity and length
+## 5. Answer pairs by similarity and length
 
 138 answer pairs from 170 documents. Each pair compares an answer with the previous answer for the same document. Similarity here is measured with the answer known. How documents were found: 308 calls by the document key in the log · 0 calls grouped by the scanner (0 pairs) · 0 skipped for an identical timestamp.
 
@@ -142,12 +143,12 @@ Ranges Linklbee measured (three public document sets (product copy, drug label r
 
 Each cell: answer pairs · share of all output tokens. Bold = reducible (similarity 0.78+ and answer 200+ tokens). Pair similarity, token-weighted 0.934, median 0.975.
 
-## 5. Answering without a call
+## 6. Answering without a call
 
 - The rule (a prompt equal to the previous call's except for digits gets no call) picked 0 answer pairs, 0.0% of all output. Of those, the answer really matched the previous one in: exactly — · allowing digit-only differences —. **The rule looked only at prompts, never at answers.**
 - For reference, counted with the answer known (an upper bound): pairs identical to the previous answer 0 · allowing digit-only differences 16
 
-## 1. How much of the bill is output
+## 7. How much of the bill is output
 
 - output $0.88 of $1.06 total = **82.8%** (322 priced calls, prices as of 2026-10-25)
 - Dollars assume per-token billing. If some traffic is flat-rate or committed capacity (PTU), mark it with `--flat <model name>`, or `--flat all` for everything. Marked traffic gets no dollar figure.
@@ -160,11 +161,11 @@ Each cell: answer pairs · share of all output tokens. Bold = reducible (similar
 
 One line per item: (a) the reason, counted on this log · (b) what would change it, or what to look at instead. Every figure is either counted on this log or a line Linklbee set (its name in brackets).
 
-- Section 5, answering without a call — **0%**. (a) 138 answer pairs, 138 of them with a prompt; none match the previous call's prompt apart from digits. For reference, counted with the answer known (an upper bound): pairs identical to the previous answer 0 · allowing digit-only differences 16. (b) The rule picks traffic that repeats the same request (fixed templates, FAQs).
-- 7-7 prompt cache hit rate — none. (a) hit rate above the cache minimum 0.0%, at or above the 0.0% line (the hit-rate floor). (b) nothing to cut here within this log (no waste).
+- Section 6, answering without a call — **0%**. (a) 138 answer pairs, 138 of them with a prompt; none match the previous call's prompt apart from digits. For reference, counted with the answer known (an upper bound): pairs identical to the previous answer 0 · allowing digit-only differences 16. (b) The rule picks traffic that repeats the same request (fixed templates, FAQs).
+- [code 7-7] prompt cache hit rate — none. (a) hit rate above the cache minimum 0.0%, at or above the 0.0% line (the hit-rate floor). (b) nothing to cut here within this log (no waste).
 
+These items came out at 0 on this analysis. That is not an analysis error; each line above gives the reason and what more would be needed.
 
-Send this report to bee@linklbee.com and we will look deeper, free of charge.
-The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.
+Send this report to bee@linklbee.com and we will look deeper, free of charge. The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.
 
-took 2.3s
+took 2.1s
