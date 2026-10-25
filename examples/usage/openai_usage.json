@@ -1,0 +1,2240 @@
+{
+ "object": "page",
+ "data": [
+  {
+   "object": "bucket",
+   "start_time": 1790812800,
+   "end_time": 1790816400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 174379,
+     "output_tokens": 113346,
+     "input_cached_tokens": 39235,
+     "num_model_requests": 130,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 49902,
+     "output_tokens": 32436,
+     "input_cached_tokens": 11228,
+     "num_model_requests": 37,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790816400,
+   "end_time": 1790820000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 188310,
+     "output_tokens": 122401,
+     "input_cached_tokens": 42369,
+     "num_model_requests": 141,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 37164,
+     "output_tokens": 24156,
+     "input_cached_tokens": 8361,
+     "num_model_requests": 27,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790820000,
+   "end_time": 1790823600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 185888,
+     "output_tokens": 120827,
+     "input_cached_tokens": 41824,
+     "num_model_requests": 139,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 41530,
+     "output_tokens": 26994,
+     "input_cached_tokens": 9344,
+     "num_model_requests": 31,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790823600,
+   "end_time": 1790827200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 120234,
+     "output_tokens": 78152,
+     "input_cached_tokens": 27052,
+     "num_model_requests": 90,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 55811,
+     "output_tokens": 36277,
+     "input_cached_tokens": 12557,
+     "num_model_requests": 41,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790827200,
+   "end_time": 1790830800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 130533,
+     "output_tokens": 84846,
+     "input_cached_tokens": 29370,
+     "num_model_requests": 97,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 40772,
+     "output_tokens": 26502,
+     "input_cached_tokens": 9173,
+     "num_model_requests": 30,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790830800,
+   "end_time": 1790834400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 144682,
+     "output_tokens": 94043,
+     "input_cached_tokens": 32553,
+     "num_model_requests": 108,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 52849,
+     "output_tokens": 34352,
+     "input_cached_tokens": 11891,
+     "num_model_requests": 39,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790834400,
+   "end_time": 1790838000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 172612,
+     "output_tokens": 112198,
+     "input_cached_tokens": 38837,
+     "num_model_requests": 129,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 38558,
+     "output_tokens": 25062,
+     "input_cached_tokens": 8675,
+     "num_model_requests": 28,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790838000,
+   "end_time": 1790841600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 135474,
+     "output_tokens": 88058,
+     "input_cached_tokens": 30481,
+     "num_model_requests": 101,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 39606,
+     "output_tokens": 25744,
+     "input_cached_tokens": 8911,
+     "num_model_requests": 29,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790841600,
+   "end_time": 1790845200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 129265,
+     "output_tokens": 84022,
+     "input_cached_tokens": 29084,
+     "num_model_requests": 96,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 50165,
+     "output_tokens": 32607,
+     "input_cached_tokens": 11287,
+     "num_model_requests": 37,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790845200,
+   "end_time": 1790848800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 122037,
+     "output_tokens": 79324,
+     "input_cached_tokens": 27458,
+     "num_model_requests": 91,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 49789,
+     "output_tokens": 32363,
+     "input_cached_tokens": 11202,
+     "num_model_requests": 37,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790848800,
+   "end_time": 1790852400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 176372,
+     "output_tokens": 114642,
+     "input_cached_tokens": 39683,
+     "num_model_requests": 132,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 77724,
+     "output_tokens": 50520,
+     "input_cached_tokens": 17488,
+     "num_model_requests": 58,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790852400,
+   "end_time": 1790856000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 142820,
+     "output_tokens": 92833,
+     "input_cached_tokens": 32134,
+     "num_model_requests": 107,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 136046,
+     "output_tokens": 88430,
+     "input_cached_tokens": 30610,
+     "num_model_requests": 102,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790856000,
+   "end_time": 1790859600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 179334,
+     "output_tokens": 116567,
+     "input_cached_tokens": 40350,
+     "num_model_requests": 134,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 90890,
+     "output_tokens": 59078,
+     "input_cached_tokens": 20450,
+     "num_model_requests": 68,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790859600,
+   "end_time": 1790863200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 486188,
+     "output_tokens": 316022,
+     "input_cached_tokens": 109392,
+     "num_model_requests": 364,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 103548,
+     "output_tokens": 67306,
+     "input_cached_tokens": 23298,
+     "num_model_requests": 77,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790863200,
+   "end_time": 1790866800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 325214,
+     "output_tokens": 211389,
+     "input_cached_tokens": 73173,
+     "num_model_requests": 243,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 97637,
+     "output_tokens": 63464,
+     "input_cached_tokens": 21968,
+     "num_model_requests": 73,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790866800,
+   "end_time": 1790870400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 157983,
+     "output_tokens": 102689,
+     "input_cached_tokens": 35546,
+     "num_model_requests": 118,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 57322,
+     "output_tokens": 37259,
+     "input_cached_tokens": 12897,
+     "num_model_requests": 42,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790870400,
+   "end_time": 1790874000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 366111,
+     "output_tokens": 237972,
+     "input_cached_tokens": 82375,
+     "num_model_requests": 274,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 85968,
+     "output_tokens": 55879,
+     "input_cached_tokens": 19342,
+     "num_model_requests": 64,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790874000,
+   "end_time": 1790877600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 155561,
+     "output_tokens": 101114,
+     "input_cached_tokens": 35001,
+     "num_model_requests": 116,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 90823,
+     "output_tokens": 59035,
+     "input_cached_tokens": 20435,
+     "num_model_requests": 68,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790877600,
+   "end_time": 1790881200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 426120,
+     "output_tokens": 276978,
+     "input_cached_tokens": 95877,
+     "num_model_requests": 319,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 41497,
+     "output_tokens": 26973,
+     "input_cached_tokens": 9336,
+     "num_model_requests": 31,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790881200,
+   "end_time": 1790884800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 188291,
+     "output_tokens": 122389,
+     "input_cached_tokens": 42365,
+     "num_model_requests": 141,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 58174,
+     "output_tokens": 37813,
+     "input_cached_tokens": 13089,
+     "num_model_requests": 43,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790884800,
+   "end_time": 1790888400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 136639,
+     "output_tokens": 88815,
+     "input_cached_tokens": 30743,
+     "num_model_requests": 102,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 37388,
+     "output_tokens": 24302,
+     "input_cached_tokens": 8412,
+     "num_model_requests": 28,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790888400,
+   "end_time": 1790892000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 125776,
+     "output_tokens": 81754,
+     "input_cached_tokens": 28299,
+     "num_model_requests": 94,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 38301,
+     "output_tokens": 24896,
+     "input_cached_tokens": 8617,
+     "num_model_requests": 28,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790892000,
+   "end_time": 1790895600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 160374,
+     "output_tokens": 104243,
+     "input_cached_tokens": 36084,
+     "num_model_requests": 120,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 36138,
+     "output_tokens": 23489,
+     "input_cached_tokens": 8131,
+     "num_model_requests": 27,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790895600,
+   "end_time": 1790899200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 126011,
+     "output_tokens": 81907,
+     "input_cached_tokens": 28352,
+     "num_model_requests": 94,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 41279,
+     "output_tokens": 26831,
+     "input_cached_tokens": 9287,
+     "num_model_requests": 30,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790899200,
+   "end_time": 1790902800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 199511,
+     "output_tokens": 129682,
+     "input_cached_tokens": 44890,
+     "num_model_requests": 149,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 47508,
+     "output_tokens": 30880,
+     "input_cached_tokens": 10689,
+     "num_model_requests": 35,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790902800,
+   "end_time": 1790906400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 125953,
+     "output_tokens": 81870,
+     "input_cached_tokens": 28339,
+     "num_model_requests": 94,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 48791,
+     "output_tokens": 31714,
+     "input_cached_tokens": 10978,
+     "num_model_requests": 36,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790906400,
+   "end_time": 1790910000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 180715,
+     "output_tokens": 117465,
+     "input_cached_tokens": 40661,
+     "num_model_requests": 135,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 44775,
+     "output_tokens": 29103,
+     "input_cached_tokens": 10074,
+     "num_model_requests": 33,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790910000,
+   "end_time": 1790913600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 181701,
+     "output_tokens": 118105,
+     "input_cached_tokens": 40882,
+     "num_model_requests": 136,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 50234,
+     "output_tokens": 32652,
+     "input_cached_tokens": 11302,
+     "num_model_requests": 37,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790913600,
+   "end_time": 1790917200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 199282,
+     "output_tokens": 129533,
+     "input_cached_tokens": 44838,
+     "num_model_requests": 149,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 36128,
+     "output_tokens": 23483,
+     "input_cached_tokens": 8128,
+     "num_model_requests": 27,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790917200,
+   "end_time": 1790920800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 158421,
+     "output_tokens": 102973,
+     "input_cached_tokens": 35644,
+     "num_model_requests": 118,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 41709,
+     "output_tokens": 27111,
+     "input_cached_tokens": 9384,
+     "num_model_requests": 31,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790920800,
+   "end_time": 1790924400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 122280,
+     "output_tokens": 79482,
+     "input_cached_tokens": 27513,
+     "num_model_requests": 91,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 53019,
+     "output_tokens": 34462,
+     "input_cached_tokens": 11929,
+     "num_model_requests": 39,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790924400,
+   "end_time": 1790928000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 144362,
+     "output_tokens": 93835,
+     "input_cached_tokens": 32481,
+     "num_model_requests": 108,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 48397,
+     "output_tokens": 31458,
+     "input_cached_tokens": 10889,
+     "num_model_requests": 36,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790928000,
+   "end_time": 1790931600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 179060,
+     "output_tokens": 116389,
+     "input_cached_tokens": 40288,
+     "num_model_requests": 134,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 51969,
+     "output_tokens": 33780,
+     "input_cached_tokens": 11693,
+     "num_model_requests": 38,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790931600,
+   "end_time": 1790935200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 412415,
+     "output_tokens": 268069,
+     "input_cached_tokens": 92793,
+     "num_model_requests": 309,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 138864,
+     "output_tokens": 90262,
+     "input_cached_tokens": 31244,
+     "num_model_requests": 104,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790935200,
+   "end_time": 1790938800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 307271,
+     "output_tokens": 199726,
+     "input_cached_tokens": 69136,
+     "num_model_requests": 230,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 137331,
+     "output_tokens": 89265,
+     "input_cached_tokens": 30899,
+     "num_model_requests": 102,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790938800,
+   "end_time": 1790942400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 168012,
+     "output_tokens": 109208,
+     "input_cached_tokens": 37802,
+     "num_model_requests": 126,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 144255,
+     "output_tokens": 93766,
+     "input_cached_tokens": 32457,
+     "num_model_requests": 108,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790942400,
+   "end_time": 1790946000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 352638,
+     "output_tokens": 229214,
+     "input_cached_tokens": 79343,
+     "num_model_requests": 264,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 42059,
+     "output_tokens": 27338,
+     "input_cached_tokens": 9463,
+     "num_model_requests": 31,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790946000,
+   "end_time": 1790949600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 137937,
+     "output_tokens": 89659,
+     "input_cached_tokens": 31035,
+     "num_model_requests": 103,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 96585,
+     "output_tokens": 62780,
+     "input_cached_tokens": 21731,
+     "num_model_requests": 72,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790949600,
+   "end_time": 1790953200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 125587,
+     "output_tokens": 81631,
+     "input_cached_tokens": 28257,
+     "num_model_requests": 94,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 97671,
+     "output_tokens": 63486,
+     "input_cached_tokens": 21976,
+     "num_model_requests": 73,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790953200,
+   "end_time": 1790956800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 292686,
+     "output_tokens": 190246,
+     "input_cached_tokens": 65854,
+     "num_model_requests": 219,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 91214,
+     "output_tokens": 59289,
+     "input_cached_tokens": 20523,
+     "num_model_requests": 68,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790956800,
+   "end_time": 1790960400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 255747,
+     "output_tokens": 166235,
+     "input_cached_tokens": 57543,
+     "num_model_requests": 191,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 60130,
+     "output_tokens": 39084,
+     "input_cached_tokens": 13529,
+     "num_model_requests": 45,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790960400,
+   "end_time": 1790964000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 514376,
+     "output_tokens": 334344,
+     "input_cached_tokens": 115734,
+     "num_model_requests": 385,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 112883,
+     "output_tokens": 73374,
+     "input_cached_tokens": 25398,
+     "num_model_requests": 84,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790964000,
+   "end_time": 1790967600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 361013,
+     "output_tokens": 234659,
+     "input_cached_tokens": 81228,
+     "num_model_requests": 270,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 142945,
+     "output_tokens": 92914,
+     "input_cached_tokens": 32162,
+     "num_model_requests": 107,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790967600,
+   "end_time": 1790971200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 173643,
+     "output_tokens": 112868,
+     "input_cached_tokens": 39069,
+     "num_model_requests": 130,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 53401,
+     "output_tokens": 34711,
+     "input_cached_tokens": 12015,
+     "num_model_requests": 40,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790971200,
+   "end_time": 1790974800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 194051,
+     "output_tokens": 126133,
+     "input_cached_tokens": 43661,
+     "num_model_requests": 145,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 42720,
+     "output_tokens": 27768,
+     "input_cached_tokens": 9612,
+     "num_model_requests": 32,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790974800,
+   "end_time": 1790978400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 173122,
+     "output_tokens": 112529,
+     "input_cached_tokens": 38952,
+     "num_model_requests": 129,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 42185,
+     "output_tokens": 27420,
+     "input_cached_tokens": 9491,
+     "num_model_requests": 31,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790978400,
+   "end_time": 1790982000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 161165,
+     "output_tokens": 104757,
+     "input_cached_tokens": 36262,
+     "num_model_requests": 120,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 45531,
+     "output_tokens": 29595,
+     "input_cached_tokens": 10244,
+     "num_model_requests": 34,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790982000,
+   "end_time": 1790985600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 183738,
+     "output_tokens": 119430,
+     "input_cached_tokens": 41341,
+     "num_model_requests": 137,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 55624,
+     "output_tokens": 36155,
+     "input_cached_tokens": 12515,
+     "num_model_requests": 41,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790985600,
+   "end_time": 1790989200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 148421,
+     "output_tokens": 96473,
+     "input_cached_tokens": 33394,
+     "num_model_requests": 111,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 53632,
+     "output_tokens": 34861,
+     "input_cached_tokens": 12067,
+     "num_model_requests": 40,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790989200,
+   "end_time": 1790992800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 186961,
+     "output_tokens": 121524,
+     "input_cached_tokens": 42066,
+     "num_model_requests": 140,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 40275,
+     "output_tokens": 26178,
+     "input_cached_tokens": 9061,
+     "num_model_requests": 30,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790992800,
+   "end_time": 1790996400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 160093,
+     "output_tokens": 104060,
+     "input_cached_tokens": 36021,
+     "num_model_requests": 120,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 47179,
+     "output_tokens": 30666,
+     "input_cached_tokens": 10615,
+     "num_model_requests": 35,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1790996400,
+   "end_time": 1791000000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 143352,
+     "output_tokens": 93179,
+     "input_cached_tokens": 32254,
+     "num_model_requests": 107,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 39651,
+     "output_tokens": 25773,
+     "input_cached_tokens": 8921,
+     "num_model_requests": 29,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791000000,
+   "end_time": 1791003600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 199793,
+     "output_tokens": 129866,
+     "input_cached_tokens": 44953,
+     "num_model_requests": 149,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 36917,
+     "output_tokens": 23996,
+     "input_cached_tokens": 8306,
+     "num_model_requests": 27,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791003600,
+   "end_time": 1791007200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 171189,
+     "output_tokens": 111273,
+     "input_cached_tokens": 38517,
+     "num_model_requests": 128,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 58905,
+     "output_tokens": 38288,
+     "input_cached_tokens": 13253,
+     "num_model_requests": 44,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791007200,
+   "end_time": 1791010800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 188753,
+     "output_tokens": 122690,
+     "input_cached_tokens": 42469,
+     "num_model_requests": 141,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 52611,
+     "output_tokens": 34197,
+     "input_cached_tokens": 11837,
+     "num_model_requests": 39,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791010800,
+   "end_time": 1791014400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 141358,
+     "output_tokens": 91882,
+     "input_cached_tokens": 31805,
+     "num_model_requests": 106,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 59758,
+     "output_tokens": 38842,
+     "input_cached_tokens": 13445,
+     "num_model_requests": 44,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791014400,
+   "end_time": 1791018000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 180668,
+     "output_tokens": 117434,
+     "input_cached_tokens": 40650,
+     "num_model_requests": 135,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 48269,
+     "output_tokens": 31375,
+     "input_cached_tokens": 10860,
+     "num_model_requests": 36,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791018000,
+   "end_time": 1791021600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 453761,
+     "output_tokens": 294945,
+     "input_cached_tokens": 102096,
+     "num_model_requests": 340,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 50790,
+     "output_tokens": 33013,
+     "input_cached_tokens": 11427,
+     "num_model_requests": 38,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791021600,
+   "end_time": 1791025200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 419810,
+     "output_tokens": 272876,
+     "input_cached_tokens": 94457,
+     "num_model_requests": 314,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 149749,
+     "output_tokens": 97337,
+     "input_cached_tokens": 33693,
+     "num_model_requests": 112,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791025200,
+   "end_time": 1791028800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 292755,
+     "output_tokens": 190290,
+     "input_cached_tokens": 65869,
+     "num_model_requests": 219,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 147211,
+     "output_tokens": 95687,
+     "input_cached_tokens": 33122,
+     "num_model_requests": 110,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791028800,
+   "end_time": 1791032400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 344593,
+     "output_tokens": 223985,
+     "input_cached_tokens": 77533,
+     "num_model_requests": 258,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 54274,
+     "output_tokens": 35278,
+     "input_cached_tokens": 12211,
+     "num_model_requests": 40,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791032400,
+   "end_time": 1791036000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 218284,
+     "output_tokens": 141884,
+     "input_cached_tokens": 49113,
+     "num_model_requests": 163,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 104004,
+     "output_tokens": 67603,
+     "input_cached_tokens": 23401,
+     "num_model_requests": 78,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791036000,
+   "end_time": 1791039600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 127111,
+     "output_tokens": 82622,
+     "input_cached_tokens": 28600,
+     "num_model_requests": 95,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 87794,
+     "output_tokens": 57066,
+     "input_cached_tokens": 19753,
+     "num_model_requests": 65,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791039600,
+   "end_time": 1791043200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 350889,
+     "output_tokens": 228077,
+     "input_cached_tokens": 78950,
+     "num_model_requests": 263,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 46717,
+     "output_tokens": 30366,
+     "input_cached_tokens": 10511,
+     "num_model_requests": 35,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791043200,
+   "end_time": 1791046800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 281743,
+     "output_tokens": 183133,
+     "input_cached_tokens": 63392,
+     "num_model_requests": 211,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 132779,
+     "output_tokens": 86306,
+     "input_cached_tokens": 29875,
+     "num_model_requests": 99,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791046800,
+   "end_time": 1791050400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 245253,
+     "output_tokens": 159414,
+     "input_cached_tokens": 55182,
+     "num_model_requests": 183,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 141217,
+     "output_tokens": 91791,
+     "input_cached_tokens": 31773,
+     "num_model_requests": 105,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791050400,
+   "end_time": 1791054000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 362925,
+     "output_tokens": 235901,
+     "input_cached_tokens": 81658,
+     "num_model_requests": 272,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 59457,
+     "output_tokens": 38647,
+     "input_cached_tokens": 13377,
+     "num_model_requests": 44,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791054000,
+   "end_time": 1791057600,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 178599,
+     "output_tokens": 116089,
+     "input_cached_tokens": 40184,
+     "num_model_requests": 133,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 53255,
+     "output_tokens": 34616,
+     "input_cached_tokens": 11982,
+     "num_model_requests": 39,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791057600,
+   "end_time": 1791061200,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 150353,
+     "output_tokens": 97729,
+     "input_cached_tokens": 33829,
+     "num_model_requests": 112,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 48753,
+     "output_tokens": 31689,
+     "input_cached_tokens": 10969,
+     "num_model_requests": 36,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791061200,
+   "end_time": 1791064800,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 125013,
+     "output_tokens": 81258,
+     "input_cached_tokens": 28128,
+     "num_model_requests": 93,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 50577,
+     "output_tokens": 32875,
+     "input_cached_tokens": 11379,
+     "num_model_requests": 37,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791064800,
+   "end_time": 1791068400,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 132253,
+     "output_tokens": 85964,
+     "input_cached_tokens": 29756,
+     "num_model_requests": 99,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 47771,
+     "output_tokens": 31051,
+     "input_cached_tokens": 10748,
+     "num_model_requests": 35,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  },
+  {
+   "object": "bucket",
+   "start_time": 1791068400,
+   "end_time": 1791072000,
+   "results": [
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 136150,
+     "output_tokens": 88497,
+     "input_cached_tokens": 30633,
+     "num_model_requests": 102,
+     "model": "gpt-5.6-luna",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    },
+    {
+     "object": "organization.usage.completions.result",
+     "input_tokens": 45680,
+     "output_tokens": 29692,
+     "input_cached_tokens": 10278,
+     "num_model_requests": 34,
+     "model": "gpt-5.6-terra",
+     "project_id": null,
+     "user_id": null,
+     "api_key_id": null,
+     "batch": null
+    }
+   ]
+  }
+ ],
+ "has_more": false,
+ "next_page": null,
+ "synthetic": true
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.1.1 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.2 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -16,7 +16,7 @@ import types
 # savings bands shown in the report (public ranges only) and the dated price table
 BANDS_JSON = r"""{
   "about": "Public savings bands for the scanner report (option C, 10-17 15:3x): per switch-on overlap row, a range only. The per-cell measured table (material, pairs, exact rates) stays private in hive/private/cells_measured.json and never ships. Each band covers every measured cell of its row (failed-edit re-call cost included where call records exist, 10-19 BANDS-UNIFY), rounded outward to 5 points (rounding step is a design value). selfcheck.py checks that the bands still cover the private table.",
-  "measured": {"ko": "공개 문서 3종(상품 설명·의약품 허가사항 개정·법령 조문 개정), 실호출, 실패한 편집의 전량 재호출 비용 포함(상품 설명은 호출 기록이 없어 미포함), 2026-10",
+  "measured": {"ko": "공개 문서 3종(상품 설명·의약품 허가사항 개정·법령 조문 개정), 실호출, 실패한 고쳐 쓰기를 처음부터 다시 쓴 비용 포함(상품 설명은 호출 기록이 없어 미포함), 2026-10",
                "en": "three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10"},
   "switch": {"min_overlap": 0.78, "min_answer_tokens": 200},
   "overlap_bands": [["<0.60", 0.0, 0.60], ["0.60-0.78", 0.60, 0.78], ["0.78-0.95", 0.78, 0.95], [">=0.95", 0.95, 1.01]],
@@ -64,14 +64,17 @@ CACHE_JSON = r"""{
    "min_tokens_rule": {"gpt_version_at_least": [5, 6], "min_tokens": 1024},
    "min_tokens_before_rule": null,
    "read_multiple": [0.10, 0.05],
-   "write_multiple": {"default": 1.25},
+   "write_multiple": {"default": 1.25, "12h": 2.5},
+   "write_multiple_source": "developers.openai.com prompt-caching guide, read 2026-10-24: 1.25x the uncached input rate for the default 30-minute lifetime; a 12-hour minimum lifetime at 2.5x (Responses API)",
    "usage_fields": ["usage.input_tokens_details.cached_tokens", "usage.input_tokens_details.cache_write_tokens"]
   },
   "gemini": {
    "supported": true,
    "match": ["gemini"],
    "implicit_min_tokens": [4096, 2048],
-   "min_tokens_by_model": {},
+   "min_tokens_by_model": {"gemini-4-argon": 4096, "gemini-3-8-flash": 4096, "gemini-3-6-flash": 4096,
+                           "gemini-3-1-pro-preview": 4096, "gemini-2-5-flash": 2048, "gemini-2-5-pro": 2048},
+   "min_tokens_source": "ai.google.dev/gemini-api/docs/caching implicit-caching minimums, page 'Last updated 2026-10-23 UTC', read 2026-10-24; model codes from the models page",
    "read_multiple": [0.10],
    "write_multiple": null,
    "valid_until": "2026-12-01",
@@ -226,6 +229,24 @@ models:
     cached_input_per_1m_usd: 0.10
     output_per_1m_usd: 5.00
     tiktoken_encoding: cl100k_base
+
+  # PRICE-ROWS-B4, checked 2026-10-24 (platform.claude.com pricing "Claude Sonnet 4": $3 / $15, cache hits $0.30).
+  # Bedrock on-demand is the same rate (AWS price list JSON, every region listed) -- the scanner prices a Bedrock id
+  # of this model through this row (BEDROCK_SAME_RATE).
+  claude-sonnet-4-20250514:
+    input_per_1m_usd: 3.00
+    cached_input_per_1m_usd: 0.30
+    output_per_1m_usd: 15.00
+    tiktoken_encoding: cl100k_base
+
+  # PRICE-ROWS-B4, checked 2026-10-24: Gemini API paid tier (ai.google.dev/gemini-api/docs/pricing) and Vertex AI
+  # (<= 200K input) give the same text rates: $0.30 input, $0.03 cached, $2.50 output (thinking included).
+  # Audio input ($1.00) and the cache storage fee per hour are not modeled.
+  gemini-2.5-flash:
+    input_per_1m_usd: 0.30
+    cached_input_per_1m_usd: 0.03
+    output_per_1m_usd: 2.50
+    tiktoken_encoding: o200k_base
 
 # Local ONNX embedding model (worker/classifier.py, models/multilingual-minilm/)
 # runs on-box with no per-token API cost today. Leave this at 0.0 unless
@@ -474,6 +495,7 @@ ESCI + MFDS real calls): output -43..-91% and positive cost saving inside, ~0 or
 fixed choice, not fitted per customer yet (BB-3: declared).
 """
 
+import math
 import statistics
 
 
@@ -511,6 +533,84 @@ def use_diff(stats, draft_tokens, switch=SWITCH):
 def is_on(overlap, answer_tokens, switch=SWITCH):
     """The cell rule for one pair (scanner section 2/3)."""
     return overlap >= switch["min_overlap"] and answer_tokens >= switch["min_answer_tokens"]
+
+
+# Two serving guards after the switch is on, here so the engine (hive/serving/route.py, autokey.py) and the scanner's
+# engine replay use one source (SCAN-ENGINE-ALIGN, 10-23). The measurement history of each is at route.py's
+# NEW_TEXT_FULL comment and autokey.diff_allowed.
+NEW_TEXT_FULL = 0.5  # design value (T4-14a): new request tokens >= this x draft tokens -> a full write
+
+# The re-send window (RS-1, measurement history at route.py RESEND_WINDOW) and the rule fitting it per tenant / per
+# log (RS-3 / RS-4): one source for route.py, fit.py, server / proposals MT_WINDOW (K16) and the scanner (ONE-SOURCE).
+RESEND_WINDOW = 600  # seconds
+RESEND_GRID = [60, 300, 600, 1800, 3600]  # seconds; the RS-1 design grid
+RESEND_MIN = 200  # design value (RS-3): from this many gaps the point pick is used even when it is not determined
+RESEND_COVER = 0.9  # the RS-1 rule: the smallest grid value covering this share of the gaps
+RESEND_Z = 1.96  # SAMPLE-WILSON (R20, 10-23): 95% Wilson bounds on a grid value's covered share
+
+
+def _wilson(k, n, z=RESEND_Z):
+    """95% Wilson score interval of k covered out of n -> (low, high)."""
+    p, z2 = k / n, z * z
+    c = (p + z2 / (2 * n)) / (1 + z2 / n)
+    h = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / (1 + z2 / n)
+    return c - h, c + h
+
+
+def cover_window(gaps, default=RESEND_WINDOW, n_min=RESEND_MIN, grid=None, cover=RESEND_COVER):
+    """The re-send window from a tenant's (or a log's) own gaps: the smallest grid value covering `cover` of them (the
+    RS-1 rule). SAMPLE-WILSON (R20, 10-23): the number of gaps needed is the data's, not a fixed count -- below n_min
+    the pick is used when it is determined both ways (its covered share's 95% Wilson low >= cover and the next smaller
+    grid value's high < cover), else the default stays; from n_min gaps the point pick is used as before. Gaps over the
+    largest grid value are not counted (not a regenerate). -> {"window_s", "status", "n_gaps", "min_gaps", "rule"};
+    min_gaps is about how many gaps this spread needs (n_min when it would not be determined before)."""
+    grid = RESEND_GRID if grid is None else grid
+    g = [x for x in gaps if 0 <= x <= grid[-1]]
+    n = len(g)
+    res = {"window_s": default, "status": "default", "n_gaps": n, "min_gaps": n_min, "rule": "too_few"}
+    if not n:
+        return res
+    i = next(j for j, x in enumerate(grid) if sum(v <= x for v in g) / n >= cover)
+    if n >= n_min:
+        res.update(window_s=grid[i], status="fitted", rule="point")
+        return res
+    k = sum(v <= grid[i] for v in g)
+    kb = sum(v <= grid[i - 1] for v in g) if i else None
+
+    def determined(m):  # the same shares on m gaps
+        return _wilson(k * m / n, m)[0] >= cover and (kb is None or _wilson(kb * m / n, m)[1] < cover)
+    if determined(n):
+        res.update(window_s=grid[i], status="fitted", rule="determined", min_gaps=n)
+        return res
+    res["min_gaps"] = next((m for m in range(n + 1, n_min) if determined(m)), n_min)
+    return res
+
+
+def _squash(t):
+    return "".join((t or "").split())
+
+
+def draft_in(header, draft):
+    """The draft appears in the request text, whitespace ignored (long enough to be the document, not a phrase)."""
+    d = _squash(draft)
+    return len(d) >= 200 and d in _squash(header)
+
+
+def draft_in_tokens(request_tokens, draft_tokens):
+    """draft_in for logs that keep only per-token hashes (--hashify): the draft's token sequence less its first and
+    last token (those can split differently against the text around them) appears contiguously in the request's.
+    An approximation of the text rule (whitespace is not ignored here); HASH-GUARDS measured how often they agree."""
+    inner = [str(t) for t in draft_tokens[1:-1]]
+    if not inner:
+        return False
+    return "\x1f" + "\x1f".join(inner) + "\x1f" in "\x1f" + "\x1f".join(str(t) for t in request_tokens) + "\x1f"
+
+
+def new_text_count(request_counts, draft_counts, frame=None):
+    """The new_text guard's count from token multisets: the draft's copy in the request is taken out, then every
+    token the draft also holds, then the tenant frame -- what is left is text the edits would have to write."""
+    rest = request_counts - draft_counts - draft_counts
+    return sum((rest - frame).values()) if frame else sum(rest.values())
 
 
 # ====================================================================================================
@@ -686,23 +786,27 @@ unstable serialization of the request prefix. Shared by the scanner (hive/scan) 
 
   failed(...)         a call the vendor did not complete (HTTP >= 400, a failed status, an error object)
   truncated(...)      an answer cut at the token limit (finish / stop reason, else output >= max_tokens)
-  prefix_blocks(req)  the request prefix the vendor caches: tool definitions and system instructions
+  prefix_blocks(req)  the request prefix the vendor caches: tool definitions, a structured-output schema (KNIFE-2) and
+                      system instructions
   block_hashes(req)   per block: hash of the serialization as sent (key order kept) and of the key-sorted form.
                       One sorted hash with several as-sent hashes = the same block serialized differently, so the
-                      vendor's prompt cache holds it as several entries (Anthropic lists "unstable tool_use JSON key
-                      ordering (Swift, Go)" and OpenAI "tools (names/descriptions/schemas/ordering)" among the causes
-                      of cache misses in their prompt caching documents)
-  normalize_prefix    the engine's answer to that: the same blocks with every object's keys sorted. Lists keep their
-                      order, strings are not touched, so the model reads the same content
+                      vendor's prompt cache holds it as several entries (Anthropic's prompt caching document: "some
+                      languages (for example, Swift, Go) randomize key order during JSON conversion, breaking caches",
+                      checked 2026-10-22; OpenAI's settings table, tools row: "Changes tool names, descriptions,
+                      schemas, ordering, or tool-specific instructions.", checked 2026-10-22)
+  normalize_prefix    the engine's answer to that: the same blocks with every object's keys sorted, except the order of
+                      a schema's "properties" (tool parameters and structured output: the model writes fields in
+                      that order). Lists keep their order, strings are not touched, so the model reads the same content
 
 Standard library only, no network code.
 """
 
+import collections
 import hashlib
 import json
 import re
 
-FAIL_STATUS = {"failed", "error", "cancelled", "canceled", "expired"}
+FAIL_STATUS = {"failed", "failure", "error", "cancelled", "canceled", "expired", "timeout", "timed_out"}  # failure: LiteLLM
 OK_STATUS = {"completed", "succeeded", "success", "ok", "incomplete", "in_progress"}
 # finish / stop reasons that mean "cut at the token limit": OpenAI Chat "length", Anthropic and Bedrock "max_tokens",
 # OpenAI Responses incomplete_details.reason "max_output_tokens", Gemini "MAX_TOKENS"
@@ -748,7 +852,12 @@ def failed(code=None, status=None, error=None, error_seen=False):
 
 
 def truncated(finish=None, max_tokens=None, output_tokens=None):
-    """True / False / None (not known). The finish reason decides when present; else output_tokens >= max_tokens."""
+    """True / False / None (not known). The finish reason decides when present; else output_tokens >= max_tokens.
+    E1-TRUNC (10-23): a cap of one token is never a cut -- it is a single-token read (a Yes/No class read through
+    logprobs, commerce E1 [synthetic]); the vendor still says "length" there, and the scanner called 94% of that
+    bill cut answers."""
+    if _wnum(max_tokens) == 1:
+        return False
     if isinstance(finish, str) and finish.strip():
         return finish.strip() in TRUNC_REASONS
     m, o = _wnum(max_tokens), _wnum(output_tokens)
@@ -781,6 +890,12 @@ def prefix_blocks(req):
         if req.get(k):
             out.append(("tools", req[k]))
             break
+    sc = _schema_of(req)
+    if sc is not None:
+        # KNIFE-2 (PM 10-23 18:10): a structured-output schema is part of OpenAI's cached prefix ("text.format ... Adds
+        # output-format instructions and the requested schema", prompt-caching guide read 2026-10-23). The guide does
+        # not say where it sits; after tools and before system is a design value
+        out.append(("schema", sc))
     for k in ("system", "instructions", "systemInstruction", "system_instruction"):
         if req.get(k):
             out.append(("system", req[k]))
@@ -798,13 +913,76 @@ def _wh(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
 
 
+def _schema_sorted(v):
+    """A JSON Schema with every object's keys sorted and every "required" list sorted (a set in JSON Schema)."""
+    if isinstance(v, dict):
+        return {k: (sorted(v[k], key=str) if k == "required" and isinstance(v[k], list) else _schema_sorted(v[k]))
+                for k in sorted(v)}
+    if isinstance(v, list):
+        return [_schema_sorted(x) for x in v]
+    return v
+
+
+def _schema_field(req):
+    """(the dict holding the schema, its key) of a structured-output request (Chat Completions response_format
+    json_schema, Responses text.format json_schema), or (None, None)."""
+    if not isinstance(req, dict):
+        return None, None
+    rf = req.get("response_format")
+    tf = (req.get("text") or {}).get("format") if isinstance(req.get("text"), dict) else None
+    for f in (rf, tf):
+        if isinstance(f, dict) and f.get("type") == "json_schema":
+            return (f, "json_schema") if isinstance(f.get("json_schema"), dict) else (f, None)
+    return None, None
+
+
+def _schema_of(req):
+    f, k = _schema_field(req)
+    return None if f is None else f[k] if k else f
+
+
+def _schema_keep_order(v):
+    """KNIFE-2 A layer: a JSON Schema with every object's keys sorted except the order of a "properties" object (its
+    values are still sorted inside). OpenAI writes the answer's fields in the order of "properties", so that order is
+    the answer's; the other keys' order (type, description, required, additionalProperties ...) is not. Lists stay
+    as sent."""
+    if isinstance(v, dict):
+        return {k: ({p: _schema_keep_order(x) for p, x in v[k].items()} if k == "properties" and isinstance(v[k], dict)
+                    else _schema_keep_order(v[k])) for k in sorted(v)}
+    if isinstance(v, list):
+        return [_schema_keep_order(x) for x in v]
+    return v
+
+
+def _block_canonical(name, v):
+    """The key-sorted form of a prefix block, as text: a schema keeps its field order (_schema_keep_order)."""
+    if isinstance(v, str):
+        return v
+    if name in ("schema", "tools"):  # TOOL-ORDER-A: tool parameter schemas keep their field order too
+        return json.dumps(_schema_keep_order(v), ensure_ascii=False, separators=(",", ":"))
+    return wdump(v, canonical=True)
+
+
+def schema_blocks(req):
+    """[(name, as-sent hash, fully sorted hash, characters)] for a structured-output schema in a request. Fully sorted =
+    keys, "required" and the field order of "properties" sorted -- "the same schema, any order", the B-layer form.
+    The schema is also a prefix block (prefix_blocks), whose key-sorted hash keeps the field order (the A layer, what
+    normalize_prefix sends); the difference between the two is what fixing the field order would add, which changes
+    the answer's field order and so is the customer's call."""
+    v = _schema_of(req)
+    if v is None:
+        return []
+    raw = wdump(v)
+    return [("schema", _wh(raw), _wh(json.dumps(_schema_sorted(v), ensure_ascii=False, separators=(",", ":"))), len(raw))]
+
+
 def block_hashes(req):
     """[(name, as-sent hash, key-sorted hash, characters)] per prefix block. A string block has nothing to sort, so
     its two hashes are equal."""
     out = []
     for name, v in prefix_blocks(req):
         raw = v if isinstance(v, str) else wdump(v)
-        can = v if isinstance(v, str) else wdump(v, canonical=True)
+        can = _block_canonical(name, v)
         out.append((name, _wh(raw), _wh(can), len(raw)))
     return out
 
@@ -820,14 +998,17 @@ def first_split(a, b):
 
 def normalize_prefix(req):
     """(request with its prefix blocks key-sorted, whether anything changed). Only the blocks of prefix_blocks are
-    touched; for Chat Completions system/developer messages only their content is."""
+    touched; for Chat Completions system/developer messages only their content is; a structured-output schema keeps
+    the order of its fields (_schema_keep_order)."""
     if not isinstance(req, dict):
         return req, False
     out, changed = dict(req), False
     for k in ("tools", "toolConfig", "system", "instructions", "systemInstruction", "system_instruction"):
         v = req.get(k)
         if isinstance(v, (dict, list)):
-            s = _wsorted(v)
+            # TOOL-ORDER-A (10-24): a tool's parameter schema is a schema too -- the model writes a call's arguments in
+            # the order of its "properties", as it writes a structured answer's fields, so that order is kept
+            s = _schema_keep_order(v) if k in ("tools", "toolConfig") else _wsorted(v)
             if wdump(s) != wdump(v):
                 out[k], changed = s, True
     msgs = req.get("messages")
@@ -841,6 +1022,17 @@ def normalize_prefix(req):
                     m, changed = dict(m, content=c), True
             new.append(m)
         out["messages"] = new
+    f, k = _schema_field(req)
+    if f is not None:  # KNIFE-2: the schema's keys sorted, its field order kept (the answer is unchanged)
+        v = f[k] if k else f
+        s = _schema_keep_order(v)
+        if wdump(s) != wdump(v):
+            g = dict(f, **{k: s}) if k else s
+            if req.get("response_format") is f:
+                out["response_format"] = g
+            else:
+                out["text"] = dict(req["text"], format=g)
+            changed = True
     return out, changed
 
 
@@ -883,19 +1075,24 @@ def _converse_fields(model):
     return ()
 
 
-def mark_cache_converse(req, model):
+def mark_cache_converse(req, model, ttl=None):
     """(request with one cachePoint block after its fixed prefix, where) for a Bedrock Converse body whose model
     accepts one (CONVERSE_CACHEPOINT) and that holds no cachePoint yet; (req, None) otherwise. The block is appended
-    to system, else to toolConfig.tools; nothing else changes."""
+    to system, else to toolConfig.tools; nothing else changes. ttl "1h" adds "ttl": "1h" to the block for Claude
+    models ttl_1h_ok lets through (Bedrock prompt-caching page, read 2026-10-22: Converse takes it in cachePoint;
+    Nova and the Claude 3 line are 5-minute only), else the block stays the 5-minute default."""
     fields = _converse_fields(model)
     if not isinstance(req, dict) or not fields or "cachePoint" in wdump(req):
         return req, None
+    cp = {"type": "default"}
+    if ttl == "1h" and "claude" in (model or "").lower() and ttl_1h_ok("bedrock", model):
+        cp["ttl"] = "1h"
     sysv = req.get("system")
     if "system" in fields and isinstance(sysv, list) and sysv:
-        return dict(req, system=sysv + [{"cachePoint": {"type": "default"}}]), "system"
+        return dict(req, system=sysv + [{"cachePoint": cp}]), "system"
     tc = req.get("toolConfig")
     if "tools" in fields and isinstance(tc, dict) and isinstance(tc.get("tools"), list) and tc["tools"]:
-        return dict(req, toolConfig=dict(tc, tools=tc["tools"] + [{"cachePoint": {"type": "default"}}])), "tools"
+        return dict(req, toolConfig=dict(tc, tools=tc["tools"] + [{"cachePoint": cp}])), "tools"
     return req, None
 
 
@@ -988,6 +1185,59 @@ def mark_cache_responses(req):
         "developer"
 
 
+def mark_cache_chat(req):
+    """Azure OpenAI Chat Completions (GPT-5.6+): (request in explicit cache mode with one breakpoint at the end of its
+    leading system / developer messages, where) -- Azure's prompt-caching page (read 2026-10-22) lists breakpoints on
+    Chat Completions `text` parts. Only when every system / developer message leads (so the breakpoint ends the whole
+    fixed prefix) and the body sets no cache options of its own; a string content becomes one text part with the same
+    text. (req, None) otherwise. OpenAI's own page says nothing of Chat Completions breakpoints, so the caller keeps
+    this to Azure."""
+    if not isinstance(req, dict) or "prompt_cache_options" in req or "prompt_cache_breakpoint" in wdump(req):
+        return req, None
+    msgs = req.get("messages")
+    if not isinstance(msgs, list):
+        return req, None
+    n = 0
+    while n < len(msgs) and isinstance(msgs[n], dict) and msgs[n].get("role") in ("developer", "system"):
+        n += 1
+    if not n or any(isinstance(m, dict) and m.get("role") in ("developer", "system") for m in msgs[n:]):
+        return req, None
+    m = msgs[n - 1]
+    c = m.get("content")
+    mark = {"mode": "explicit"}
+    if isinstance(c, str) and c:
+        c = [{"type": "text", "text": c, "prompt_cache_breakpoint": mark}]
+    elif isinstance(c, list) and c and isinstance(c[-1], dict) and c[-1].get("type") == "text":
+        c = c[:-1] + [dict(c[-1], prompt_cache_breakpoint=mark)]
+    else:
+        return req, None
+    return dict(req, messages=msgs[:n - 1] + [dict(m, content=c)] + msgs[n:], prompt_cache_options={"mode": "explicit"}), \
+        "system"
+
+
+def cache_off_responses(req):
+    """OA-CACHE-OFF: (the request in OpenAI's explicit cache mode with no breakpoint, "none") for a Responses body that
+    sets no prompt_cache_options / prompt_cache_breakpoint; (req, None) otherwise. "When no explicit breakpoints are
+    placed, the request does not use prompt caching or create cache writes." (OpenAI prompt-caching guide, read
+    2026-10-22; Azure's page says the same of Standard deployments, not of PTU-M or earlier models.) Text and order are
+    unchanged; which models take it is the caller's check (GPT-5.6+)."""
+    if not isinstance(req, dict) or "prompt_cache_options" in req or "prompt_cache_breakpoint" in wdump(req):
+        return req, None
+    return dict(req, prompt_cache_options={"mode": "explicit"}), "none"
+
+
+def responses_fixed_units(req):
+    """K14 auto-on: how many prompt units (prompt_units / prefix_chain order) end at the explicit breakpoint
+    mark_cache_responses would put on this Responses body -- the prefix blocks (tools, instructions) plus its leading
+    developer / system input messages -- or None where it would put none."""
+    if mark_cache_responses(req)[1] is None:
+        return None
+    n = 0
+    while n < len(req["input"]) and isinstance(req["input"][n], dict) and req["input"][n].get("role") in ("developer", "system"):
+        n += 1
+    return len(prefix_blocks(req)) + n
+
+
 def _at(d, path):
     for p in path:
         if isinstance(p, int):
@@ -1027,10 +1277,25 @@ FLEX_MODELS = ("gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol", "gpt-5.6
                "gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini")
 
 
-def flex_ok(model):
-    """The model is on the Flex table: the id itself or the id with a dated snapshot suffix (gpt-5-mini-2025-08-07)."""
+# FLEX-LONG (10-24, site 01:1x): the same table prices gpt-5.5 / gpt-5.4 / gpt-5.4-pro above 272K input tokens too
+# (long-context columns, still half of standard), but gpt-5.5-pro's long-context Flex cells are all "-": no Flex
+# price over 272K input tokens ("Short context: <=272K input tokens", pricing page read 2026-10-24)
+FLEX_SHORT_ONLY = ("gpt-5.5-pro",)
+FLEX_SHORT_TOKENS = 272_000
+
+
+def _flex_base(model):
     m = (model or "").lower()
-    return any(m == f or re.fullmatch(re.escape(f) + r"-\d{4}-\d{2}-\d{2}", m) for f in FLEX_MODELS)
+    return next((f for f in FLEX_MODELS if m == f or re.fullmatch(re.escape(f) + r"-\d{4}-\d{2}-\d{2}", m)), None)
+
+
+def flex_ok(model, input_tokens=None):
+    """The model is on the Flex table: the id itself or the id with a dated snapshot suffix (gpt-5-mini-2025-08-07).
+    input_tokens (the call's whole input, cache included), when known: a short-context-only model over the line is not."""
+    f = _flex_base(model)
+    if f is None:
+        return False
+    return not (f in FLEX_SHORT_ONLY and input_tokens is not None and input_tokens > FLEX_SHORT_TOKENS)
 
 
 def set_max_tokens(req, n):
@@ -1044,14 +1309,30 @@ def set_max_tokens(req, n):
     return req, None
 
 
+_CACHE_MIN_MEMO = {}  # (model, id(constants)) -> (constants, answer); the scanner asks ~28 times per row
+
+
 def cache_min(model, constants):
     """(vendor, minimum cacheable prompt tokens or None, status) from the cache constants
     (hive/scan/cache_constants.json). status: "known", "unsupported" (the vendor does not cache), "unknown" (vendor known, this model's line not listed) or
-    "unrecognised" (no vendor matches) -- never guessed."""
+    "unrecognised" (no vendor matches) -- never guessed. Memoised per constants object: the tables are loaded once and
+    never changed in place, so a different object (a reload) gets its own answers."""
+    k = (model, id(constants))
+    hit = _CACHE_MIN_MEMO.get(k)
+    if hit is not None and hit[0] is constants:
+        return hit[1]
+    if len(_CACHE_MIN_MEMO) > 4096:  # model ids are few; this only bounds a pathological log
+        _CACHE_MIN_MEMO.clear()
+    out = _cache_min(model, constants)
+    _CACHE_MIN_MEMO[k] = (constants, out)
+    return out
+
+
+def _cache_min(model, constants):
     if not model:
         return None, None, "unrecognised"
     m = model.lower().rsplit("/", 1)[-1]
-    m = re.sub(r"^(?:(?:us|eu|apac|global)\.)?(?:anthropic\.)?", "", m)
+    m = re.sub(r"^(?:(?:us|us-gov|eu|apac|global)\.)?(?:anthropic\.|openai\.)?", "", m)  # Bedrock profiles / ids
     while True:  # Bedrock / Vertex suffixes stack: -20250929-v1:0, @20240620
         n = re.sub(r"(?:@.*|:.*|-v\d+|-\d{8})$", "", m)
         if n == m:
@@ -1131,11 +1412,28 @@ PROMPT_BLOCK = 64  # design value: a prompt given only as text / token hashes is
 SHARE_TTLS = (300, 3600)  # 5 minutes (the vendors' default cache life) and 1 hour (Anthropic's long option)
 
 
+def _unmarked(v):
+    """UNIT-MARK (10-24): a unit as the cache sees it -- cache_control marks dropped (moving the mark to the newest
+    message, the incremental-chat pattern, does not change the cached content) and a content list of one text block
+    read as that text (the same message sent as a string the next turn)."""
+    if isinstance(v, list):
+        return [_unmarked(x) for x in v]
+    if not isinstance(v, dict):
+        return v
+    d = {k: _unmarked(x) for k, x in v.items() if k != "cache_control"}
+    c = d.get("content")
+    if isinstance(c, list) and len(c) == 1 and isinstance(c[0], dict) and c[0].get("type") in ("text", "input_text") \
+            and set(c[0]) <= {"type", "text"} and isinstance(c[0].get("text"), str):
+        d["content"] = c[0]["text"]
+    return d
+
+
 def prompt_units(req):
-    """[unit string] of a request body in cache order, or [] when the body holds no conversation."""
+    """[unit string] of a request body in cache order, or [] when the body holds no conversation. Units are hashed as
+    the cache sees them (_unmarked)."""
     if not isinstance(req, dict):
         return []
-    out = [wdump(v) if not isinstance(v, str) else v for _, v in prefix_blocks(req)]
+    out = [wdump(_unmarked(v)) if not isinstance(v, str) else v for _, v in prefix_blocks(req)]
     sys_in_msgs = not any(req.get(k) for k in ("system", "instructions", "systemInstruction", "system_instruction"))
     for k in ("messages", "input", "contents"):
         v = req.get(k)
@@ -1145,7 +1443,213 @@ def prompt_units(req):
             for m in v:
                 if sys_in_msgs and k == "messages" and isinstance(m, dict) and m.get("role") in ("system", "developer"):
                     continue  # already the system block of prefix_blocks
-                out.append(m if isinstance(m, str) else wdump(m))
+                out.append(m if isinstance(m, str) else wdump(_unmarked(m)))
+    return out
+
+
+def request_text(req):
+    """The text of a request body, in order: system / instructions, then each message's, input item's or Gemini
+    content's text (text blocks and nested content; tool schemas and other non-text fields left out). "" if none.
+    The scanner reads it as the prompt of a log line that has a request body and no prompt; the collector hashes it."""
+    out = []
+
+    def take(v):
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, list):
+            for b in v:
+                take(b) if isinstance(b, str) else take_block(b)
+        elif isinstance(v, dict):
+            take_block(v)
+
+    def take_block(b):
+        if not isinstance(b, dict):
+            return
+        if isinstance(b.get("text"), str):
+            out.append(b["text"])
+        for k in ("content", "parts"):
+            if k in b:
+                take(b[k])
+    if isinstance(req, dict):
+        for k in ("system", "instructions", "systemInstruction", "system_instruction", "messages", "input", "contents"):
+            take(req.get(k))
+    return "\n".join(out)
+
+
+# SANDWICH (PM 10-23 18:05): a block that stays the same between calls but sits after a block that changes is never
+# read from the cache -- the cache is a prefix. B shape: a fixed part at the front and another fixed block after the
+# changing part (AWS Bedrock Knowledge Bases' default template: instructions, search results, question, output-format
+# instructions); A shape: nothing fixed at the front at all (LlamaIndex / Vespa defaults: context, instructions,
+# question in one user message). Moving the block changes the order the model reads, so it is the customer's call
+# (B layer), as with the 7-4 values. Design values:
+SANDWICH_FIXED_SHARE = 0.9  # a paragraph is fixed for a template when it is in at least this share of its calls
+SANDWICH_MIN_CALLS = 20  # calls of one template before its paragraphs are judged
+
+
+def message_paragraphs(req):
+    """[(hash, characters)] of the paragraphs (blank-line separated, stripped) of a request's message text, in order --
+    the conversation after the prefix blocks (system messages that are the system block are left out), or []."""
+    if not isinstance(req, dict):
+        return []
+    sys_in_msgs = not any(req.get(k) for k in ("system", "instructions", "systemInstruction", "system_instruction"))
+    out = []
+    for k in ("messages", "input", "contents"):
+        v = req.get(k)
+        items = [v] if isinstance(v, str) else v if isinstance(v, list) else []
+        for m in items:
+            if sys_in_msgs and k == "messages" and isinstance(m, dict) and m.get("role") in ("system", "developer"):
+                continue
+            t = m if isinstance(m, str) else request_text({"messages": [m]})
+            for p in re.split(r"\n\s*\n", t):
+                p = p.strip()
+                if p:
+                    out.append((_wh(p)[:16], len(p)))
+    return out
+
+
+def _last_user(req):
+    """(index, text) of a Messages / Chat Completions body's last user message when its content is a string or one
+    text block, else (None, None)."""
+    ms = req.get("messages") if isinstance(req, dict) else None
+    if not isinstance(ms, list):
+        return None, None
+    for i in range(len(ms) - 1, -1, -1):
+        m = ms[i]
+        if isinstance(m, dict) and m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, str):
+                return i, c
+            if isinstance(c, list) and len(c) == 1 and isinstance(c[0], dict) and c[0].get("type") == "text" \
+                    and isinstance(c[0].get("text"), str):
+                return i, c[0]["text"]
+            return None, None
+    return None, None
+
+
+def sandwich_paragraphs(req):
+    """SANDWICH-MOVE: [paragraph hash] of the last user message (message_paragraphs' hash), or []."""
+    _, t = _last_user(req)
+    return [_wh(p.strip())[:16] for p in re.split(r"\n\s*\n", t or "") if p.strip()]
+
+
+def sandwich_move(req, vendor, fixed):
+    """SANDWICH-MOVE (10-24, the engine knife for 7-4's sandwich; B layer, the tenant's switch): the last user
+    message's fixed paragraphs that come after its first changing one (hash in `fixed`, the template's learned set) are
+    moved to the end of the system block, so the cache can read them. Anthropic Messages: the system string gets them
+    after a blank line, a system list a text block; OpenAI Chat Completions: the first system / developer message (a
+    string) gets them, else a system message is put first. -> (body, paragraphs moved); (req, 0) when nothing moves.
+    The model reads them in another place, so the answer can change."""
+    i, t = _last_user(req)
+    if i is None or not fixed or vendor not in ("anthropic", "openai"):
+        return req, 0
+    paras = [p.strip() for p in re.split(r"\n\s*\n", t) if p.strip()]
+    keep, move, var = [], [], False
+    for p in paras:
+        f = _wh(p)[:16] in fixed
+        if not f:
+            var = True
+        (move if f and var else keep).append(p)
+    if not move or not keep:
+        return req, 0
+    moved = "\n\n".join(move)
+    ms = [dict(m) if isinstance(m, dict) else m for m in req["messages"]]
+    c = ms[i]["content"]
+    ms[i]["content"] = "\n\n".join(keep) if isinstance(c, str) else [dict(c[0], text="\n\n".join(keep))]
+    out = dict(req, messages=ms)
+    if vendor == "anthropic":
+        sy = req.get("system")
+        if isinstance(sy, list):
+            out["system"] = list(sy) + [{"type": "text", "text": moved}]
+        elif isinstance(sy, str) and sy:
+            out["system"] = sy + "\n\n" + moved
+        else:
+            out["system"] = moved
+    else:
+        if ms and isinstance(ms[0], dict) and ms[0].get("role") in ("system", "developer") and isinstance(ms[0].get("content"), str):
+            ms[0] = dict(ms[0], content=ms[0]["content"] + "\n\n" + moved)
+        else:
+            out["messages"] = [{"role": "system", "content": moved}] + ms
+    return out, len(move)
+
+
+def sandwich_value(items, constants):
+    """SANDWICH-MOVE (10-24, from the scanner's 7-4 pricing, one function for the scanner and the engine): items =
+    [(ts, model, prefix key, shape, front chars, tail chars, total chars, input tokens)] in time order, from sandwich().
+    Per (model, prefix, shape): a call within SHARE_TTLS[0] of the last one reads the moved block (and the front too
+    when the front alone was under the minimum but the two reach it) at the vendor's dearest read multiple; any other
+    call writes it. Tokens are the characters' share of the call's input. -> {model: {"tokens", "calls"}}"""
+    by = collections.defaultdict(lambda: {"tokens": 0.0, "calls": 0})
+    last = {}
+    for t, model, pkey, s, front, tail, tot, inp in items:
+        if not s or not tot:
+            continue
+        vendor, mn, st = cache_min(model, constants)
+        vc = (constants or {}).get("vendors", {}).get(vendor or "", {})
+        if st != "known" or not mn or not vc.get("read_multiple"):
+            continue
+        ft, tt = front / tot * inp, tail / tot * inp
+        part = tt if ft >= mn else (ft + tt) if ft + tt >= mn else 0.0
+        k = (model, pkey, s)
+        live = k in last and t - last[k] <= SHARE_TTLS[0]
+        last[k] = t
+        if not part:
+            continue
+        wm = vc.get("write_multiple") or {}
+        w = (wm.get("5m") or wm.get("default") or 1.0) if isinstance(wm, dict) else 1.0
+        b = by[model]
+        b["tokens"] += part * (1 - max(vc["read_multiple"])) if live else -part * (w - 1)
+        b["calls"] += 1
+    return dict(by)
+
+
+def sandwich(calls, fixed_share=SANDWICH_FIXED_SHARE, min_calls=SANDWICH_MIN_CALLS):
+    """calls: [(template key, front fixed characters (the prefix blocks), [(paragraph hash, characters)], total
+    characters, row)] -> per call (row, shape "A" / "B" / None, front fixed characters incl. leading fixed paragraphs,
+    trailing fixed characters, total characters). A template's fixed paragraphs are those in >= fixed_share of its
+    calls; the trailing ones are fixed paragraphs after the first paragraph that is not. A template with fewer than
+    min_calls calls is not judged (None)."""
+    groups = {}
+    for c in calls:
+        groups.setdefault(c[0], []).append(c)
+    # CALLCENTER (10-24): a chain sent as one user message with no system (the vendor's ticket guide: classify,
+    # summarise, draft, guard) shares one template key, and no step's fixed paragraphs reach fixed_share of the mixed
+    # group. A call is sub-grouped by its first paragraph (the step's role line) when that paragraph recurs and comes as
+    # a bundle -- another paragraph of the call is with it in >= fixed_share of its calls and the other way round, as a
+    # role line and its instructions are. A retrieved passage that recurs (a popular KB article) has no such partner,
+    # and a chat's oldest kept message moves on before it recurs; both stay put
+    split = {}
+    for key, cs in groups.items():
+        sets = [{h for h, _ in c[2]} for c in cs]
+        cnt = collections.Counter(h for s in sets for h in s)
+        tops = [c[2][0][0] if c[2] and cnt[c[2][0][0]] >= min_calls else None for c in cs]
+        co = collections.Counter((t, h) for t, s in zip(tops, sets) if t for h in s
+                                 if h != t and min(cnt[h], cnt[t]) >= fixed_share * max(cnt[h], cnt[t]))
+        bundled = {t for (t, h), n in co.items() if n >= fixed_share * max(cnt[t], cnt[h])}
+        for c, t in zip(cs, tops):
+            split.setdefault((key, t if t in bundled else None), []).append(c)
+    groups = split
+    out = []
+    for cs in groups.values():
+        if len(cs) < min_calls:
+            out += [(c[4], None, 0, 0, c[3]) for c in cs]
+            continue
+        seen = {}
+        for c in cs:
+            for h in {h for h, _ in c[2]}:
+                seen[h] = seen.get(h, 0) + 1
+        fixed = {h for h, n in seen.items() if n >= fixed_share * len(cs)}
+        for c in cs:
+            lead, tail, var = 0, 0, False
+            for h, n in c[2]:
+                if h not in fixed:
+                    var = True
+                elif var:
+                    tail += n
+                else:
+                    lead += n
+            front = c[1] + lead
+            shape = None if not tail else ("A" if front == 0 else "B")
+            out.append((c[4], shape, front, tail, c[3]))
     return out
 
 
@@ -1162,7 +1666,20 @@ def prefix_chain(units, seed=""):
     return hs, cs
 
 
-PREFIX_GAPS = 5  # K2-TTL design value: start-to-start gaps kept per fixed prefix; their median picks the mark's life
+PREFIX_GAPS = 3  # K2-TTL: start-to-start gaps kept per fixed prefix; their median picks the mark's life. Was 5 (design
+# value); 3 since PG3 (engine 30f1ef4, PM 10-24 22:49 1) -- the engine's default, so the scanner's 1-hour replay reads the same
+
+
+def ttl_1h_ok(upstream, model):
+    """Whether a Claude request may carry the 1-hour cache mark on this upstream. Anthropic API: yes. Vertex and
+    Bedrock list it per model and name the Claude 3 line as 5-minute only (Vertex Claude prompt-caching page: 3.7
+    Sonnet, 3.5 Sonnet v2, 3.5 Sonnet, 3 Opus; Bedrock prompt-caching table: 3.7 Sonnet, 3.5 Sonnet v2 -- "Including
+    the field for these models can result in a ValidationException"; both read 2026-10-22). There, an unknown model
+    gets 5 minutes."""
+    if upstream not in ("vertex", "bedrock"):
+        return True
+    m = (model or "").lower()
+    return bool(m) and not re.search(r"claude-3(?:[-@.:]|$)", m)
 
 
 def ttl_choice(gaps, auto_1h=False):
@@ -1180,11 +1697,12 @@ def ttl_choice(gaps, auto_1h=False):
     return "5m" if gaps[-1] <= SHARE_TTLS[0] else None
 
 
-def ttl_replay(calls):
+def ttl_replay(calls, gaps_kept=PREFIX_GAPS):
     """K2-TTL replayed on a log (scanner 7-8, zero calls). calls = [(ts seconds, model, fixed prefix key, fixed prefix
     tokens)] in time order. Two policies: "mark_5m" = cache_mark alone (5-minute marks), "auto" = with cache_ttl
-    "auto" (ttl_choice). A marked call reads when its entry is alive (a read refreshes the entry for its own life),
-    else writes it for the mark's life; an unmarked call neither reads nor writes. Tokens only, not priced."""
+    "auto" (ttl_choice on the last gaps_kept gaps; the engine fits it per tenant, PREFIX-GAPS-FIT). A marked call
+    reads when its entry is alive (a read refreshes the entry for its own life), else writes it for the mark's life;
+    an unmarked call neither reads nor writes. Tokens only, not priced."""
     out = {"calls": len(calls), "fixed_tokens": round(sum(c[3] for c in calls))}
     for pol, auto in (("mark_5m", False), ("auto", True)):
         seen, entry, n = {}, {}, {"read": 0.0, "write_5m": 0.0, "write_1h": 0.0}
@@ -1192,7 +1710,7 @@ def ttl_replay(calls):
             k = (model, key)
             last, gaps = seen.get(k, (None, ()))
             if last is not None:
-                gaps = (gaps + (t - last,))[-PREFIX_GAPS:]
+                gaps = (gaps + (t - last,))[-gaps_kept:]
             seen[k] = (t, gaps)
             ttl = ttl_choice(gaps, auto)
             if not ttl:
@@ -1209,17 +1727,456 @@ def ttl_replay(calls):
     return out
 
 
+def chain_mark_replay(calls, life=None):
+    """VALUE-CHAIN (10-24): 5-minute marks on the system and the last message, replayed on whole prompt chains. calls
+    = [(ts seconds, model, chain hashes (cumulative, one per prompt unit), cumulative tokens)] in time order. A call
+    reads the deepest of its chain positions with a live entry (a read refreshes it) and writes the rest up to its last
+    unit; entries sit where calls put their marks (the system's end and the last unit). Tokens only, not priced."""
+    life = life or SHARE_TTLS[0]
+    entry, n = {}, {"read": 0.0, "write_5m": 0.0, "tokens": 0.0}
+    for t, model, hs, cum in calls:
+        if not hs:
+            continue
+        rd = 0.0
+        for j in range(len(hs) - 1, -1, -1):
+            e = entry.get((model, hs[j]))
+            if e is not None and t <= e:
+                rd = cum[j]
+                entry[(model, hs[j])] = t + life
+                break
+        n["read"] += rd
+        n["write_5m"] += cum[-1] - rd
+        n["tokens"] += cum[-1]
+        for j in {0, len(hs) - 1}:
+            if entry.get((model, hs[j]), -1) < t:
+                entry[(model, hs[j])] = t + life
+    return {k: round(v) for k, v in n.items()}
+
+
+def tool_union_chain_value(calls, constants):
+    """TOOL-CHAIN (10-24): the tool_union knife's value on whole prompt chains, per model, in input-token equivalents.
+    calls = [(ts, model, template key, unit hashes (tools first), cumulative tokens per unit, tool hashes [[hash,
+    chars]], tool tokens, order key)] of marked Anthropic calls. The 5-minute marking (chain_mark_replay) as sent vs with
+    each template's union tool list as the first unit (one hash per template; the union's tokens at the call's own tokens
+    per character). The scanner and the engine's autoknife call this same function. -> {model: value}"""
+    if not calls:
+        return {}
+    uni = collections.defaultdict(dict)
+    for c in calls:
+        uni[(c[1], c[2])].update({h: n for h, n in c[5]})
+
+    def chains(union):
+        out = []
+        for c in sorted(calls, key=lambda c: (c[0], c[7])):
+            own = sum(n for _, n in c[5]) or 1
+            u = uni[(c[1], c[2])]
+            add = (sum(u.values()) - own) * c[6] / own if union else 0.0
+            h, hs = hashlib.blake2b(str(c[1]).encode("utf-8"), digest_size=8).digest(), []
+            for i, x in enumerate(c[3]):
+                xx = ("union|" + str(c[2]) + "|" + ",".join(map(str, sorted(u)))) if union and i == 0 else x
+                h = hashlib.blake2b(h + str(xx).encode("utf-8"), digest_size=8).digest()
+                hs.append(h)
+            out.append((c[0], c[1], hs, [v + add for v in c[4]]))
+        return out
+    a, b, res = chains(False), chains(True), {}
+    for m in {c[1] for c in calls}:
+        vendor = cache_min(m, constants)[0] if constants else None
+        vc = (constants or {}).get("vendors", {}).get(vendor or "", {})
+        if not vc.get("read_multiple"):
+            continue
+        r = max(vc["read_multiple"])
+        wm = vc.get("write_multiple") or {}
+        if vendor == "openai":  # TOOL-CHAIN-OA: implicit caching (pn_openai_replay's model): every prefix position
+            w = (wm.get("default") or 1.0) if isinstance(wm, dict) else 1.0  # readable, unread input written at w
+            mn = cache_min(m, constants)[1] or 0
+            ca, cu = implicit_chain_replay([x for x in a if x[1] == m], mn), implicit_chain_replay([x for x in b if x[1] == m], mn)
+        else:
+            w = (wm.get("5m") or 1.25) if isinstance(wm, dict) else 1.25
+            ca, cu = chain_mark_replay([x for x in a if x[1] == m]), chain_mark_replay([x for x in b if x[1] == m])
+        res[m] = (ca["read"] * r + ca["write_5m"] * w) - (cu["read"] * r + cu["write_5m"] * w)
+    return res
+
+
+def implicit_chain_replay(calls, min_tokens=0, life=None):
+    """TOOL-CHAIN-OA (10-24): OpenAI's implicit caching on whole prompt chains (chain_mark_replay's shape): a call reads
+    its deepest chain position seen within `life` (OPENAI_IMPLICIT_LIFE) at or over min_tokens, and writes the rest;
+    every position of every call becomes readable (no marks). Tokens only, not priced; write_5m is the written count."""
+    life = life or OPENAI_IMPLICIT_LIFE
+    last, n = {}, {"read": 0.0, "write_5m": 0.0, "tokens": 0.0}
+    for t, model, hs, cum in calls:
+        rd = 0.0
+        for j in range(len(hs) - 1, -1, -1):
+            lt = last.get((model, hs[j]))
+            if lt is not None and t - lt <= life and cum[j] >= min_tokens:
+                rd = cum[j]
+                break
+        n["read"] += rd
+        n["write_5m"] += cum[-1] - rd
+        n["tokens"] += cum[-1]
+        for h in hs:
+            last[(model, h)] = t
+    return {k: round(v) for k, v in n.items()}
+
+
 OPENAI_IMPLICIT_LIFE = 1800  # GPT-5.6+ default cache life "30m" (OpenAI prompt-caching guide, read 2026-10-21)
 
+# CACHE-KEY-SPLIT (PM 10-23 17:55 knob 5): OpenAI models before GPT-5.6 route the cache by prompt_cache_key, and the
+# guide (read 2026-10-23) says: "For busy groups, aim for about 15 [calls] per minute in total across all prefixes
+# using each key. Partition higher-volume traffic across multiple keys using a stable, deterministic mapping." From
+# GPT-5.6 on "OpenAI handles cache routing automatically; the key is not needed". The key changes routing only, not
+# the answer: A layer.
+KEY_RPM = 15  # the guide's "about 15 [calls] per minute" per key
+KEY_LIFE = 300  # s: earlier models' entries "typically remain active for around 5 to 10 minutes of inactivity" -- the low end
+KEY_READ_UPPER = 0.5  # the dearest cached-input / input ratio among the earlier models in the dated price table (gpt-4o)
+KEY_HIT_SHARE = 0.5  # a call read its prefix when its cached tokens reach this share of it (design value)
 
-def tail_unread(calls, life=OPENAI_IMPLICIT_LIFE):
+
+def key_split_ok(model, constants):
+    """Whether the cache-key split applies: an OpenAI model before GPT-5.6 (no known minimum in cache_constants.json
+    -- GPT-5.6+ carry the 1,024 rule)."""
+    v, _, st = cache_min(model, constants) if model and constants else (None, None, None)
+    return v == "openai" and st != "known"
+
+
+def key_shards(rate_60s):
+    """Keys a fixed prefix needs at this many calls in the last minute: one per KEY_RPM."""
+    return max(1, -(-int(rate_60s) // KEY_RPM))
+
+
+def cache_key(model, prefix_can, tail_seed, n):
+    """The prompt_cache_key the engine sends: one base per (model, fixed prefix hashes), shard = a stable hash of
+    the call's first unit after the prefix (a conversation keeps its shard while n holds) mod n."""
+    base = _wh("%s|%s" % (model or "", "|".join(prefix_can)))[:12]
+    s = int(_wh(tail_seed or "")[:8], 16) % n if n > 1 else 0
+    return "lk-%s-%d" % (base, s)
+
+
+def fixed_units(req):
+    """How many prompt units (prompt_units order) are the request's fixed part: the prefix blocks plus the leading
+    developer / system messages of a Responses "input" list."""
+    if not isinstance(req, dict):
+        return 0
+    n = len(prefix_blocks(req))
+    inp = req.get("input")
+    if isinstance(inp, list):
+        for m in inp:
+            if not (isinstance(m, dict) and m.get("role") in ("developer", "system")):
+                break
+            n += 1
+    return n
+
+
+def set_cache_key(req, key):
+    """(request with prompt_cache_key, True), or (req, False) where the customer set one (theirs is kept)."""
+    if not isinstance(req, dict) or "prompt_cache_key" in req:
+        return req, False
+    return dict(req, prompt_cache_key=key), True
+
+
+def key_split_value(calls, read_ratio=KEY_READ_UPPER):
+    """The cache-key split replayed on (ts, model, prefix key, L prefix tokens, row, cached tokens) of earlier-model
+    OpenAI calls without a key of their own, per (model, prefix) in time order. A prefix is cacheable once an earlier
+    call read it (cached >= KEY_HIT_SHARE x L -- the log's own evidence, no documented minimum for these models). A
+    call is a spread miss when its prefix is cacheable, came back within KEY_LIFE, more than KEY_RPM calls of it fell
+    in the last minute, and it read less than KEY_HIT_SHARE x L: the split would have read the rest. Each extra key
+    pays one cold call per KEY_LIFE stretch. Input-token equivalents at the dearest read ratio (the smaller gain).
+    -> {"calls", "spread_misses", "value_net", "value_upper"}"""
+    groups = collections.defaultdict(list)
+    for c in calls:
+        groups[(c[1], c[2])].append(c)
+    out = {"calls": len(calls), "spread_misses": 0, "value_upper": 0, "value_net": 0}
+    up = cost = 0.0
+    for cs in groups.values():
+        cs.sort(key=lambda c: c[0])
+        seen, last, win, extra = False, None, collections.deque(), {}
+        for t, _, _, L, _, cached in cs:
+            while win and t - win[0] > 60:
+                win.popleft()
+            win.append(t)
+            n = key_shards(len(win))
+            read = (cached or 0) >= KEY_HIT_SHARE * L
+            if seen and last is not None and t - last <= KEY_LIFE and len(win) > KEY_RPM and not read:
+                out["spread_misses"] += 1
+                up += (L - (cached or 0)) * (1 - read_ratio)
+            for s in range(1, n):  # a shard first used, or cold again after KEY_LIFE, starts with one miss
+                if t - extra.get(s, -1e18) > KEY_LIFE:
+                    cost += L * (1 - read_ratio)
+                extra[s] = t
+            seen = seen or read
+            last = t
+    out.update(value_upper=round(up), value_net=round(up - cost))
+    return out
+
+
+# HISTORY-K (PM 10-23 17:55 knob 1): a conversation whose history is cut or summarised on every turn moves the cut
+# point every turn, so each call's prefix stops right after the fixed part and the history after it is prefilled
+# again. Character.AI moves the cut only every k turns and reports a 95% prefix cache rate (public case, not ours).
+HISTORY_GAP = 300  # s: a turn links to the conversation's last call within the 5-minute cache life (Anthropic default)
+HISTORY_MIN_SHARED = 2  # design value: history units a call shares with a conversation to be its next turn
+HISTORY_K_GRID = (1, 2, 4, 8)  # design value: k = move the cut every k-th rewrite; 1 = as sent
+
+
+def unit_hashes(req, units=None):
+    """Short hashes of a request's prompt units (prompt_units order, or the units given) for the ledger: hashes only,
+    no text."""
+    return [_wh(u)[:10] for u in (prompt_units(req) if units is None else units)]
+
+
+def history_read_ratio(model, constants):
+    """The dearest cache read multiple for the model's vendor (the smaller gain), KEY_READ_UPPER for OpenAI models
+    before GPT-5.6 (the price table's dearest), None where the vendor has none."""
+    v, _, st = cache_min(model, constants) if model and constants else (None, None, None)
+    if v == "openai" and st != "known":
+        return KEY_READ_UPPER
+    rm = ((constants or {}).get("vendors", {}).get(v, {}) or {}).get("read_multiple") or []
+    return max(rm) if rm else None
+
+
+def history_replay(calls, k, constants=None):
+    """Cut-every-k replayed on (ts, model, unit hashes, cumulative shares, row, prompt tokens, fixed units, cached
+    tokens) calls in time order (index 4 the ledger row, as autoknife's template halves read it). A call joins the open conversation (same model and fixed units, last call within
+    HISTORY_GAP) it shares the most history units with, at least HISTORY_MIN_SHARED. Against that conversation's last
+    call p it is a rewrite when their common prefix stops inside p's history, p's unit there is gone from the call and
+    a later unit of p is still in it (oldest turns cut or summarised, recent ones kept -- not an edit or a regenerate).
+    A rewrite counts once the conversation showed the vendor reads its history (a call read more than its fixed part),
+    or its fixed part on OpenAI (implicit caching runs to the end of the prompt). Its loss is p's tokens after the
+    common prefix, at (1 - r). With k > 1 only every k-th rewrite cuts: the others read that loss back and from then
+    on every call carries what was not cut, read at r. -> {"calls", "rewrites", "counted", "lost", "carry", "net"}"""
+    # SCAN-SLOW (10-23): open conversations indexed by (model, fixed units, history unit) -> the ones sharing a unit,
+    # and expired through a heap of last-call times -- the same pick as scanning every open conversation (most shared,
+    # then the latest last call, then the oldest conversation), linear instead of quadratic on single-turn traffic
+    import heapq
+    out = {"calls": len(calls), "rewrites": 0, "counted": 0, "lost": 0.0, "carry": 0.0, "net": 0.0}
+    post, exp, live, seq = collections.defaultdict(set), [], {}, 0
+    for t, m, uh, cs, _, n, nf, cached in calls:
+        r = history_read_ratio(m, constants)
+        if r is None or not uh or len(uh) != len(cs):
+            continue
+        while exp and t - exp[0][0] > HISTORY_GAP:  # the conversations whose last call is over the gap are dropped
+            ct, i = heapq.heappop(exp)
+            c = live.get(i)
+            if c is not None and c["t"] == ct:
+                for u in c["set"]:
+                    post[(c["m"], c["fix"], u)].discard(i)
+                del live[i]
+        hist, fix = set(uh[nf:]), tuple(uh[:nf])
+        sh = collections.Counter()
+        for u in hist:
+            for i in post.get((m, fix, u), ()):
+                sh[i] += 1
+        pick = max(((v, live[i]["t"], -i) for i, v in sh.items() if v >= HISTORY_MIN_SHARED), default=None)
+        if pick is None:
+            best = {"id": seq, "m": m, "fix": fix, "j": 0, "carry": 0.0, "reads": False, "set": set()}
+            live[seq] = best
+            seq += 1
+        else:
+            best = live[-pick[2]]
+            pu, pcs, pn = best["uh"], best["cs"], best["n"]
+            cp = 0
+            while cp < min(len(pu), len(uh)) and pu[cp] == uh[cp]:
+                cp += 1
+            if nf <= cp < len(pu) and pu[cp] not in hist and any(u in hist for u in pu[cp + 1:]):
+                out["rewrites"] += 1
+                if best["reads"]:
+                    out["counted"] += 1
+                    lost = pn * (1 - (pcs[cp - 1] if cp else 0.0))
+                    out["lost"] += lost * (1 - r)
+                    best["j"] += 1
+                    if best["j"] % k:  # not cut this time: the lost prefix is read back, what was cut is carried
+                        out["net"] += lost * (1 - r)
+                        best["carry"] += pn * sum(pcs[i] - (pcs[i - 1] if i else 0.0)
+                                                  for i in range(cp, len(pu)) if pu[i] not in hist)
+                    else:
+                        best["carry"] = 0.0
+            if best["carry"]:
+                out["carry"] += best["carry"] * r
+                out["net"] -= best["carry"] * r
+        fixed_tok = n * (cs[nf - 1] if nf else 0.0)
+        oa = cache_min(m, constants)[0] == "openai" if constants else False
+        if (cached or 0) > fixed_tok + 1 or (oa and nf and (cached or 0) >= KEY_HIT_SHARE * fixed_tok):
+            best["reads"] = True
+        for u in best["set"]:
+            post[(m, fix, u)].discard(best["id"])
+        for u in hist:
+            post[(m, fix, u)].add(best["id"])
+        best.update(t=t, uh=list(uh), cs=list(cs), n=n, set=hist)
+        heapq.heappush(exp, (t, best["id"]))
+    for f in ("lost", "carry", "net"):
+        out[f] = round(out[f])
+    return out
+
+
+def history_best(calls, constants=None):
+    """history_replay over HISTORY_K_GRID; the k whose net is largest (a tie keeps the smaller k, 1 = as sent).
+    -> {"k", "net", "grid": [(k, net)], "replay"}"""
+    grid = [(k, history_replay(calls, k, constants)) for k in HISTORY_K_GRID]
+    k, rep = max(grid, key=lambda g: (g[1]["net"], -g[0]))
+    return {"k": k, "net": rep["net"], "grid": [(g[0], g[1]["net"]) for g in grid], "replay": rep}
+
+
+# TOOL-UNION (PM 10-23 17:55 knob 3): one system prompt sent with a different tool subset per call starts every call's
+# cache over (tools come first in the prefix; Anthropic: a tool change invalidates tools, system and messages). Sending
+# the template's whole tool set every time and restricting what may be called (OpenAI tool_choice "allowed_tools";
+# Manus: mask, do not add or remove tools mid-loop) keeps one prefix -- the model then sees every tool: B layer.
+TOOL_LIFE = 300  # s: a prefix stays readable this long after its last call (Anthropic's default 5-minute life)
+
+
+def tool_hashes(req):
+    """[[10-hex hash of one key-sorted tool definition, its characters]] for a request's tool list, or None. Hashes and
+    sizes only, no text."""
+    ts = req.get("tools") if isinstance(req, dict) else None
+    if not isinstance(ts, list) or not ts:
+        return None
+    out = []
+    for x in ts:
+        d = json.dumps(x, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        out.append([_wh(d)[:10], len(d)])
+    return out
+
+
+TOOL_UNION_MAX = 128  # OpenAI's limit on tools in one call: a union past it is not sent
+
+
+def _tool_name(t, vendor):
+    """A function tool's name in a Responses body ({"type": "function", "name"}) or a Chat Completions one
+    ({"type": "function", "function": {"name"}}), else None."""
+    if not isinstance(t, dict) or t.get("type") != "function":
+        return None
+    n = t.get("name") if vendor == "responses" else (t.get("function") or {}).get("name")
+    return n if isinstance(n, str) else None
+
+
+def tool_union_ok(req, vendor="responses"):
+    """Whether a body can carry its template's whole tool set: OpenAI Responses or Chat Completions, function tools
+    only, each named, and the customer's tool_choice absent, "auto" or "required" -- the two allowed_tools modes
+    (OpenAI SDK types ToolChoiceAllowedParam / ChatCompletionAllowedToolsParam, read 2026-10-23). A choice naming one
+    function is the customer's and is left alone."""
+    ts = req.get("tools") if isinstance(req, dict) else None
+    if vendor not in ("responses", "openai") or not isinstance(ts, list) or not ts \
+            or req.get("tool_choice", "auto") not in ("auto", "required"):
+        return False
+    return all(_tool_name(t, vendor) is not None for t in ts)
+
+
+def tool_union_template(req):
+    """The template a body's tools belong to: its other prefix blocks' key-sorted hashes."""
+    return "|".join(can for name, _, can, _ in block_hashes(req) if name != "tools")
+
+
+def tool_union_apply(req, union, vendor="responses"):
+    """(body with the union's tools and an allowed_tools choice of its own, True), or (req, False) when the union is
+    the body's own set. The function-calling guide: use allowed_tools "but not modify the list of tools you pass in, so
+    you can maximize savings from prompt caching". Responses: {"type": "allowed_tools", "mode", "tools": [{"type":
+    "function", "name"}]}; Chat Completions: {"type": "allowed_tools", "allowed_tools": {"mode", "tools": [{"type":
+    "function", "function": {"name"}}]}}; mode = the customer's "required", else "auto"."""
+    own = [_tool_name(t, vendor) for t in req["tools"]]
+    if sorted(own) == sorted(_tool_name(t, vendor) for t in union):
+        return req, False
+    mode = "required" if req.get("tool_choice") == "required" else "auto"
+    if vendor == "responses":
+        tc = {"type": "allowed_tools", "mode": mode, "tools": [{"type": "function", "name": n} for n in own]}
+    else:
+        tc = {"type": "allowed_tools", "allowed_tools": {"mode": mode, "tools": [{"type": "function",
+                                                                                 "function": {"name": n}} for n in own]}}
+    return dict(req, tools=list(union), tool_choice=tc), True
+
+
+def tool_union_replay(calls, constants=None):
+    """The template's whole tool set on every call, replayed on (ts, model, template key, tool-set key, row, tool
+    hashes [[hash, chars]], tool tokens, fixed prefix tokens, cached tokens) calls. Per (model, template), in time
+    order: the union is every tool the window shows for it (the whole window first -- the larger cost). Once a call of
+    the template read its fixed prefix (cached >= KEY_HIT_SHARE of it), a call whose own tool set was not sent within
+    TOOL_LIFE but the template was gains its fixed prefix at (1 - r); every call then carries the union's other tools
+    (characters at the call's own tokens per character), at r when the template was sent within TOOL_LIFE, else at 1.
+    "switches" = calls whose tool set differs from the template's call before (a deploy shows as one per template).
+    -> {"calls", "templates", "tool_sets", "switches", "cold_sets", "gain", "cost", "net"}"""
+    groups = collections.defaultdict(list)
+    for c in calls:
+        groups[(c[1], c[2])].append(c)
+    out = {"calls": len(calls), "templates": 0, "tool_sets": 0, "switches": 0, "cold_sets": 0,
+           "gain": 0.0, "cost": 0.0, "net": 0.0}
+    for (m, _), cs in groups.items():
+        r = history_read_ratio(m, constants)
+        if r is None:
+            continue
+        cs.sort(key=lambda c: c[0])
+        union = {}
+        for c in cs:
+            for h, ch in c[5]:
+                union[h] = max(union.get(h, 0), ch)
+        u_chars = sum(union.values())
+        sets = {c[3] for c in cs}
+        out["templates"] += 1
+        out["tool_sets"] += len(sets)
+        last_any, last_set, prev_set, reads = None, {}, None, False
+        for t, _, _, tk, _, tools, ttok, ftok, cached in cs:
+            own = sum(ch for _, ch in tools)
+            warm = last_any is not None and t - last_any <= TOOL_LIFE
+            if prev_set is not None and tk != prev_set:
+                out["switches"] += 1
+            if reads and own:
+                if warm and not (tk in last_set and t - last_set[tk] <= TOOL_LIFE):
+                    out["cold_sets"] += 1
+                    out["gain"] += ftok * (1 - r)
+                out["cost"] += (u_chars - own) * (ttok / own) * (r if warm else 1.0)
+            if (cached or 0) >= KEY_HIT_SHARE * ftok > 0:
+                reads = True
+            last_any, last_set[tk], prev_set = t, t, tk
+    out["net"] = out["gain"] - out["cost"]
+    for f in ("gain", "cost", "net"):
+        out[f] = round(out[f])
+    return out
+
+
+def pn_openai_replay(calls, constants):
+    """OpenAI's implicit mode replayed on the fixed prefix only (a call reads its deepest live prefix head, at or over
+    the model's minimum, alive OPENAI_IMPLICIT_LIFE s after its last touch), once on the as-sent keys and once on
+    the key-sorted ones. A token read instead of written saves (1 - r) + (w - 1) of an input token on GPT-5.6+ (implicit
+    writes the whole unread input at w). r = the largest read multiple (the smaller gain). value_net = sorted -
+    as sent; tokens past the prefix are left out of both. calls = autoknife.pn_openai_calls' tuples (ts, model, as-sent
+    keys, sorted keys, row -- unused here --, prefix shares, prompt tokens); the scanner passes the same shape.
+    PN-AUTO-WIDE (10-22) in autoknife; here since FIX-USD-OA74 (10-23), one replay for the engine and the scanner."""
+    vc = (constants or {}).get("vendors", {}).get("openai", {})
+    rm = vc.get("read_multiple") or []
+    wm = vc.get("write_multiple") or {}
+    w = (wm.get("5m") or wm.get("default") or 1.0) if isinstance(wm, dict) else 1.0
+    if not rm:
+        return {"calls": len(calls), "value_net": 0}
+    r, life = max(rm), OPENAI_IMPLICIT_LIFE
+    reads = {}
+    for name, idx in (("as_sent", 2), ("sorted", 3)):
+        last, n_read = {}, 0.0
+        for c in calls:
+            t, m, keys, shares, n = c[0], c[1], c[idx], c[5], c[6]
+            mn = cache_min(m, constants)[1] or 0
+            rd = 0.0
+            for k, sh in zip(keys, shares):
+                lt = last.get((m, k))
+                if lt is None or t - lt > life:
+                    break
+                rd = sh * n
+            n_read += rd if rd >= mn else 0.0
+            for k in keys:
+                last[(m, k)] = t
+        reads[name] = n_read
+    d = reads["sorted"] - reads["as_sent"]
+    return {"calls": len(calls), "read_sorted": round(reads["sorted"]), "read_as_sent": round(reads["as_sent"]),
+            "value_net": round(d * ((1 - r) + (w - 1)))}
+
+
+def tail_unread(calls, life=OPENAI_IMPLICIT_LIFE, constants=None):
     """K14 (docs/K14-OPENAI-CACHE-1021.md section 3): under OpenAI's implicit mode (GPT-5.6+) a call writes its input
     from the end of what it read up to its last message. calls = [(ts seconds, model, chain hashes, chain shares,
     prompt tokens)] in time order (prefix_chain). A head is alive `life` s after its last touch (a read refreshes it).
     Of each call's written part, the share no later call of the same model reads (by matching that head while alive)
-    is unread. Returns token counts (written, unread), not priced."""
+    is unread. Returns token counts (written, unread), not priced. With constants, a call under the model's minimum
+    neither reads nor writes and a read under it does not count (as autoknife._implicit_rw; R19-PAIR 10-23 -- before,
+    a call the vendor never caches was counted as an unread write)."""
     last, writer, entries = {}, {}, []
     for t, model, hs, cs, inp in calls:
+        mn = (cache_min(model, constants)[1] or 0) if constants else 0
+        if inp < mn:
+            continue
         k = -1
         for i, h in enumerate(hs):
             lt = last.get((model, h))
@@ -1230,6 +2187,7 @@ def tail_unread(calls, life=OPENAI_IMPLICIT_LIFE):
             if w is not None:
                 w[0]["used"] = max(w[0]["used"], w[1])
         read = cs[k] * inp if k >= 0 else 0.0
+        read = read if read >= mn else 0.0
         e = {"from": read, "end": float(inp), "used": read}
         entries.append(e)
         for i, (h, c) in enumerate(zip(hs, cs)):
@@ -1249,7 +2207,8 @@ def shared_prefix(calls, constants):
     = sum over calls whose live 5-minute shared prefix L is under the vendor minimum M of (M - L): what it would take
     to reach the minimum (K1-a cache_min_gap). Counted, not priced."""
     last, sp = {}, {"calls": 0, "input_tokens": 0, "shared_all": 0, "calls_shared_300": 0, "judged_min_calls": 0,
-                    "below_min_tokens": 0, "below_min_calls": 0, "below_min_gap_tokens": 0}
+                    "below_min_tokens": 0, "below_min_calls": 0, "below_min_gap_tokens": 0,
+                    "over_min_input": 0, "over_min_reachable": 0}
     for T in SHARE_TTLS:
         sp["shared_%d" % T] = 0
     for t, model, inp, hs, cs in calls:
@@ -1267,6 +2226,11 @@ def shared_prefix(calls, constants):
             sp["shared_%d" % T] += alive[T] * inp
         sp["calls_shared_300"] += alive[300] > 0
         _, mn, st = cache_min(model, constants) if model and constants else (None, None, "no_model")
+        # HITLOW-CEIL (10-24): the 7-7 ceiling -- of the calls at or over the minimum, the input a perfect 5-minute
+        # cache could have read (a live shared prefix that itself reaches the minimum)
+        if st == "known" and inp >= mn:
+            sp["over_min_input"] += inp
+            sp["over_min_reachable"] += alive[300] * inp if alive[300] * inp >= mn else 0
         if st == "known" and alive[300]:
             sp["judged_min_calls"] += 1
             if alive[300] * inp < mn:
@@ -1283,7 +2247,193 @@ def shared_prefix(calls, constants):
             "below_min_share": sh("below_min_tokens"), "below_min_calls": sp["below_min_calls"],
             "judged_min_calls": sp["judged_min_calls"], "block_tokens": PROMPT_BLOCK,
             "below_min_tokens": sp["below_min_tokens"], "below_min_gap_tokens": sp["below_min_gap_tokens"],
-            "missed_tokens": missed}
+            "missed_tokens": missed,
+            "over_min_ceiling": sp["over_min_reachable"] / sp["over_min_input"] if sp["over_min_input"] else None}
+
+
+def pad_candidate(ts, model, pre, can, share, total, cache_read, constants, padded=0, est=0, pad_vendor=0):
+    """One call as a K1-a (b) padding candidate, or None. PAD-UNIFY (PM 10-23 07:36 (가)): the one definition the
+    scanner's 7-5 dollars, /admin/usage knives.k1a_pad and the autoknife k1a_pad state all use.
+      L      the call's fixed prefix (the request's prefix blocks: tools / system), share x total prompt tokens -- the
+             part the engine pads and marks (its pad block goes after the fixed part, the mark at its end), not a
+             longer shared conversation head that the pad's mark would not cover
+      only   Anthropic-family models with a known minimum M (the engine pads Anthropic calls only), 0 < L < M
+      skip   a call that already read the customer's own cache (nothing for the pad to add)
+      padded a call the engine padded (padded / est: its pad and pad-plus-prefix o200k counts, pad_vendor: the vendor's
+             cache read + write tokens on it) is judged on the customer's own request: the pad's vendor tokens come
+             off the total and its cache read is allowed (K1A-FLIP 10-22)
+    -> (ts, model, pre, L, can, M)"""
+    vendor, mn, st = cache_min(model, constants) if model and constants else (None, None, "no_model")
+    if vendor != "anthropic" or st != "known" or total is None or ts is None or not pre:
+        return None
+    pd = bool(padded) and bool(est)
+    if (cache_read or 0) > 0 and not pd:
+        return None
+    if pd:
+        total -= padded * (pad_vendor / est if pad_vendor > 0 else 1.0)
+    L = share * total
+    return (ts, model, tuple(pre), L, tuple(can), mn) if 0 < L < mn else None
+
+
+def pad_value(calls, constants, margin=1.0):
+    """K1-a (b) padding replayed on pad_candidate's calls, in time order (PAD-UNIFY; the engine's own rule): a fixed
+    prefix earns a 5-minute mark from its recent start-to-start gaps (ttl_choice on PREFIX_GAPS gaps -- so never on
+    its first sighting); a marked call within a live entry reads the padded M at the vendor's dearest read multiple r
+    (gain L - r x M), any other marked call writes it at the 5-minute write multiple w (loss w x M - L); an unmarked
+    call is left as it is (0). "calls" = candidates judged (the knife's population, its minimum-sample basis: an
+    unmarked candidate is evidence too), "marked" = reads + writes. Input-price tokens, not priced.
+    margin: the padded prefix is M x margin, as the engine pads (PAD_MARGIN, SCAN-LIVE 10-25: the scanner padded to M).
+    -> {"calls", "marked", "reads", "writes", "pad_tokens", "value_upper" (reads' gain only), "value_net"}"""
+    vc = (constants or {}).get("vendors", {}).get("anthropic", {})
+    rm = vc.get("read_multiple") or []
+    wm = vc.get("write_multiple") or {}
+    w = (wm.get("5m") or wm.get("default") or 1.0) if isinstance(wm, dict) else 1.0
+    out = {"calls": len(calls), "marked": 0, "reads": 0, "writes": 0, "pad_tokens": 0, "value_upper": 0, "value_net": 0}
+    if not rm:
+        return out
+    r = max(rm)  # the dearest read: the conservative side of the gain
+    seen, entry, up, net, pad = {}, {}, 0.0, 0.0, 0.0
+    for t, m, k, L, _, M in sorted(calls, key=lambda c: c[0]):
+        M = M * margin
+        key = (m, k)
+        last, gaps = seen.get(key, (None, ()))
+        if last is not None:
+            gaps = (gaps + (t - last,))[-PREFIX_GAPS:]
+        seen[key] = (t, gaps)
+        if not ttl_choice(gaps, False):
+            continue
+        pad += M - L
+        e = entry.get(key)
+        if e is not None and t <= e:
+            up += L - r * M
+            net += L - r * M
+            out["reads"] += 1
+        else:
+            net -= w * M - L
+            out["writes"] += 1
+        entry[key] = t + SHARE_TTLS[0]
+    out.update(marked=out["reads"] + out["writes"], pad_tokens=round(pad), value_upper=round(up), value_net=round(net))
+    return out
+
+
+# KNIFE-2 knife 1 (PM 10-23 18:10): bundling -- calls whose fixed prefix is under the vendor's cache minimum M sent as
+# one call that carries the prefix once and the calls' own parts after it. The prefix still repeats under M between
+# bundles, so the gain is not a cache read: it is the prefix sent once instead of n times. One call answering n items
+# changes the answer (each item is read next to the others, the answer comes back as a list), so this is the B layer:
+# the customer's call, never turned on by the engine. Design values, all of them:
+BUNDLE_GRID = (2, 4, 8, 16, 32, 50)  # bundle sizes judged; 50 = DeepL's texts per request (a vendor cap on the batching side)
+BUNDLE_WAIT = 60  # s: a bundle takes the same-prefix calls that start within this long of its first one
+BUNDLE_ITEM_IN = 10  # input tokens a bundle adds per item (its number and separator)
+BUNDLE_ITEM_OUT = 10  # output tokens a bundle adds per item (the number in the answer list)
+BUNDLE_OUT_CAP = 8000  # output tokens a bundle may carry (half of the 16k output many current models allow)
+BUNDLE_OUT_RATIO = 8  # output weighed at this many input tokens where no price list is at hand -- above the dated
+# table's dearest output / input ratio (6, 2026-10-18; autoknife MT_LOSS_R takes 8 the same way), the cost side's upper
+
+
+def bundle_candidate(ts, model, pre, share, total, out, stream, failed_, constants):
+    """One call as a bundling candidate, or None: a known-minimum model (any vendor in cache_constants.json), a fixed
+    prefix L = share x total prompt tokens with 0 < L < M, not streamed (a streamed answer is read as it comes), not
+    failed, with its output tokens known. -> (ts, model, prefix key, L, None, M, out); index 4 is where the engine
+    puts the ledger row (autoknife's template halves), as in pad_candidate's tuples"""
+    vendor, mn, st = cache_min(model, constants) if model and constants else (None, None, "no_model")
+    if st != "known" or not mn or total is None or ts is None or not pre or stream is True or failed_ or out is None:
+        return None
+    L = share * total
+    return (ts, model, tuple(pre), L, None, mn, out) if 0 < L < mn else None
+
+
+def bundle_value(calls, size, wait=BUNDLE_WAIT, out_cap=BUNDLE_OUT_CAP):
+    """Bundling replayed on bundle_candidate's calls: per (model, prefix), in time order, a bundle opens at a call and
+    takes the next ones that start within `wait` s of it, up to `size` calls and `out_cap` output tokens. A bundle of
+    n saves (n - 1) x L prompt tokens and adds n x BUNDLE_ITEM_IN of them and n x BUNDLE_ITEM_OUT output tokens; a
+    bundle of one is the call as sent (0). Tokens, per model, not priced.
+    -> {"calls", "bundled_calls", "bundles", "size", "by_model": {model: {"in_saved", "out_added"}}}"""
+    groups = collections.defaultdict(list)
+    for c in calls:
+        groups[(c[1], c[2])].append(c)
+    res = {"calls": len(calls), "bundled_calls": 0, "bundles": 0, "size": size, "by_model": {}}
+    for (m, _), cs in groups.items():
+        cs.sort(key=lambda c: c[0])
+        i = 0
+        while i < len(cs):
+            t0, n, o, L = cs[i][0], 1, cs[i][6], cs[i][3]
+            while (i + n < len(cs) and n < size and cs[i + n][0] - t0 <= wait and o + cs[i + n][6] <= out_cap):
+                o += cs[i + n][6]
+                L += cs[i + n][3]
+                n += 1
+            if n > 1:
+                b = res["by_model"].setdefault(m, {"in_saved": 0.0, "out_added": 0})
+                b["in_saved"] += L * (n - 1) / n - n * BUNDLE_ITEM_IN  # the bundle's mean prefix, sent once
+                b["out_added"] += n * BUNDLE_ITEM_OUT
+                res["bundled_calls"] += n
+                res["bundles"] += 1
+            i += n
+    for b in res["by_model"].values():
+        b["in_saved"] = round(b["in_saved"])
+    return res
+
+
+def bundle_best(calls, price=None, wait=BUNDLE_WAIT):
+    """bundle_value over BUNDLE_GRID; the size whose net is largest (a tie keeps the smaller size). price(model) ->
+    (input, output) per token or None; without a price the output is weighed at BUNDLE_OUT_RATIO input tokens.
+    -> {"size", "net" (input-token equivalents, or dollars with price), "priced", "grid": [(size, net)], "replay"}"""
+    def net(v):
+        s, ok = 0.0, True
+        for m, b in v["by_model"].items():
+            p = price(m) if price else None
+            if price and p is None:
+                ok = False
+                continue
+            s += (b["in_saved"] * p[0] - b["out_added"] * p[1]) if p else (b["in_saved"] - b["out_added"] * BUNDLE_OUT_RATIO)
+        return s, ok
+    grid, best = [], None
+    for k in BUNDLE_GRID:
+        v = bundle_value(calls, k, wait)
+        n, ok = net(v)
+        grid.append((k, n))
+        if best is None or n > best[1]:
+            best = (k, n, v, ok)
+    return {"size": best[0], "net": best[1], "priced": bool(price) and best[3], "grid": grid, "replay": best[2]} if best else None
+
+
+# 7-4 values (WASTE-3, 10-22): the fixed prefix with the values that change per call masked -- e-mail addresses, UUIDs,
+# long hex ids, digit runs (dates, times, order numbers, counts). Two calls whose masked prefix is the same but whose
+# key-sorted prefix differs carry the same template with different values in it: the vendor caches them apart.
+# Names and free words are not masked (no list of them here), so a name-only difference is not seen
+VALUE_MASKS = ((re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "<email>"),
+               (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<uuid>"),
+               (re.compile(r"\b[0-9a-fA-F]{12,}\b"), "<hex>"), (re.compile(r"\d+"), "0"))
+
+
+CACHE_MARK_SLOTS = 4  # Anthropic: at most 4 cache_control breakpoints per request (vendor document, not a design value)
+
+
+def cache_marks(v, depth=0):
+    """cache_control (Anthropic) / cachePoint (Bedrock Converse) markers in a request body."""
+    if depth > 12:
+        return 0
+    if isinstance(v, dict):
+        return sum((k in ("cache_control", "cachePoint")) + cache_marks(x, depth + 1) for k, x in v.items())
+    if isinstance(v, list):
+        return sum(cache_marks(x, depth + 1) for x in v)
+    return 0
+
+
+def value_masked(text):
+    for rx, sub in VALUE_MASKS:
+        text = rx.sub(sub, text)
+    return text
+
+
+def value_hashes(req):
+    """[(block name, value-masked hash, key-sorted hash)] per prefix block (prefix_blocks), 24 hex characters each --
+    the scanner's 7-4 values check and the ledger's "pmask" use the same."""
+    out = []
+    for name, v in prefix_blocks(req):
+        can = _block_canonical(name, v)
+        out.append((name, hashlib.sha256(value_masked(can).encode("utf-8")).hexdigest()[:24],
+                    hashlib.sha256(can.encode("utf-8")).hexdigest()[:24]))
+    return out
 
 
 # ====================================================================================================
@@ -1329,7 +2479,7 @@ from array import array
 
 
 
-VERSION = "1.1.1"
+VERSION = "1.4.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 # a package resource, so it also loads from inside a zipapp (engine.pyz)
 CELLS = json.loads(BANDS_JSON)
@@ -1338,13 +2488,11 @@ CACHE = json.loads(CACHE_JSON)
 DEFAULT_PRICING = "(embedded)"
 AUTO_K, AUTO_TAU, AUTO_NGRAM = 128, 0.75, 2  # o200k token n-gram shingles
 CONTROL_LINES = 2000  # design value: request tokens kept from the first lines only, as axis-3 shuffle controls (bounded memory)
-RESEND_WINDOW = 600  # seconds; same value as hive/serving/route.py RESEND_WINDOW (RS-1: the serving path sends an identical
-# request re-sent within this window to the vendor in full, so the engine replay and the zero-call section leave it out)
-# RS-4: like the serving refit (hive/serving/fit.py fit_resend, RS-3), the window is fitted from this log's own
-# same-prompt consecutive pairs when there are enough of them; otherwise the default above (same rule and constants)
-RESEND_GRID = [60, 300, 600, 1800, 3600]  # seconds; the RS-1 design grid
-RESEND_MIN = 200  # design value (RS-3)
-RESEND_COVER = 0.9  # the RS-1 rule
+# RESEND_WINDOW (hive/switch.py, the serving path's own): RS-1 -- the serving path sends an identical request re-sent
+# within this window to the vendor in full, so the engine replay and the zero-call section leave it out. RS-4: like the
+# serving refit (hive/serving/fit.py fit_resend, RS-3), the window is fitted from this log's own same-prompt
+# consecutive pairs when there are enough of them; otherwise that default (RESEND_GRID / RESEND_MIN / RESEND_COVER,
+# the same source)
 ADDED_MIN = 50  # design value (browser side, 10-18): axis 3 is also reported over pairs with at least this many added tokens
 DIGITS = re.compile(r"\d+")
 # "the call itself loses" (T4-7, 10-18): where the draft already is the next answer, calling loses to the draft as is.
@@ -1366,10 +2514,11 @@ SPAN_TIERS = 3  # design value: document-length tiers at this log's own tertiles
 # pairs); 100 and 300 pick the same spans on both materials (MFDS 2/3/3, law 1/1/1). Spans >= 2 still rest on 10-14%
 # of a tier's span-1 pairs (only chains with that many changed versions) -- the report's own caveat.
 SPAN_MIN_PAIRS = 100
-# design value (PM 10-20 10:32, from SMALL-TRAFFIC 1020 9e45cdf): under this many calls the span is not fitted at all,
-# span 1 for every tier -- on law subsamples no tier filled SPAN_MIN_PAIRS below 600 calls (0/30 seeds), so a fit there
-# would rest on chance; the default is in the scanner, the customer does not turn it off by hand (R17: few rows, no fit)
-SPAN_MIN_CALLS = 600
+# SPAN-WIDTH-B (R17, 10-24): no call count gates the fit (was 600, PM 10-20 10:32 from SMALL-TRAFFIC 9e45cdf) -- it
+# stood in for SPAN_MIN_PAIRS (law subsamples under 600 calls filled no tier, 0/30 seeds). On a null pool ([synthetic]
+# logs whose full log picks span 1, documents kept 1/2..1/16, 30 seeds) the pair gate and SPAN-BOOT alone picked no
+# span >= 2 (results/span_width_1024). The pair gate does work: without it SPAN-BOOT picked span 2 on a few documents
+# at up to 6/30 seeds (E2, 9k calls) -- the resample bound degenerates when every contributing document gains.
 # SPAN-COV (pre-registered inbox 10-18): a span s >= 2 cell holds only answers of chains with more than s versions, so
 # its money share is compared with span 1 on the SAME answers (draft one version back, same weights); s is picked only
 # where it beats that. Pair coverage (cell pairs / span-1 pairs) is reported per cell, no line is drawn on it.
@@ -1388,10 +2537,44 @@ MONEY_BAND = (0.85, 0.99)  # UB-1: below 0.85 the diff call lost money (0.78-0.8
 # only fires once reasoning is about half the output. Warning only -- the savings estimate is not rescaled (that needs the
 # reasoning share per call, which the log does not give).
 THINK_RATIO = 2.0
-THINK_MIN_CALLS = 30  # design value: fewer calls with both counts -> no ratio is shown
+# THINK-CI (PM 10-22 22:55, results/think_fit_1022/PREREG-THINK-CI.md): the note is marked as a small sample when this
+# log's own 95% interval of the ratio (ratio estimator, delta method) straddles THINK_RATIO -- replaces a fixed 30-call floor
+
+
+T975 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262)  # Student t 97.5th pct, df 1-9 (standard table)
+
+
+def t975(df):
+    """Student t 97.5th percentile; table for df 1-9, Cornish-Fisher expansion of 1.96 above (within 0.003 from df 10)."""
+    if df <= len(T975):
+        return T975[df - 1]
+    z = 1.959964
+    return z + (z ** 3 + z) / (4 * df) + (5 * z ** 5 + 16 * z ** 3 + 3 * z) / (96 * df ** 2)
+
+
+def think_ci(pairs):
+    """95% interval of sum(billed)/sum(body) over (billed, body) pairs: delta-method standard error, Student t with
+    n-1 degrees of freedom (post-hoc change in THINK-CI: 1.96 gave n=2 logs intervals like 7.99-8.03); None under 2 calls."""
+    n = len(pairs)
+    if n < 2:
+        return None
+    sb, sm = sum(b for b, _ in pairs), sum(m for _, m in pairs)
+    if not sm:
+        return None
+    r = sb / sm
+    se = math.sqrt(sum((b - r * m) ** 2 for b, m in pairs) / (n * (n - 1))) / (sm / n)
+    t = t975(n - 1)
+    return (r - t * se, r + t * se)
 # AXIS-ADD (PM 10-20): section 7, items read without the answer body. A re-sent request is the same request (same
 # customer key when there is one) again within RESENT_WINDOW seconds (hive/waste.py, shared with the serving ledger)
 RETRY_WINDOW = RESENT_WINDOW
+# SCAN-LIVE (PM 10-25 09:29): an amount the report prices as a knife's saving is replayed under the condition the engine
+# runs that knife in once it is on, not a wider one. Copies of the engine's values (hive/serving, not shipped here):
+BUNDLE_LIVE_WAIT = 2.0  # s, bundler.BUNDLE_LIVE_WAIT: how long a live bundle waits (the replay's 60 s gave ~22x)
+# PM 10-25 09:32: the report's last line, the way to us -- the log itself is never sent anywhere
+CONTACT = ("이 결과로 상담받기: bee@linklbee.com · linklbee.com (기록 파일은 보내지 않으셔도 됩니다)",
+           "Talk to us about this result: bee@linklbee.com · linklbee.com (no need to send the log)")
+ENGINE_HOLDOUT = 0.10  # route.HOLDOUT: the share the engine sends in full as its control (section 4 saves on the rest)
 EXTRA_FIELDS = ("status", "finish_reason", "max_tokens", "request")  # section 7 only; --map takes them too
 # AXIS-8 (10-20): the billing item is "found" when the unexplained share is at least this -- a design value, the
 # report's one-decimal rounding (a smaller gap prints as 0.0%), not a line between fair and unfair billing
@@ -1430,7 +2613,7 @@ FIELDS = ("ts", "output", "output_tokens", "input_tokens", "cached_input_tokens"
           "prompt_hash", "output_token_hashes", "prompt_token_hashes")
 ALIASES = {
     # created: OpenAI Chat Completions (epoch s) · created_at: OpenAI Responses
-    "ts": ["created", "created_at", "timestamp", "time", "start_time",
+    "ts": ["created", "created_at", "timestamp", "time", "start_time", "date", "datetime",
            # observability exports (docs/SCAN-ADAPTERS-1021.md): Langfuse / LiteLLM · Helicone · Vertex AI
            "startTime", "request_created_at", "createTime"],
     # Chat Completions · legacy Completions · Anthropic Messages (text blocks joined) · plain names
@@ -1542,6 +2725,26 @@ def _coerce(field, v, alias):
     return v  # token-hash lists, read as before
 
 
+def _loose(k):
+    return re.sub(r"[_\-\s]", "", k).lower()
+
+
+LOOSE_NAMES = {f: {_loose(x) for x in [f] + [p for p in ALIASES.get(f, []) if "." not in p]} for f in FIELDS}
+
+
+def descend(d):
+    """UNKNOWN-SHAPE: a record that is only a chain of one-key objects ({"data": {"event": {"llm": {...}}}}) -> the
+    innermost object (four levels at most); anything else as it is."""
+    for _ in range(4):
+        if isinstance(d, dict) and len(d) == 1:
+            v = next(iter(d.values()))
+            if isinstance(v, dict):
+                d = v
+                continue
+        break
+    return d
+
+
 def resolve(d):
     """Raw record -> (record in the scanner's own field names, ((field, source path), ...) for every field not read
     under its own name). Order: --map (strict: no fallback), the field's own name, the aliases, then the same inside
@@ -1572,6 +2775,24 @@ def resolve(d):
                     break
             if f in out:
                 break
+        if f not in out and f not in FIELD_MAP:
+            # UNKNOWN-SHAPE: a name that differs from ours or an alias only by case and _ - (inputTokens, Input_Tokens,
+            # finishReason) is the same field; tried last, at the top level only, so a known name always wins
+            for k, raw in d.items():
+                if isinstance(k, str) and _loose(k) in LOOSE_NAMES[f]:
+                    v = _coerce(f, raw, True)
+                    if v is not None:
+                        out[f] = v
+                        via.append((f, k))
+                        break
+    # REQ-PROMPT (10-23): a line with a request body and no prompt -- the prompt is the body's text (waste.request_text,
+    # the collector's prompts="hash" hashes the same), so sections 3 and 5 and the engine replay's guards read it
+    if "prompt" not in out and "prompt" not in FIELD_MAP and "prompt_hash" not in out and "prompt_token_hashes" not in out:
+        req = _request(d)
+        t = request_text(req) if req is not None else ""
+        if t:
+            out["prompt"] = t
+            via.append(("prompt", "request text"))
     # Langfuse stores usage detail counts (input_cached_tokens, cache_read_input_tokens, ...) subtracted from
     # usageDetails.input (its token-and-cost-tracking document); the scanner's input_tokens includes them, so add back
     if dict(via).get("input_tokens") == "usageDetails.input" and isinstance(d.get("usageDetails"), dict):
@@ -1619,6 +2840,19 @@ def _flatten(d, pre="", depth=0):
 CAND_TEXT_MIN = 40  # design value: characters for a string to be shown as a possible answer body
 
 
+MODEL_LIKE = re.compile(r"(gpt|claude|gemini|llama|mistral|qwen|deepseek|grok|command|nova|titan|^o\d)", re.I)
+
+
+def model_candidates(records):
+    """Paths whose short string values look like model ids (gpt-..., claude-..., ...) -- shown, never used without --map."""
+    c = collections.Counter()
+    for d in records:
+        for p, v in _flatten(d):
+            if p and isinstance(v, str) and len(v) <= 80 and " " not in v and MODEL_LIKE.search(v):
+                c[p] += 1
+    return [p for p, _ in c.most_common(3)]
+
+
 def candidates(records):
     """Paths that could hold the fields the scanner did not find -- shown, never used without --map.
     ts: values parse_ts reads as a time after 2001; output: the longest strings (by mean length, CAND_TEXT_MIN chars or
@@ -1637,8 +2871,9 @@ def candidates(records):
                         ts_c[p] += 1
                 except (ValueError, OverflowError, OSError):
                     pass
-            if _num(v) is not None and "tok" in p.lower():
-                tok[p] += 1
+            leaf = p.lower().rsplit(".", 1)[-1]
+            if _num(v) is not None and "tok" in leaf and not leaf.startswith("max") and "limit" not in leaf:
+                tok[p] += 1  # UNKNOWN-SHAPE: a request's max_tokens / token limit is a cap, not a count
     return {"ts": [p for p, _ in ts_c.most_common(3)],
             "output": [p for p, _ in sorted(txt.items(), key=lambda kv: -statistics.mean(kv[1]))[:3]],
             "tokens": [p for p, _ in tok.most_common(4)]}
@@ -1682,7 +2917,44 @@ def looks_like(records):
 class Row:
     __slots__ = ("i", "ts", "model", "toks", "length", "out_billed", "out_counted", "inp", "cached", "key",
                  "auto", "prompt_sig", "masked_out_sig", "has_body", "hashed", "sig", "fact", "req", "out_sig", "via",
-                 "x")  # x: section 7 fields (extras())
+                 "x", "shadow")  # x: section 7 fields (extras()); shadow: the collector's numbers-only pair
+
+
+class _Len:
+    """A token list's length without the tokens (LEVER2-SHADOW pairs): len() works, two never compare equal."""
+    __slots__ = ("n",)
+
+    def __init__(self, n):
+        self.n = n
+
+    def __len__(self):
+        return self.n
+
+    def __eq__(self, other):
+        return False
+
+    __hash__ = None
+
+
+def shadow_pair(b):
+    """LEVER2-SHADOW (10-23): a collector line carrying its pair as numbers (linklbee_collect shadow=True: group number,
+    overlap with the group's previous answer, that answer's length, the gap, the engine's two rules) -> (draft stand-in,
+    b). The stand-in holds only lengths and time; overlap and the rules come from the line, not from tokens."""
+    s = b.shadow
+    b.key, b.auto, b.length = "shadow:%d" % s["g"], bool(s.get("auto")), int(s.get("n") or 0)
+    b.toks = _Len(min(b.length, CAP))
+    if b.out_billed is None:
+        b.out_billed, b.out_counted = b.length, True
+    if b.prompt_sig is None:
+        b.prompt_sig = "shadow:%d" % b.i
+    a = Row()
+    for k in Row.__slots__:
+        setattr(a, k, None)
+    a.i, a.key, a.auto, a.has_body, a.hashed = -1 - b.i, b.key, b.auto, False, False
+    a.ts = b.ts - datetime.timedelta(seconds=float(s.get("gap") or 0))
+    a.toks, a.length = _Len(int(s.get("dtoks") or 0)), int(s.get("dlen") or 0)
+    a.prompt_sig = b.prompt_sig if s.get("same_req") else "shadow-prev:%d" % b.i
+    return a, b
 
 
 # ------------------------------------------------------------------ section 7 fields (AXIS-ADD, PM 10-20)
@@ -1697,6 +2969,23 @@ REQUEST_PATHS = ("request.body", "request", "body", "request_body", "input.input
                  "inputs")  # + Helicone, Bedrock invocation log, LiteLLM SpendLogs, LangSmith
 CACHE_READ_PATHS = ("usageMetadata.cachedContentTokenCount", "usage.total_cached_tokens", "usage.prompt_cache_hit_tokens")
 INPUT_EXTRA_PATHS = ("usageMetadata.promptTokenCount",)
+# the customer's own cache writes (Anthropic API / Vertex Claude, Bedrock Converse): 7-7's written-but-not-read check
+CACHE_WRITE_PATHS = ("usage.cache_creation_input_tokens", "usageDetails.cache_creation_input_tokens",
+                     "usage.cacheWriteInputTokens",
+                     # BILL-WRITE-OA (10-24): OpenAI GPT-5.6+ writes, inside input_tokens, billed at 1.25x ("cache writes
+                     # cost 1.25x the standard, uncached input-token rate" -- prompt-caching guide, read 2026-10-24);
+                     # the Responses field, and the Chat Completions one Azure exposes (route.py reads both)
+                     "usage.input_tokens_details.cache_write_tokens", "usage.prompt_tokens_details.cache_write_tokens")
+CACHE_WRITE_1H_PATHS = ("usage.cache_creation.ephemeral_1h_input_tokens",)
+# BILL-WRITE-OA: OpenAI Responses 12-hour writes (2.5x, cache_constants openai write_multiple "12h")
+CACHE_WRITE_12H_PATHS = ("usage.input_tokens_details.cache_write_tokens_details.ttl_12h_tokens",)
+# flat-rate / committed-capacity traffic (PM 10-22 16:00 change 3): cutting tokens there does not change the bill, so
+# its calls get no dollar figure. A log says so with a billing field, or Vertex AI's usageMetadata.trafficType
+# PROVISIONED_THROUGHPUT; anything else is marked on the command line (--flat <model> / --flat all)
+# (Vertex GenerateContentResponse reference, TrafficType: ON_DEMAND = Pay-As-You-Go quota, PROVISIONED_THROUGHPUT =
+# Provisioned Throughput traffic; read 2026-10-22)
+FLAT_PATHS = ("billing", "billing_mode", "pricing_mode", "usageMetadata.trafficType")
+FLAT_VALUES = {"flat", "flat_rate", "subscription", "seat", "ptu", "provisioned", "provisioned_throughput", "committed"}
 
 
 def _first(d, paths, want):
@@ -1731,9 +3020,34 @@ def _bases(d):
     return out
 
 
+def json_mode(req):
+    """STRICT-7-2 (10-24): "strict" when the request makes the vendor hold the answer to a schema (OpenAI json_schema
+    with strict true, in response_format or the Responses text.format; Anthropic output_config.format json_schema or
+    the older output_format), "loose" when it asks for JSON without that (json_object, or a json_schema without strict
+    true), None otherwise -- JSON asked for only in the prompt text cannot be seen."""
+    if not isinstance(req, dict):
+        return None
+    oc = req.get("output_config")
+    for f in ((oc or {}).get("format") if isinstance(oc, dict) else None, req.get("output_format")):
+        if isinstance(f, dict) and f.get("type") == "json_schema":
+            return "strict"
+    tx = req.get("text")
+    for f in (req.get("response_format"), tx.get("format") if isinstance(tx, dict) else None):
+        if not isinstance(f, dict):
+            continue
+        if f.get("type") == "json_object":
+            return "loose"
+        if f.get("type") == "json_schema":
+            js = f.get("json_schema") if isinstance(f.get("json_schema"), dict) else f
+            return "strict" if js.get("strict") is True else "loose"
+    return None
+
+
 def _empty_answer(d):
     """The answer field is there and holds no text (an empty string, a null message content, a content list without
     text). None when no answer field is found at all."""
+    if isinstance(d.get("output_token_hashes"), list) and d["output_token_hashes"]:  # a --hashify line: text blocks
+        return False  # keep their type tags but not their text, and the answer is the hashes
     for b in _bases(d):
         for path in ("output",) + tuple(ALIASES["output"]):
             if path == "output" and "output" in FIELD_MAP:
@@ -1749,6 +3063,17 @@ def _empty_answer(d):
     return None
 
 
+def _nocap(req):
+    """The request without its output-cap fields (MAX_TOKENS_PATHS), for the cap-free request hash."""
+    if not isinstance(req, dict):
+        return req
+    out = {k: v for k, v in req.items() if k not in ("max_tokens", "max_output_tokens", "max_completion_tokens")}
+    gc = out.get("generationConfig")
+    if isinstance(gc, dict) and "maxOutputTokens" in gc:
+        out["generationConfig"] = {k: v for k, v in gc.items() if k != "maxOutputTokens"}
+    return out
+
+
 def _request(d):
     """The request body of a log record: --map request=..., a {request: ...} wrapper, or the record itself when it
     carries tools / system / messages (flat gateway logs)."""
@@ -1760,9 +3085,15 @@ def _request(d):
         if isinstance(v, dict) and any(k in v for k in ("tools", "system", "messages", "instructions", "input",
                                                          "systemInstruction", "contents", "toolConfig")):
             return v
-    if any(k in d for k in ("tools", "system", "messages", "instructions", "systemInstruction", "toolConfig")):
+    if any(k in d for k in REQUEST_KEYS if k not in ("input", "contents")):
         return d
     return None
+
+
+REQUEST_KEYS = ("tools", "system", "messages", "instructions", "input", "systemInstruction", "contents", "toolConfig")
+
+
+LOGGED_COST = ("cost_usd", "cost", "total_cost", "response_cost", "spend", "usd", "costUsd", "totalCost")
 
 
 def extras(d, out_billed):
@@ -1790,16 +3121,72 @@ def extras(d, out_billed):
             mt = _num(_first(req, MAX_TOKENS_PATHS, lambda v: _num(v) is not None)[0])
     cr = _num(_first(d, CACHE_READ_PATHS, lambda v: _num(v) is not None)[0])
     ix = _num(_first(d, INPUT_EXTRA_PATHS, lambda v: _num(v) is not None)[0])
+    cw = _num(_first(d, CACHE_WRITE_PATHS, lambda v: _num(v) is not None)[0])
+    cw1 = _num(_first(d, CACHE_WRITE_1H_PATHS, lambda v: _num(v) is not None)[0])
+    cw12 = _num(_first(d, CACHE_WRITE_12H_PATHS, lambda v: _num(v) is not None)[0])
     rs = hashlib.sha256(wdump(req, canonical=True).encode("utf-8")).hexdigest()[:24] if req is not None else None
+    # PAIR-FIX (10-23): the same request with another output cap is the same request (a cut answer sent again with a
+    # larger one); the engine's request_sig leaves the cap out too
+    rs_nc = hashlib.sha256(wdump(_nocap(req), canonical=True).encode("utf-8")).hexdigest()[:24] if req is not None else None
+    vp = value_hashes(req) if req is not None else []
     rz = next((v for v in (reasoning_of(b) for b in _bases(d)) if v is not None), None)
     pu = prompt_units(req)
     pc = prefix_chain([(u, len(u)) for u in pu]) if pu else None
+    # SANDWICH (10-23): the message paragraphs, the prefix blocks' characters and all units' characters (shares)
+    paras = tuple(message_paragraphs(req)) if pu else None
+    pfront = sum(len(u) for u in pu[:len(prefix_blocks(req))]) if pu else 0
+    blocks, cm = tuple(block_hashes(req)) if req is not None else (), cache_marks(req) if isinstance(req, dict) else None
+    sch = tuple(schema_blocks(req)) if req is not None else ()
+    # SCAN-3REPLAY (10-23): unit and tool hashes as the engine's ledger keeps them (history / tool-set / cache-key replays)
+    uh = array("Q", [int(h, 16) for h in unit_hashes(req, pu)]) if pu else None
+    th = tuple((int(h, 16), c) for h, c in tool_hashes(req) or ()) or None
+    lr = d.get("linklbee_req")
+    nfix_, ptotal_, own_key_ = None, 0, False
+    if req is None and isinstance(lr, dict):
+        # linklbee_collect.py: the same fields, hashed on the customer's side with these functions -- no request text
+        rs = lr.get("rsig") if isinstance(lr.get("rsig"), str) else None
+        rs_nc = lr.get("rsig_nc") if isinstance(lr.get("rsig_nc"), str) else rs
+        blocks = tuple(tuple(b) for b in lr.get("prefix") or [] if isinstance(b, list) and len(b) == 4)
+        sch = tuple(tuple(b) for b in lr.get("schema") or [] if isinstance(b, list) and len(b) == 4)
+        vp = [tuple(v) for v in lr.get("vprefix") or [] if isinstance(v, list) and len(v) == 3]
+        cm = lr.get("cmarks") if isinstance(lr.get("cmarks"), int) else None
+        c = lr.get("pchain")
+        pc = (c[0], c[1]) if isinstance(c, list) and len(c) == 2 and len(c[0]) == len(c[1]) and c[0] else None
+        # EMPTY-HAND (10-23): collector 0.2.1 also writes the unit / tool / paragraph hashes (history-k, tool set, sandwich)
+        u_ = lr.get("uh")
+        if isinstance(u_, list) and u_ and all(isinstance(x, str) for x in u_):
+            try:
+                uh, nfix_ = array("Q", [int(h, 16) for h in u_]), lr.get("nfix")
+            except ValueError:
+                uh = None
+        if isinstance(lr.get("tools"), list):
+            try:
+                th = tuple((int(h, 16), c_) for h, c_ in (x for x in lr["tools"] if isinstance(x, list) and len(x) == 2)
+                           if isinstance(h, str) and isinstance(c_, int)) or None
+            except ValueError:
+                th = None
+        if isinstance(lr.get("paras"), list):
+            paras = tuple(tuple(x) for x in lr["paras"] if isinstance(x, list) and len(x) == 2)
+            pfront = lr.get("pfront") if isinstance(lr.get("pfront"), int) else 0
+            ptotal_ = lr.get("ptotal") if isinstance(lr.get("ptotal"), int) else 0
+        own_key_ = lr.get("own_key") is True
     return {"failed": fl, "trunc": truncated(fin, mt, out_billed), "finish": fin if isinstance(fin, str) else None,
-            "max_tokens": mt, "rsig": rs, "prefix": tuple(block_hashes(req)) if req is not None else (),
-            "cache_read": cr, "inp_extra": ix, "reasoning": rz, "tool": any(has_tool_call(b) for b in _bases(d)),
+            "max_tokens": mt, "rsig": rs, "rsig_nc": rs_nc, "prefix": blocks, "schema": sch, "vprefix": tuple(vp),
+            "cmarks": cm, "paras": paras, "pfront": pfront,
+            "ptotal": sum(len(u) for u in pu) if pu else ptotal_,
+            "uh": uh, "nfix": fixed_units(req) if pu else nfix_ if isinstance(nfix_, int) else 0, "tools_h": th,
+            "own_key": isinstance(req, dict) and "prompt_cache_key" in req or own_key_,
+            "cache_read": cr, "cache_write": cw, "cache_write_1h": cw1, "cache_write_12h": cw12, "inp_extra": ix, "reasoning": rz, "tool": any(has_tool_call(b) for b in _bases(d)),
             "empty": _empty_answer(d), "pchain": (array("Q", pc[0]), array("d", pc[1])) if pc else None,
+            "jmode": json_mode(req),
             "stream": (req.get("stream") if isinstance(req, dict) and isinstance(req.get("stream"), bool)
-                       else d.get("stream") if isinstance(d.get("stream"), bool) else None)}
+                       else d.get("stream") if isinstance(d.get("stream"), bool) else None),
+            "synthetic": d.get("synthetic") is True, "agent_log": d.get("linklbee_source") == "claude_code",
+            # SELFHOST-SPREAD (10-24): the server / GPU a self-hosted call went to, when the proxy logged it
+            "upstream": d.get("upstream") if isinstance(d.get("upstream"), str) and d.get("upstream") else None,
+            # the collector without linklbee_scan.py beside it writes linklbee_req null: the cause is the install
+            "collector_nohash": d.get("linklbee_source") == "collector" and "linklbee_req" in d and d["linklbee_req"] is None,
+            "flat": str(_first(d, FLAT_PATHS, lambda v: isinstance(v, str) and v)[0] or "").strip().lower() in FLAT_VALUES}
 
 
 def load_record(line):
@@ -1825,6 +3212,9 @@ def parse_line(n, line):
     d = load_record(line)
     if isinstance(d, str):
         return d, None
+    if d.get("linklbee_collector_stop") in ("max_mb", "hours"):  # COLLECT-STOP: the collector's own marker, not a call
+        return "collector_stop_" + d["linklbee_collector_stop"], None
+    d = descend(d)
     raw = d
     d, via = resolve(d)
     try:
@@ -1882,7 +3272,13 @@ def parse_line(n, line):
         elif r.hashed and isinstance(pth, list) and pth:
             r.req = [str(h) for h in pth]
     r.sig = minhash_lsh.signature_oph(shingles(r), AUTO_K) if r.has_body and r.key is None else None
+    sh = raw.get("linklbee_shadow") if isinstance(raw, dict) else None
+    r.shadow = sh if not r.has_body and isinstance(sh, dict) and isinstance(sh.get("g"), int) and \
+        isinstance(sh.get("n"), int) else None  # a body line pairs and counts by its own text
     r.x = extras(raw, r.out_billed)
+    lc = next((_num(raw.get(k)) for k in LOGGED_COST if _num(raw.get(k)) is not None), None)
+    if lc is not None and lc >= 0:  # UNKNOWN-SHAPE: the log's own cost number, shown apart, never mixed into the bill
+        r.x["logged_cost"] = lc
     if r.x["pchain"] is None:  # no request object: the prompt text or its token hashes, in PROMPT_BLOCK blocks
         t = None
         if not r.hashed and isinstance(p, str) and p:
@@ -1893,6 +3289,7 @@ def parse_line(n, line):
             pc = prefix_chain([(" ".join(t[i:i + PROMPT_BLOCK]), len(t[i:i + PROMPT_BLOCK]))
                                for i in range(0, len(t), PROMPT_BLOCK)])
             r.x["pchain"] = (array("Q", pc[0]), array("d", pc[1]))
+            r.x["no_request"] = True  # BUNDLE-GRADE-B: no prefix blocks and no stream flag to bundle with
     if r.x["rsig"] is None and isinstance(p, str) and p:  # no request object: the prompt itself, digits kept
         r.x["rsig"] = hashlib.sha256(p.encode("utf-8")).hexdigest()[:24]
     elif r.x["rsig"] is None and isinstance(ph, str) and ph:
@@ -1901,7 +3298,7 @@ def parse_line(n, line):
 
 
 def _parse_chunk(chunk):
-    return [parse_line(n, line) for n, line in chunk]
+    return [(n,) + parse_line(n, line) for n, line in chunk]
 
 
 CHUNK = 1000  # lines per worker task
@@ -1970,8 +3367,16 @@ def open_records(path, fh):
     lines = itertools.chain(head, fh)
     if ext not in (".csv", ".tsv") and first.startswith("["):
         return "json", json_array(lines)
+    if ext not in (".csv", ".tsv") and (first == "{" or (ext == ".json" and first.startswith("{") and not first.endswith("}"))):
+        return "json", json_array(lines)  # UNKNOWN-SHAPE: one indented JSON document ({"data": [...]} export)
     if ext not in (".csv", ".tsv") and (not first or first.startswith("{")):
         return "jsonl", lines
+    if ext not in (".csv", ".tsv") and "{" in first:  # UNKNOWN-SHAPE: "<time> INFO llm_call {...}" log lines
+        try:
+            if isinstance(json.JSONDecoder().raw_decode(first, first.index("{"))[0], dict):
+                return "jsonl", lines
+        except ValueError:
+            pass
     delim = "\t" if ext == ".tsv" or ("\t" in first and "," not in first) else ("," if "," in first or ext == ".csv" else None)
     if delim is None:
         return "jsonl", lines
@@ -1979,17 +3384,174 @@ def open_records(path, fh):
     return "csv", csv.DictReader(lines, delimiter=delim)
 
 
+READ_EXT = (".jsonl", ".ndjson", ".json", ".csv", ".tsv", ".log", ".txt")  # also each of these with .gz
+
+
+def log_files(path):
+    """The files a --logs path stands for: the file itself, or every file under a directory (sorted, recursive) whose
+    name ends in READ_EXT, optionally .gz. Hidden files are left out."""
+    if not os.path.isdir(path):
+        return [path]
+    out = []
+    for root, dirs, files in os.walk(path):
+        # tool-results: where Claude Code keeps tool outputs next to its transcripts -- never a call log
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d != "tool-results")
+        for f in sorted(files):
+            base = f[:-3] if f.lower().endswith(".gz") else f
+            if not f.startswith(".") and os.path.splitext(base)[1].lower() in READ_EXT:
+                out.append(os.path.join(root, f))
+    return out
+
+
+def open_text(p):
+    if p.lower().endswith(".gz"):
+        import gzip
+        return gzip.open(p, "rt", encoding="utf-8-sig", errors="replace", newline="")
+    # -sig: a spreadsheet's CSV starts with a BOM; a stray invalid byte becomes U+FFFD instead of stopping a folder
+    return open(p, encoding="utf-8-sig", errors="replace", newline="")
+
+
+def _cc_calls(lines):
+    """A Claude Code session transcript (~/.claude/projects/*/<session>.jsonl) -> one Anthropic Messages response per
+    API call (PM 10-22 16:45 way 5, a trial way in: a developer's own log). The transcript writes one entry per content
+    block, each with the message id; usage and stop_reason are read from the message's LAST entry (a streamed first
+    entry can carry partial usage), the content from all of them -- the own-logs collector v7 rule. In memory only."""
+    order, msgs = [], {}
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        m = d.get("message") if isinstance(d, dict) else None
+        if not (isinstance(m, dict) and m.get("role") == "assistant" and m.get("usage")):  # an API call has usage
+            continue
+        k = m.get("id") or d.get("requestId") or ("line", len(order))
+        if k not in msgs:
+            order.append(k)
+            msgs[k] = {"ts": d.get("timestamp"), "session": d.get("sessionId"), "content": [], "last": m,
+                       "failed": bool(d.get("isApiErrorMessage"))}
+        e = msgs[k]
+        e["content"] += [b for b in (m.get("content") or []) if isinstance(b, dict)] if isinstance(m.get("content"), list) else \
+            [{"type": "text", "text": m["content"]}] if isinstance(m.get("content"), str) else []
+        e["last"] = m
+        e["failed"] = e["failed"] or bool(d.get("isApiErrorMessage"))
+    for k in order:
+        e = msgs[k]
+        m = e["last"]
+        yield {"ts": e["ts"], "model": m.get("model"), "group_key": e["session"], "content": e["content"],
+               "usage": m.get("usage") or {}, "stop_reason": m.get("stop_reason"),
+               "status": "failed" if e["failed"] else "completed", "linklbee_source": "claude_code"}
+
+
+def _is_cc(first):
+    try:
+        d = json.loads(first)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and "sessionId" in d and "type" in d
+
+
+_CALL_KEYS = ("model", "usage", "usageMetadata", "choices", "content", "output", "messages", "ts", "timestamp",
+              "input_tokens", "prompt_tokens")
+_TWO_OBJ = re.compile(r"\}\s*\{")
+
+
+def _unwrap(d, depth=0):
+    """UNKNOWN-SHAPE (PM 10-24 08:25): an object that only wraps a list of calls ({"data": [...]}, {"items": [...]},
+    one level deeper at most) -> that list; anything that looks like a call itself -> None."""
+    if not isinstance(d, dict) or any(k in d for k in _CALL_KEYS):
+        return None
+    lists = [v for v in d.values() if isinstance(v, list) and v and all(isinstance(x, dict) for x in v[:5])]
+    if len(lists) == 1:
+        return lists[0]
+    subs = [v for v in d.values() if isinstance(v, dict)]
+    if depth == 0 and len(subs) == 1 and not lists:
+        return _unwrap(subs[0], 1)
+    return None
+
+
+def _unwrap_each(recs):
+    for d in recs:
+        w = _unwrap(d)
+        yield from (w if w is not None else [d])
+
+
+def _loose_lines(lines):
+    """UNKNOWN-SHAPE: JSONL lines as apps really write them. A line that is one JSON object passes untouched (parsed
+    later, as before). A line with text before the object ("2026-10-01 INFO llm_call {...}"), or several objects on
+    one line, gives each object it holds; a wrapper object gives its calls. A line with no object passes as it is
+    (counted as not JSON)."""
+    dec = json.JSONDecoder()
+    for line in lines:
+        if not isinstance(line, str):
+            yield line
+            continue
+        t = line.strip()
+        if not t or (t[0] == "{" and t[-1] == "}" and not _TWO_OBJ.search(t)):
+            if t[:1] == "{" and t[2:8] in ('data":', 'items"', 'rows":', 'record', 'result', 'logs":', 'calls"', 'events'):
+                try:
+                    w = _unwrap(json.loads(t))
+                except ValueError:
+                    w = None
+                if w is not None:
+                    yield from w
+                    continue
+            yield line
+            continue
+        i, got = t.find("{"), []
+        while 0 <= i < len(t):
+            try:
+                d, end = dec.raw_decode(t, i)
+            except ValueError:
+                break
+            if isinstance(d, dict):
+                got.append(d)
+            i = t.find("{", end)
+        if not got:
+            yield line
+            continue
+        for d in got:
+            w = _unwrap(d)
+            yield from (w if w is not None else [d])
+
+
+def records_of(path, files_out=None):
+    """Lines / records of every file of `path` in turn (log_files). files_out, when given, gets one
+    [file, format, first record index] per file as it is opened."""
+    n = 0
+    for p in log_files(path):
+        with open_text(p) as fh:
+            fmt, it = open_records(p[:-3] if p.lower().endswith(".gz") else p, fh)
+            if fmt == "jsonl":
+                import itertools
+                head = list(itertools.islice(it, 20))
+                if any(_is_cc(x) for x in head if isinstance(x, str) and x.strip()):
+                    fmt, it = "claude_code", _cc_calls(itertools.chain(head, it))
+                else:
+                    it = _loose_lines(itertools.chain(head, it))
+            elif fmt == "json":
+                it = _unwrap_each(it)
+            if files_out is not None:
+                files_out.append([p, fmt, n])
+            for x in it:
+                n += 1
+                yield x
+
+
 def read_rows(path, stats, workers=1):
     """Lines are parsed (JSON, o200k, MinHash signature) in `workers` forked processes, a bounded window of chunks at
     a time so the file is never held in memory; rows come back in file order, so the result does not depend on
     `workers`. Where fork is unavailable (Windows) it runs in this process."""
     rows = []
+    files = []
 
     def take(results):
-        for status, r in results:
+        for n, status, r in results:
             if status == "empty":
                 continue
             stats["lines"] += 1
+            k = next(i for i in range(len(files) - 1, -1, -1) if files[i][2] <= n)
+            stats[("file", k, status)] += 1
             if status == "ok":
                 rows.append(r)
                 if r.ts is None:
@@ -2001,27 +3563,30 @@ def read_rows(path, stats, workers=1):
 
     import multiprocessing as mp
     ctx = mp.get_context("fork") if workers > 1 and "fork" in mp.get_all_start_methods() else None
-    with open(path, encoding="utf-8-sig", newline="") as fh:  # -sig: a spreadsheet's CSV starts with a BOM
-        records = open_records(path, fh)
-        stats[("format", records[0])] = 1
-        if ctx is None:
-            for n, line in enumerate(records[1]):
-                take([parse_line(n, line)])
-            return rows
-        o200k.encode("warm")  # load the rank table before forking so workers share it
-        with ctx.Pool(workers) as pool:
-            it = enumerate(records[1])
-            while True:
-                window = []
-                for _ in range(workers * 4):
-                    chunk = [x for _, x in zip(range(CHUNK), it)]
-                    if not chunk:
-                        break
-                    window.append(chunk)
-                if not window:
+    stats["files"] = files
+    records = records_of(path, files)
+    if ctx is None:
+        for n, line in enumerate(records):
+            take([(n,) + parse_line(n, line)])
+        fmts = {f[1] for f in files}
+        stats[("format", fmts.pop() if len(fmts) == 1 else "mixed")] = 1
+        return rows
+    o200k.encode("warm")  # load the rank table before forking so workers share it
+    with ctx.Pool(workers) as pool:
+        it = enumerate(records)
+        while True:
+            window = []
+            for _ in range(workers * 4):
+                chunk = [x for _, x in zip(range(CHUNK), it)]
+                if not chunk:
                     break
-                for res in pool.map(_parse_chunk, window):
-                    take(res)
+                window.append(chunk)
+            if not window:
+                break
+            for res in pool.map(_parse_chunk, window):
+                take(res)
+    fmts = {f[1] for f in files}
+    stats[("format", fmts.pop() if len(fmts) == 1 else "mixed")] = 1
     return rows
 
 
@@ -2132,8 +3697,7 @@ def span_sweep(rows, n_calls=None):
     Their output shares are reported on their own ("repeat_share", "revert_share", of the span-1 paired output).
     Equal = the whole answer (out_sig), not toks: toks stop at CAP, and SCAN-PRE's MFDS check (outbox 10-18 15:2x) found
     168 long items changed only past CAP folded as repeats (post-hoc fix, after that mismatch).
-    n_calls < SPAN_MIN_CALLS: no span is fitted or offered (cells still measured and shown)."""
-    fit_ok = n_calls is None or n_calls >= SPAN_MIN_CALLS
+    n_calls is reported only (SPAN-WIDTH-B: the pair gate and the resample bound keep a small log at span 1)."""
     by = collections.defaultdict(list)
     for r in rows:
         by[r.key].append(r)
@@ -2199,7 +3763,7 @@ def span_sweep(rows, n_calls=None):
                 per_key[(t, s)].append(tuple(kv))
     share = lambda c, k: c[k] / c["w"] if c["w"] else None  # noqa: E731
     out = {"grid": SPAN_GRID, "tiers": SPAN_TIERS, "min_pairs": SPAN_MIN_PAIRS, "money_band": list(MONEY_BAND),
-           "min_calls": SPAN_MIN_CALLS, "calls": n_calls, "fit_off": None if fit_ok else "calls_below_min",
+           "calls": n_calls,
            "tier_edges_answer_tokens": edges, "cells": [], "chosen": [],
            "repeat_pairs": pre["repeat_pairs"], "revert_pairs": pre["revert_pairs"],
            "repeat_share": pre["repeat"] / pre["w"] if pre["w"] else None,
@@ -2208,7 +3772,7 @@ def span_sweep(rows, n_calls=None):
     # SPAN-BOOT: resample only cells that could be picked (enough pairs, point value beats span 1)
     gate = {}
     for (t, s), c in cells.items():
-        if fit_ok and s > 1 and c["pairs"] >= SPAN_MIN_PAIRS and c["w"] and m1(c) is not None and c["money"] / c["w"] > m1(c):
+        if s > 1 and c["pairs"] >= SPAN_MIN_PAIRS and c["w"] and m1(c) is not None and c["money"] / c["w"] > m1(c):
             gate[(t, s)] = span_gate(per_key[(t, s)], n_tier[t])
     for (t, s), c in sorted(cells.items()):
         p1 = cells[(t, 1)]["pairs"]
@@ -2219,7 +3783,7 @@ def span_sweep(rows, n_calls=None):
     tot = {"w": 0, "top": 0, "low": 0, "money": 0}
     beats1 = lambda t, s: (gate.get((t, s)) or 0) > 0  # noqa: E731  (point value and SPAN-BOOT lower bound)
     for t in range(SPAN_TIERS):
-        ok = [s for s in SPAN_GRID if fit_ok and cells[(t, s)]["pairs"] >= SPAN_MIN_PAIRS and cells[(t, s)]["w"]
+        ok = [s for s in SPAN_GRID if cells[(t, s)]["pairs"] >= SPAN_MIN_PAIRS and cells[(t, s)]["w"]
               and (s == 1 or beats1(t, s))]
         s = max(ok, key=lambda s: (share(cells[(t, s)], "money"), -s)) if ok else 1
         c = cells[(t, s)]
@@ -2236,7 +3800,7 @@ def span_sweep(rows, n_calls=None):
         a = {k: sum(cells[(t, s)][k] for t in range(SPAN_TIERS))
              for k in ("pairs", "w", "top", "low", "money", "m1_w", "m1_money")}
         g = None
-        if fit_ok and s > 1 and a["pairs"] >= SPAN_MIN_PAIRS and a["w"] and m1(a) is not None and a["money"] / a["w"] > m1(a):
+        if s > 1 and a["pairs"] >= SPAN_MIN_PAIRS and a["w"] and m1(a) is not None and a["money"] / a["w"] > m1(a):
             g = span_gate([k for t in range(SPAN_TIERS) for k in per_key[(t, s)]], sum(n_tier.values()))
         out["by_span"].append({"span": s, "pairs": a["pairs"], "top_share": share(a, "top"), "low_share": share(a, "low"),
                                "money_share": share(a, "money"), "span1_same_answers_money_share": m1(a),
@@ -2281,7 +3845,38 @@ def _rates(p, prompt):
                       if "long_" + k in p})
 
 
+# PRICE-ROWS-B4 (10-24): names a router or a cloud puts around a vendor's own model id. Bedrock ids per the Bedrock
+# model-id list (optional cross-region prefix "us." / "eu." / "apac." / "global." ...); "-v1:0" is the id's version.
+BEDROCK_ID = re.compile(r"^(?:[a-z]{2,6}(?:-gov)?\.)?anthropic\.(claude-[a-z0-9.-]+?)-v\d+(?::\d+)?$")
+# Table rows whose Bedrock on-demand rate was checked equal to the vendor's list rate (AWS price list JSON
+# bedrockfoundationmodels, 2026-10-24: the same in every region listed). Newer models can cost more on a regional
+# endpoint, so a Bedrock id is priced only through a row named here.
+BEDROCK_SAME_RATE = {"claude-sonnet-4-20250514"}
+
+
+def price_aliases(rows, pricing):
+    """{log model: [table model, why]} for a name not in the price table that is a table row behind a router prefix
+    ("openai/gpt-5.6-luna": OpenRouter bills the provider's own rate, no markup; its credit-purchase fee is not in
+    the table) or a Bedrock model id ("us.anthropic.claude-sonnet-4-20250514-v1:0") whose row is in
+    BEDROCK_SAME_RATE. Only an exact table row counts;
+    the alias is then priced from that row (pricing["models"] gets the alias). Anything else stays unpriced."""
+    if not pricing:
+        return {}
+    out = {}
+    for m in {r.model for r in rows if r.model and r.model not in pricing["models"]}:
+        b = BEDROCK_ID.match(m)
+        if b and b.group(1) in pricing["models"] and b.group(1) in BEDROCK_SAME_RATE:
+            out[m] = [b.group(1), "bedrock_id"]
+        elif m.count("/") == 1 and m.split("/")[1] in pricing["models"]:
+            out[m] = [m.split("/")[1], "router_prefix"]
+    for m, (base, _) in out.items():
+        pricing["models"][m] = pricing["models"][base]
+    return out
+
+
 def call_cost(r, pricing):
+    if r.x.get("flat"):  # flat rate: the bill does not move with tokens
+        return None
     if pricing is None or not r.model or r.model not in pricing["models"] or r.inp is None or r.out_billed is None:
         return None
     p = _rates(pricing["models"][r.model], r.inp)
@@ -2289,10 +3884,36 @@ def call_cost(r, pricing):
         return None
     cached = r.cached or 0
     cin = p.get("cached_input_per_1m_usd", p["input_per_1m_usd"])
-    return (max(r.inp - cached, 0) * p["input_per_1m_usd"] + cached * cin + r.out_billed * p["output_per_1m_usd"]) / 1e6
+    # BILL-WRITE (10-23): a cache write the log reports (Anthropic cache_creation_input_tokens, 1-hour part apart) is
+    # billed at the vendor's write multiple, not at the plain input price -- before, every marking customer's bill was low
+    cw = r.x.get("cache_write") or 0
+    extra = 0.0
+    if cw > 0:
+        wm = (CACHE["vendors"].get(cache_min(r.model, CACHE)[0] or "", {}).get("write_multiple") or {})
+        if isinstance(wm, dict) and wm:
+            w1 = min(r.x.get("cache_write_1h") or 0, cw)
+            w12 = min(r.x.get("cache_write_12h") or 0, cw - w1)  # BILL-WRITE-OA: OpenAI 12-hour writes
+            extra = ((cw - w1 - w12) * (wm.get("5m", wm.get("default", 1.0)) - 1) + w1 * (wm.get("1h", 2.0) - 1)
+                     + w12 * (wm.get("12h", 2.5) - 1)) * p["input_per_1m_usd"]
+    return (max(r.inp - cached, 0) * p["input_per_1m_usd"] + extra + cached * cin
+            + r.out_billed * p["output_per_1m_usd"]) / 1e6
+
+
+def _cache_back(p, r, pricing):
+    """Dollars retry r paid less because failed call p wrote its prefix to the cache (RETRY-CACHE): r's cached input
+    tokens above p's own, capped at p's input, x (input - cached input price). 0 when either is unpriced."""
+    if r.x.get("flat") or pricing is None or not r.model or r.model not in pricing["models"] or not r.cached:
+        return 0.0
+    pr = _rates(pricing["models"][r.model], r.inp)
+    if "input_per_1m_usd" not in pr:
+        return 0.0
+    t = min(max(r.cached - (p.cached or 0), 0), p.inp or 0)
+    return t * (pr["input_per_1m_usd"] - pr.get("cached_input_per_1m_usd", pr["input_per_1m_usd"])) / 1e6
 
 
 def out_cost(r, pricing):
+    if r.x.get("flat"):
+        return None
     if pricing is None or not r.model or r.model not in pricing["models"] or r.out_billed is None:
         return None
     p = _rates(pricing["models"][r.model], r.inp)
@@ -2321,33 +3942,57 @@ def head_records(path, n=None):
     """The first n records (dicts) of a log, for --peek and the hints of a rejected run."""
     n = n or PEEK_LINES
     out = []
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        for line in open_records(path, fh)[1]:
-            d = load_record(line)
-            if isinstance(d, dict):
-                out.append(d)
-            if len(out) >= n:
-                break
+    for line in records_of(path):
+        d = load_record(line)
+        if isinstance(d, dict):
+            out.append(d)
+        if len(out) >= n:
+            break
     return out
 
 
 PEEK_LINES = 200  # design value: records --peek reads (and the hints of a rejected run look at)
 
 
-def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=None):
+def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=None, flat=None):
     t0 = time.time()
     FIELD_MAP.clear()
     FIELD_MAP.update(field_map or {})
     st = collections.Counter()
     rows = read_rows(path, st, workers)
+    flat = set(flat or ())
+    for r in rows:
+        if "all" in flat or (r.model and r.model in flat):
+            r.x["flat"] = True
     pricing = load_pricing(pricing_path)
+    read_as = price_aliases(rows, pricing)
     res = {"version": VERSION, "input": os.path.basename(path), "lines": st["lines"], "bad_json": st["bad_json"],
+           "collector_stop": [k[len("collector_stop_"):] for k in ("collector_stop_max_mb", "collector_stop_hours") if st.get(k)],
            "rejected_no_ts": st["rejected_no_ts"], "no_ts": st["no_ts"], "calls": len(rows), "mode_requested": mode,
            "format": next((k[1] for k in st if isinstance(k, tuple) and k[0] == "format"), "jsonl"),
-           "field_map": dict(FIELD_MAP) or None, "field_sources": {}}
+           "field_map": dict(FIELD_MAP) or None, "field_sources": {},
+           "synthetic_calls": sum(1 for r in rows if r.x.get("synthetic")),
+           "agent_log_calls": sum(1 for r in rows if r.x.get("agent_log")),
+           "collector_nohash_calls": sum(1 for r in rows if r.x.get("collector_nohash")),
+           "flat": {"calls": sum(1 for r in rows if r.x.get("flat")),
+                    "output_tokens": sum(r.out_billed or 0 for r in rows if r.x.get("flat")),
+                    "models": dict(collections.Counter(r.model or "(none)" for r in rows if r.x.get("flat"))),
+                    "marked_on_command_line": sorted(flat), "on_output_tokens": 0}}
     for k, c in st.items():
         if isinstance(k, tuple) and k[0] == "via":
             res["field_sources"].setdefault(k[1], {})[k[2]] = c
+    files = st.get("files") or []
+    if len(files) > 1 or os.path.isdir(path):  # a folder: what each file gave, and why a file gave nothing
+        res["files"] = []
+        for k, (p, fmt, _) in enumerate(files):
+            e = {"file": os.path.relpath(p, path) if os.path.isdir(path) else os.path.basename(p), "format": fmt,
+                 "lines": sum(c for kk, c in st.items() if isinstance(kk, tuple) and kk[:2] == ("file", k)),
+                 "ok": st.get(("file", k, "ok"), 0), "bad_json": st.get(("file", k, "bad_json"), 0)}
+            if not e["ok"]:
+                head = head_records(p, 20)
+                e["looks_like"] = looks_like(head) if head else None
+                e["keys"] = sorted({k2 for d in head for k2 in d})[:8] if head else []
+            res["files"].append(e)
     if not rows or not any(r.has_body for r in rows):
         head = head_records(path)
         res["field_hints"] = {"looks_like": looks_like(head), "candidates": candidates(head), "records_looked_at": len(head)}
@@ -2357,6 +4002,21 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
     timed = [r for r in rows if r.ts is not None]
     res["period"] = [min(r.ts for r in timed).isoformat(), max(r.ts for r in timed).isoformat()] if timed else None
     res["models"] = dict(collections.Counter(r.model or "(none)" for r in rows).most_common())
+    lc = [r for r in rows if r.x.get("logged_cost") is not None]
+    if lc:
+        by = collections.defaultdict(float)
+        for r in lc:
+            by[r.model or "(none)"] += r.x["logged_cost"]
+        res["logged_cost"] = {"calls": len(lc), "total": round(sum(by.values()), 6),
+                              "by_model": {m: round(v, 6) for m, v in sorted(by.items(), key=lambda kv: -kv[1])}}
+    if "(none)" in res["models"]:  # UNKNOWN-SHAPE: where the model name might be, for the --map line
+        res["model_candidates"] = model_candidates(head_records(path, 20))
+    zu = sum(1 for r in rows if r.inp == 0 and r.out_billed == 0)
+    if rows and zu == len(rows):  # UNKNOWN-SHAPE: every call says 0 in and 0 out -- the log lost usage, not a $0 bill
+        res["zero_usage_calls"] = zu
+    if rows and all(r.inp is None for r in rows):  # no input count read anywhere: where token counts might be
+        res["token_candidates"] = [p for p in candidates(head_records(path, 20))["tokens"]
+                                   if p not in ("input_tokens", "output_tokens", "cached_input_tokens")]
     body = [r for r in rows if r.has_body]
     res["body"] = {"text": sum(1 for r in body if not r.hashed), "token_hashes": sum(1 for r in body if r.hashed),
                    "none": len(rows) - len(body)}
@@ -2364,18 +4024,24 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
     res["output_tokens_missing"] = sum(1 for r in rows if r.out_billed is None)
     total_out = sum(r.out_billed or 0 for r in rows)
     res["output_tokens_total"] = total_out
-    both = [r for r in rows if r.has_body and not r.out_counted and r.out_billed is not None and r.length]
-    b_tok, m_tok = sum(r.out_billed for r in both), sum(r.length for r in both)
+    # a collector line with the shadow carries the answer's o200k count (LEVER2-SHADOW): it counts here like a body
+    both = [(r.out_billed, r.length) for r in rows if r.has_body and not r.out_counted and r.out_billed is not None and r.length] + \
+        [(r.out_billed, r.shadow["n"]) for r in rows if r.shadow is not None and not r.out_counted and r.out_billed is not None
+         and r.shadow["n"]]
+    b_tok, m_tok = sum(b for b, _ in both), sum(m for _, m in both)
     res["billed_vs_body"] = {"calls": len(both), "billed_output_tokens": b_tok, "body_o200k_tokens": m_tok,
                              "ratio": b_tok / m_tok if m_tok else None, "threshold": THINK_RATIO,
-                             "warn": len(both) >= THINK_MIN_CALLS and m_tok > 0 and b_tok / m_tok >= THINK_RATIO}
+                             "warn": m_tok > 0 and b_tok / m_tok >= THINK_RATIO}
+    ci = think_ci(both)
+    res["billed_vs_body"]["ci95"] = list(ci) if ci else None
+    res["billed_vs_body"]["small_sample"] = ci is None or ci[0] <= THINK_RATIO <= ci[1]
 
     # section 1: output share of the bill
     priced = [r for r in rows if call_cost(r, pricing) is not None]
     res["pricing"] = {"as_of": pricing["as_of"] if pricing else None, "table": pricing["path"] if pricing else None,
                       "priced_calls": len(priced),
                       "unpriced_models": sorted({r.model or "(none)" for r in rows
-                                                 if not (pricing and r.model in pricing["models"])})}
+                                                 if not (pricing and r.model in pricing["models"])}), "read_as": read_as or None}
     if priced:
         tot = sum(call_cost(r, pricing) for r in priced)
         outc = sum(out_cost(r, pricing) for r in priced)
@@ -2398,10 +4064,15 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
 
     res["waste"] = waste_checks(rows, pricing, path)
     res["small_models"] = small_models(rows)
+    res["billing_mode"], res["limit"] = limit_view(res)
 
     # sections 2-5 pair answers in time order: rows without ts stay out of them (they are in sections 1, 6-8 above)
     if not timed:
         res["no_time"] = True
+        # EMPTY-HAND (PM 10-23 21:12): no pairs without time order, but the long answers' output share -- the most any
+        # rewrite could touch -- needs no order, so section 3 still gets its upper bound (as a log without bodies does)
+        long_out = sum(r.out_billed or 0 for r in rows if (r.out_billed or 0) >= SWITCH["min_answer_tokens"])
+        res["qualified_share_upper_bound"] = long_out / total_out if total_out else None
         res["zero_explain"] = zero_axes(res, rows)
         res["seconds"] = round(time.time() - t0, 1)
         return res
@@ -2410,8 +4081,9 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
         body = [r for r in rows if r.has_body]
         total_out = sum(r.out_billed or 0 for r in rows)
 
-    # no body anywhere: axis 2 only, upper bound
-    if not body:
+    shadow = [r for r in rows if r.shadow is not None and isinstance(r.shadow.get("f"), (int, float))]
+    # no body anywhere (a collector line with the shadow counts: its answers were read, in memory): axis 2 only
+    if not body and not any(r.shadow is not None for r in rows):
         long_out = sum(r.out_billed or 0 for r in rows if (r.out_billed or 0) >= SWITCH["min_answer_tokens"])
         res["upper_bound_only"] = True
         res["qualified_share_upper_bound"] = long_out / total_out if total_out else None
@@ -2428,7 +4100,9 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
                        "auto_params": {"minhash": "one-permutation, densified", "minhash_k": AUTO_K, "lsh_tau": AUTO_TAU,
                                        "shingle": "o200k token %d-gram (text and hash forms alike)" % AUTO_NGRAM}}
     pairs, ties = make_pairs(body)
-    res["grouping"]["keys"] = len({r.key for r in body})
+    pairs += [shadow_pair(b) for b in shadow]
+    res["grouping"]["shadow_pairs"] = len(shadow)
+    res["grouping"]["keys"] = len({r.key for r in body} | {r.key for r in shadow})
     res["grouping"]["pairs"] = len(pairs)
     res["grouping"]["pairs_auto"] = sum(1 for a, b in pairs if b.auto)
     res["grouping"]["same_ts_skipped"] = ties
@@ -2441,7 +4115,7 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
            "usd_out_high": 0.0}
     per_pair = []
     for a, b in pairs:
-        f = draft_overlap(a.toks, b.toks)
+        f = float(b.shadow["f"]) if b.shadow is not None else draft_overlap(a.toks, b.toks)
         cell = band(f, ob) + "|" + band(b.length, lb)
         w = b.out_billed or 0
         g = grid[cell]
@@ -2452,6 +4126,8 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
         if on:
             on_tokens += w
             on_pairs += 1
+            if b.x.get("flat"):
+                res["flat"]["on_output_tokens"] += w
             rt = cell_rates(cell)
             sav["out_low"] += w * rt["out_low"]
             sav["out_high"] += w * rt["out_high"]
@@ -2553,7 +4229,10 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
     res["call_loss"]["warn"] = res["call_loss"]["warn_span1"] and not res["call_loss"]["rescued_by_span"]
 
     # section 4: savings band (cell constants applied; not measured on this log)
-    res["savings"] = {"output_tokens_low": sav["out_low"], "output_tokens_high": sav["out_high"],
+    # SCAN-LIVE: the engine keeps ENGINE_HOLDOUT of the traffic in full as its control, so it saves on the rest
+    for k_ in ("out_low", "out_high", "usd_low", "usd_high", "usd_out_high"):
+        sav[k_] *= 1 - ENGINE_HOLDOUT
+    res["savings"] = {"holdout_share": ENGINE_HOLDOUT, "output_tokens_low": sav["out_low"], "output_tokens_high": sav["out_high"],
                       "share_of_all_output_low": sav["out_low"] / total_out if total_out else None,
                       "share_of_all_output_high": sav["out_high"] / total_out if total_out else None,
                       "usd_low": sav["usd_low"], "usd_high": sav["usd_high"],
@@ -2567,7 +4246,7 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
     elif res["io"]["output_share_of_bill"] is not None and res["savings"]["share_of_all_output_high"] is not None:
         res["io"]["max_saving_of_bill"] = res["io"]["output_share_of_bill"] * res["savings"]["share_of_all_output_high"]
         res["io"]["max_saving_source"] = "output_share_x_output_taken"
-    if priced:
+    if priced and res["bill"]["usd_total"]:  # UNKNOWN-SHAPE: a log whose every call bills 0 has no share of bill
         res["savings"]["share_of_bill_low"] = sav["usd_low"] / res["bill"]["usd_total"]
         res["savings"]["share_of_bill_high"] = sav["usd_high"] / res["bill"]["usd_total"]
         # the money band is measured on other materials; where this log's calls carry less output, its high end can
@@ -2576,31 +4255,31 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
         res["io"]["bill_band_high_above_ceiling"] = mx is not None and res["savings"]["share_of_bill_high"] > mx
 
     # engine replay: the switch sees only the key's earlier pairs (no answer peeking) -- DL-1
-    hist = collections.defaultdict(lambda: [0.0, 0, []])  # sum(f*len), sum(len), answer lengths
-    rep_on_tok, rep_on_pairs, rep_low, rep_high, rep_resend = 0, 0, 0.0, 0.0, 0
-    first_on = 0  # switch-on pairs that are their key's first pair (no history for the replay switch)
-    for a, b, f, on in sorted(per_pair, key=lambda x: (x[1].ts, x[1].i)):
-        h = hist[b.key]
-        first_on += on and not h[1]
-        stats = {"overlap": h[0] / h[1], "answer_tokens": statistics.median(h[2])} if h[1] else None
-        if resent(a, b, win):
-            rep_resend += 1
-        elif use_diff(stats, len(a.toks)):
-            w = b.out_billed or 0
-            rep_on_tok += w
-            rep_on_pairs += 1
-            rt = cell_rates(band(f, ob) + "|" + band(b.length, lb))
-            if rt:  # switched on but landed outside the measured cells: saving counted as 0
-                rep_low += w * rt["out_low"]
-                rep_high += w * rt["out_high"]
-        h[0] += f * len(b.toks)
-        h[1] += len(b.toks)
-        h[2].append(b.length)
+    rep_on_tok, rep_on_pairs, rep_low, rep_high = 0, 0, 0.0, 0.0
+    decided, first_on, rep_resend = engine_replay(per_pair, win, path)
+    guard = collections.Counter(why for _, _, _, why in decided)
+    for a, b, f, why in decided:
+        if why not in ("on", "no_text"):
+            continue
+        w = b.out_billed or 0
+        rep_on_tok += w
+        rep_on_pairs += 1
+        rt = cell_rates(band(f, ob) + "|" + band(b.length, lb))
+        if rt:  # switched on but landed outside the measured cells: saving counted as 0
+            rep_low += w * rt["out_low"]
+            rep_high += w * rt["out_high"]
     res["replay"] = {"on_pairs": rep_on_pairs, "on_output_tokens": rep_on_tok,
                      "share_of_all_output": rep_on_tok / total_out if total_out else None,
                      "saving_share_low": rep_low / total_out if total_out else None,
                      "saving_share_high": rep_high / total_out if total_out else None,
-                     "resend_full_pairs": rep_resend}
+                     "resend_full_pairs": rep_resend, "switch_on_pairs": len(decided),
+                     "guard_full_pairs": {"draft_not_in_request": guard["draft_not_in_request"],
+                                          "new_text": guard["new_text"]},
+                     "guard_unchecked_pairs": guard["no_text"],
+                     # GUARD-SHARE (10-24, COMMERCE-B B3 [synthetic]): the output the new-text guard sent to a full
+                     # write -- the engine fits that guard per tenant by probing (NEW_TEXT_PROBE), so it is not a fixed 0
+                     "guard_new_text_output_share": sum(b.out_billed or 0 for _, b, _, why in decided
+                                                        if why == "new_text") / total_out if total_out else None}
 
     # mode (only when the customer says the task is one)
     if mode:
@@ -2614,8 +4293,13 @@ def scan(path, pricing_path=DEFAULT_PRICING, mode=None, workers=1, field_map=Non
     # section 5: zero-call candidates
     gate_pairs = [(a, b, f) for a, b, f, _ in per_pair if a.prompt_sig and b.prompt_sig]
     sel = [(a, b, f) for a, b, f in gate_pairs if a.prompt_sig == b.prompt_sig]
-    exact = lambda a, b: a.toks == b.toks and a.length == b.length  # noqa: E731
-    masked = lambda a, b: exact(a, b) or (a.masked_out_sig is not None and a.masked_out_sig == b.masked_out_sig)  # noqa: E731
+    def exact(a, b):
+        return bool(b.shadow.get("same")) if b.shadow is not None else a.toks == b.toks and a.length == b.length
+
+    def masked(a, b):
+        if b.shadow is not None:
+            return bool(b.shadow.get("same") or b.shadow.get("same_masked"))
+        return exact(a, b) or (a.masked_out_sig is not None and a.masked_out_sig == b.masked_out_sig)
     sel_tok = sum(b.out_billed or 0 for _, b, _ in sel)
     late = [(a, b) for a, b, _ in sel if not resent(a, b, win)]
     res["zero_call"] = {
@@ -2642,28 +4326,164 @@ def _money(rs, pricing):
     return (sum(cs) if cs else None), len(cs)
 
 
+def engine_replay(per_pair, win, path):
+    """The engine's decision per pair, in answer time order: the switch sees only the key's earlier pairs (no answer
+    peeking, DL-1); a re-send within the window goes full (RS-1). Then, SCAN-ENGINE-ALIGN (10-23), the engine's guards
+    after the switch (hive/switch.py, the same functions) on logs whose request and answer are text: an auto-grouped
+    request diffs only when its draft is in the request, and a request bringing new tokens of at least NEW_TEXT_FULL x
+    the draft goes full. Not replayed: the tenant frame, the guard's probe share, the per-tenant line, the engine's
+    own attach rule. -> ([(a, b, f, why)] for switch-on pairs, why in on / no_text (on, guards unchecked) /
+    draft_not_in_request / new_text; switch-on pairs that are their key's first pair; re-sent pairs)."""
+    hist = collections.defaultdict(lambda: [0.0, 0, []])  # sum(f*len), sum(len), answer lengths
+    cand, first_on, resend = [], 0, 0
+    for a, b, f, on in sorted(per_pair, key=lambda x: (x[1].ts, x[1].i)):
+        h = hist[b.key]
+        first_on += on and not h[1]
+        stats = {"overlap": h[0] / h[1], "answer_tokens": statistics.median(h[2])} if h[1] else None
+        if resent(a, b, win):
+            resend += 1
+        elif use_diff(stats, len(a.toks)):
+            cand.append((a, b, f))
+        h[0] += f * len(b.toks)
+        h[1] += len(b.toks)
+        h[2].append(b.length)
+    texts = replay_texts(path, cand) if cand else {}
+    out = []
+    for a, b, f in cand:
+        if b.shadow is not None:  # LEVER2-SHADOW: the collector ran the same two rules at call time
+            s = b.shadow
+            out.append((a, b, f, "no_text" if "inside" not in s else "draft_not_in_request" if b.auto and not s["inside"]
+                        else "new_text" if a.length and s.get("new_text") else "on"))
+            continue
+        p, d = texts.get(("p", b.i)), texts.get(("o", a.i))
+        if p is not None and d is not None:
+            inside = draft_in(p, d)
+            pt, dt = o200k.encode(p), o200k.encode(d)
+        else:  # HASH-GUARDS (10-23): a --hashify log keeps per-token hashes in order -- the new_text count is the
+            # same on them; draft_in becomes draft_in_tokens, which agreed with the text rule on 3,412 of 3,443
+            # switch-on pairs (0.991; every miss on the stricter side, results/scan_engine_gap_1023/hash_guards_*)
+            pt, dt = texts.get(("ph", b.i)), texts.get(("oh", a.i))
+            inside = draft_in_tokens(pt, dt) if pt is not None and dt is not None else None
+        if inside is None:
+            why = "no_text"
+        elif b.auto and not inside:
+            why = "draft_not_in_request"
+        elif a.length and new_text_count(collections.Counter(pt), collections.Counter(dt)) >= NEW_TEXT_FULL * a.length:
+            why = "new_text"
+        else:
+            why = "on"
+        out.append((a, b, f, why))
+    return out, first_on, resend
+
+
+def replay_texts(path, cand):
+    """Second read of the log for the engine replay's guards: the request text of each switch-on answer row and the
+    answer text of its draft row, only for those pairs (memory grows with the switch-on pairs, not the log).
+    {("p", row index): prompt, ("o", row index): output} and, for a --hashify log, ("ph", i) / ("oh", i): the
+    prompt / output token hash lists; fields that are neither are left out."""
+    want_p, want_o = {b.i for _, b, _ in cand}, {a.i for a, _, _ in cand}
+    got = {}
+    for n, line in enumerate(records_of(path)):
+        if n not in want_p and n not in want_o:
+            continue
+        d = load_record(line)
+        if not isinstance(d, dict):
+            continue
+        d, _ = resolve(d)
+        for idx, kind, field, hkind, hfield in ((want_p, "p", "prompt", "ph", "prompt_token_hashes"),
+                                                (want_o, "o", "output", "oh", "output_token_hashes")):
+            if n not in idx:
+                continue
+            v, h = d.get(field), d.get(hfield)
+            if isinstance(v, str) and v:
+                got[(kind, n)] = v
+            elif isinstance(h, list) and h:
+                got[(hkind, n)] = [str(x) for x in h]
+    return got
+
+
+def last_user_text(d):
+    """The text of a record's last user message (request messages / Responses input), else its prompt field."""
+    req = d.get("request")
+    if isinstance(req, dict):
+        for k in ("messages", "input", "contents"):
+            v = req.get(k)
+            if isinstance(v, list):
+                us = [m for m in v if isinstance(m, dict) and m.get("role") == "user"]
+                if us:
+                    return request_text({"messages": [us[-1]]})
+    v = d.get("prompt")
+    return v if isinstance(v, str) else None
+
+
+def redraft_pairs(path, cand):
+    """REDRAFT: the (earlier, later) pairs whose later last user message holds the earlier one and its answer."""
+    want = {a.i for a, _ in cand} | {b.i for _, b in cand}
+    got = {}
+    for n, line in enumerate(records_of(path)):
+        if n not in want:
+            continue
+        d = load_record(line)
+        if not isinstance(d, dict):
+            continue
+        d, _ = resolve(d)
+        got[n] = (last_user_text(d), d.get("output") if isinstance(d.get("output"), str) else None)
+    out = []
+    for a, b in cand:
+        au, ao = got.get(a.i, (None, None))
+        bu = got.get(b.i, (None, None))[0]
+        if au and ao and bu and draft_in(bu, ao) and "".join(au.split()) in "".join(bu.split()):
+            out.append((a, b))
+    return out
+
+
+def redraft_judges(path, red, between):
+    """REDRAFT-JUDGE: the calls between each (draft, rewrite) pair whose last user message holds the draft's answer --
+    the judge that threw it away. Each judge is counted once."""
+    want = {a.i for a, _ in red} | {c.i for cs in between.values() for c in cs}
+    got = {}
+    for n, line in enumerate(records_of(path)):
+        if n not in want:
+            continue
+        d = load_record(line)
+        if not isinstance(d, dict):
+            continue
+        d, _ = resolve(d)
+        got[n] = (last_user_text(d), d.get("output") if isinstance(d.get("output"), str) else None)
+    out, seen = [], set()
+    for a, b in red:
+        ao = got.get(a.i, (None, None))[1]
+        for c in between.get((a.i, b.i), ()):
+            cu = got.get(c.i, (None, None))[0]
+            if ao and cu and c.i not in seen and draft_in(cu, ao):
+                seen.add(c.i)
+                out.append(c)
+                break
+    return out
+
+
 def prefix_examples(path, wanted):
     """Second read of the log, only when an unstable block was found: for each wanted (block, sorted hash), the first
     serialization of its two most frequent as-sent forms (wanted[...] = [hash1, hash2]) -> where they first differ, and
     the block's o200k tokens. Text stays in memory."""
     seen = {k: {} for k in wanted}
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        for line in open_records(path, fh)[1]:
-            d = load_record(line)
-            if not isinstance(d, dict):
+    for line in records_of(path):
+        d = load_record(line)
+        if not isinstance(d, dict):
+            continue
+        req = _request(d)
+        if req is None:
+            continue
+        for name, v in prefix_blocks(req):
+            if isinstance(v, str):
                 continue
-            req = _request(d)
-            if req is None:
-                continue
-            for name, v in prefix_blocks(req):
-                if isinstance(v, str):
-                    continue
-                _, h, can, _ = block_hashes({"tools": v} if name == "tools" else {"system": v})[0]
-                k = (name, can)
-                if k in seen and h in wanted[k] and h not in seen[k]:
-                    seen[k][h] = wdump(v)
-            if all(len(v) >= 2 for v in seen.values()):
-                break
+            _, h, can, _ = (schema_blocks(req)[0] if name == "schema" else
+                            block_hashes({"tools": v} if name == "tools" else {"system": v})[0])
+            k = (name, can)
+            if k in seen and h in wanted[k] and h not in seen[k]:
+                seen[k][h] = wdump(v)
+        if all(len(v) >= 2 for v in seen.values()):
+            break
     out = {}
     for k, forms in seen.items():
         if len(forms) >= 2:
@@ -2707,45 +4527,131 @@ def waste_checks(rows, pricing, path):
                    "input_tokens": sum(r.inp or 0 for r in billed), "output_tokens": sum(r.out_billed or 0 for r in billed),
                    "usd": usd_, "priced_calls": priced}
     # 5b the same request again within RETRY_WINDOW (same customer key when there is one)
-    with_sig = [r for r in rows if r.x["rsig"]]
+    with_sig = [r for r in rows if r.x.get("rsig_nc") or r.x["rsig"]]
     sig = [r for r in with_sig if r.ts is not None]
     last, again, after = {}, [], collections.Counter()
+    state = lambda p: ("failed" if p.x["failed"] else "truncated" if p.x["trunc"] else  # noqa: E731
+                       "ok" if p.x["failed"] is False or p.x["trunc"] is False else "unknown")
     for r in sorted(sig, key=lambda r: (r.ts, r.i)):
-        k = (r.key, r.x["rsig"])
+        k = (r.key, r.x.get("rsig_nc") or r.x["rsig"])
         p = last.get(k)
         if p is not None and (r.ts - p.ts).total_seconds() <= RETRY_WINDOW:
             again.append((p, r))
-            after["failed" if p.x["failed"] else "truncated" if p.x["trunc"] else
-                  "ok" if p.x["failed"] is False or p.x["trunc"] is False else "unknown"] += 1
+            after[state(p)] += 1
         last[k] = r
     usd_, priced = _money([r for _, r in again], pricing)
+    # RETRY-CACHE (PM 10-24 15:00, decision 13; REVIEW-JUDGE RV2 [synthetic] 7-1 $0.31 vs $0.17 really saved): a retry
+    # reads the cache its failed attempt wrote, so part of a failed call's bill comes back on the retry. 7-1 is money a
+    # customer would save, so that part comes off: per (billed failed call, its retry) pair, the retry's cached input
+    # tokens above the failed call's own (capped at the failed call's input) x (input - cached input price). Along a
+    # chain the terms add up to the last retry's cached tokens over the first attempt's.
+    fw = W["failed"]
+    billed_ids = {id(r) for r in billed}
+    back = [(_cache_back(p, r, pricing), p) for p, r in again if id(p) in billed_ids]
+    back_usd = sum(b for b, _ in back)
+    if fw.get("usd") is not None and back_usd > 0:
+        fw.update(usd_billed=fw["usd"], usd_back_on_retry=back_usd, usd=max(fw["usd"] - back_usd, 0.0),
+                  calls_back_on_retry=sum(1 for b, _ in back if b > 0))
+    # RESENT-SPLIT (10-22): the engine's stored answer only exists after an OK answer; a resend after a failure is the
+    # service's retry setting, one after a cut is 7-3's (a larger cap from the start)
+    usd_after = {st: _money([r for p, r in again if state(p) == st], pricing)[0] for st in after}
     gaps = sorted((r.ts - p.ts).total_seconds() for p, r in again)
     W["resent"] = {"status": "cannot_judge" if not sig else "found" if again else "none",
                    "missing": None if sig else "ts" if with_sig else "request (or prompt / prompt_hash)",
                    "window_s": RETRY_WINDOW,
-                   "calls_with_request": len(sig), "resent_calls": len(again), "after": dict(after),
+                   "calls_with_request": len(sig), "resent_calls": len(again), "after": dict(after), "usd_after": usd_after,
                    "input_tokens": sum(r.inp or 0 for _, r in again),
                    "output_tokens": sum(r.out_billed or 0 for _, r in again), "usd": usd_, "priced_calls": priced,
                    "gap_median_s": statistics.median(gaps) if gaps else None}
+    # STRICT-7-2 (10-24): resends after an OK answer whose request took JSON without a schema the vendor enforces -- a
+    # broken format asked again is not fixed by the stored answer (it is the broken one) but by structured output
+    loose = [r for p, r in again if state(p) == "ok" and p.x.get("jmode") == "loose"]
+    if loose:
+        W["resent"]["after_ok_json_loose"] = {"calls": len(loose), "usd": _money(loose, pricing)[0]}
+    # PAIR-FIX (PM 10-23 17:40 / 17:55): two kinds of paid-for calls that bought nothing, told apart from the log --
+    #   (7) discarded output: a failed call the vendor still billed (7-1) + an OK answer the service asked again for
+    #       within the window (quality gate, broken format, a user's regenerate -- the log cannot tell which)
+    #   (8) retries: the same request again after a failed / timed-out one (the retry setting), + after a cut (7-3)
+    #   PM 10-23 17:55: (7) is priced on the answer thrown away (the earlier OK call), not on the call that replaced it
+    rw, fw = W["resent"], W["failed"]
+    ua = rw.get("usd_after") or {}
+    ok_dropped = [p for p, _ in again if state(p) == "ok"]
+    dropped_usd = _money(ok_dropped, pricing)[0] if ok_dropped else None
+    dsc = {"failed_billed_calls": fw.get("failed_calls_billed", 0), "failed_billed_usd": fw.get("usd"),
+           "dropped_ok_calls": len(ok_dropped), "dropped_ok_usd": dropped_usd,
+           "usd": (fw.get("usd") or 0) + (dropped_usd or 0) if (fw.get("usd") or dropped_usd) else None}
+    rtr = {"after_failed_calls": (rw.get("after") or {}).get("failed", 0), "after_failed_usd": ua.get("failed"),
+           "after_cut_calls": (rw.get("after") or {}).get("truncated", 0), "after_cut_usd": ua.get("truncated")}
+    # REDRAFT (10-24, REVIEW-JUDGE RV1 [synthetic]): an OK answer the service asked for again with that answer attached
+    # -- a judge's rewrite loop. The next call of the same key within RETRY_WINDOW carries, in its last user message,
+    # both the earlier user message and the earlier answer (draft_in's rule); the earlier call was paid for and thrown
+    # away. Not the same request, so 5b misses it. A conversation's next turn carries the answer as an assistant message,
+    # not inside the user's, and stays out. The judge's own calls (another key) are not linked: a lower bound
+    byk, cand_r = {}, []
+    for r in sorted((r for r in rows if r.ts is not None and r.x["rsig"]), key=lambda r: (r.ts, r.i)):
+        p = byk.get((r.key, r.model))
+        if p is not None and state(p) == "ok" and p.x["rsig"] != r.x["rsig"] \
+                and (r.ts - p.ts).total_seconds() <= RETRY_WINDOW:
+            cand_r.append((p, r))
+        byk[(r.key, r.model)] = r
+    red = redraft_pairs(path, cand_r) if cand_r and path else []
+    judges = []
+    if red:
+        # REDRAFT-JUDGE (10-24): the judge call between a draft and its rewrite has its own key, but its last user
+        # message holds the thrown-away draft -- linked by that, it joins the discarded money (still a lower bound:
+        # an item never shown has no rewrite after its last draft)
+        tsorted = sorted((r for r in rows if r.ts is not None), key=lambda r: (r.ts, r.i))
+        tts = [r.ts for r in tsorted]
+        import bisect
+        between = {}
+        for a, b in red:
+            lo, hi = bisect.bisect_right(tts, a.ts), bisect.bisect_left(tts, b.ts)
+            between[(a.i, b.i)] = [c for c in tsorted[lo:hi] if c.key != a.key and state(c) == "ok"]
+        judges = redraft_judges(path, red, between)
+        dsc["redraft_calls"] = len(red)
+        dsc["redraft_judge_calls"] = len(judges)
+        dsc["redraft_usd"] = _money([p for p, _ in red] + judges, pricing)[0]
+        # WRONG-SWEEP (10-24, RV1): the thrown-away drafts and their judge calls in tokens, for the limit view
+        dsc["redraft_tokens"] = sum((r.inp or 0) + (r.out_billed or 0) for r in [p for p, _ in red] + judges)
+        dsc["usd"] = (dsc["usd"] or 0) + (dsc["redraft_usd"] or 0) or None
+        if rw["status"] == "none" and dsc["redraft_usd"]:
+            rw["status"] = "found"
+    fw["split"] = {"discarded": dsc, "retries": rtr}  # inside 7-1: W's keys are the report items
     # 6 answers cut at the token limit
     known = [r for r in rows if r.x["trunc"] is not None]
     cut = [r for r in known if r.x["trunc"]]
     usd_, priced = _money(cut, pricing)
     o_cut = sum(r.out_billed or 0 for r in cut)
+    # PAIR-FIX (10-23): what the engine's cap knife saves is a cut attempt the service sent again with a larger cap
+    # (within the engine's chain window, RESEND_WINDOW) -- a cut answer nobody sent again is not saved by it
+    nxt, resent_cut, n_cap_unknown = {}, [], 0
+    for r in sorted((r for r in rows if r.ts is not None and (r.x.get("rsig_nc") or r.x["rsig"])), key=lambda r: (r.ts, r.i)):
+        k = (r.key, r.x.get("rsig_nc") or r.x["rsig"])
+        p = nxt.get(k)
+        cap_unknown = r.x["max_tokens"] is None and p is not None and p.x["max_tokens"] is None
+        if p is not None and p.x["trunc"] and (r.ts - p.ts).total_seconds() <= RESEND_WINDOW \
+                and ((r.x["max_tokens"] or 0) > (p.x["max_tokens"] or 0) or cap_unknown):
+            resent_cut.append(p)  # no cap on either (a log without request bodies): the same prompt again after a cut
+            n_cap_unknown += cap_unknown
+        nxt[k] = r
+    usd_fix, _ = _money(resent_cut, pricing)
     W["truncated"] = {"status": "cannot_judge" if not known else "found" if cut else "none",
                       "missing": None if known else "finish_reason (or max_tokens + output_tokens)",
                       "calls_judged": len(known), "truncated_calls": len(cut),
                       "share_of_judged_calls": len(cut) / len(known) if known else None, "output_tokens": o_cut,
                       "share_of_all_output": o_cut / sum(r.out_billed or 0 for r in rows) if any(r.out_billed for r in rows) else None,
-                      "usd": usd_, "priced_calls": priced,
+                      "usd": usd_, "priced_calls": priced, "cut_sent_again": len(resent_cut), "cut_sent_again_cap_unknown": n_cap_unknown,
+                      "usd_fix": usd_fix if resent_cut else None,
                       "max_tokens_of_cut": dict(collections.Counter(r.x["max_tokens"] for r in cut if r.x["max_tokens"]).most_common(5))}
     # 1-b prefix blocks serialized more than one way
     forms = collections.defaultdict(collections.Counter)
     with_prefix = 0
     for r in rows:
-        if r.x["prefix"]:
+        if r.x["prefix"] or r.x.get("schema"):
             with_prefix += 1
-        for name, raw, can, _ in r.x["prefix"]:
+        # SCHEMA-PREFIX (10-23): a structured-output schema is part of OpenAI's cached prefix too
+        # KNIFE-2: the schema is a prefix block too (field order kept); it is counted once, on its fully sorted form
+        for name, raw, can, _ in tuple(b for b in r.x["prefix"] if b[0] != "schema") + tuple(r.x.get("schema") or ()):
             forms[(name, can)][raw] += 1
     split = {k: c for k, c in forms.items() if len(c) >= 2}
     blocks = []
@@ -2755,14 +4661,25 @@ def waste_checks(rows, pricing, path):
             n = sum(c.values())
             blocks.append(dict({"block": k[0], "as_sent_forms": len(c), "calls": n,
                                 "calls_off_main_form": n - c.most_common(1)[0][1]}, **ex.get(k, {})))
-    W["prefix_unstable"] = {"status": "cannot_judge" if not with_prefix else "found" if split else "none",
+    # the same template with per-call values in it (VALUE_MASKS): masked form -> key-sorted forms
+    vforms = collections.defaultdict(collections.Counter)
+    for r in rows:
+        for name, mh, ch in r.x.get("vprefix") or ():
+            vforms[(name, mh)][ch] += 1
+    vsplit = sorted(((k, c) for k, c in vforms.items() if len(c) >= 2), key=lambda kv: -sum(kv[1].values()))
+    vblocks = [{"block": k[0], "value_forms": len(c), "calls": sum(c.values()),
+                "calls_in_main_form": c.most_common(1)[0][1]} for k, c in vsplit]
+    W["prefix_unstable"] = {"status": "cannot_judge" if not with_prefix else "found" if split or vsplit else "none",
                             "missing": None if with_prefix else "request (tools / system)",
-                            "calls_with_prefix": with_prefix, "blocks_checked": len(forms), "unstable_blocks": blocks[:10]}
+                            "calls_with_prefix": with_prefix, "blocks_checked": len(forms), "unstable_blocks": blocks[:10],
+                            "value_blocks": vblocks[:10],
+                            "value_calls": sum(b["calls"] - b["calls_in_main_form"] for b in vblocks)}
     # 3 prompts under the vendor's minimum cacheable length (parametric: the constants are dated, the label moves)
     by = collections.defaultdict(lambda: {"calls": 0, "below": 0, "input_tokens": 0, "below_input_tokens": 0,
                                           "below_cache_read_0": 0, "min_tokens": None, "status": None})
     na = collections.Counter()
     curve_rows = []
+    open_rows = []  # inputs of calls whose model's minimum is not in the table (EMPTY-HAND: shown as a curve, not guessed)
     for r in rows:
         inp = r.inp if r.inp is not None else r.x["inp_extra"]
         vendor, mn, st = cache_min(r.model, CACHE)
@@ -2771,6 +4688,8 @@ def waste_checks(rows, pricing, path):
             continue
         if st != "known":
             na[st if st != "unknown" else "unknown:" + (vendor or "")] += 1
+            if st in ("unknown", "unrecognised") and inp is not None:
+                open_rows.append(inp)
             continue
         if inp is None:
             na["no_input_tokens"] += 1
@@ -2785,8 +4704,14 @@ def waste_checks(rows, pricing, path):
             b["below_input_tokens"] += inp
             b["below_cache_read_0"] += not (r.cached or r.x["cache_read"])
     judged = sum(b["calls"] for b in by.values())
+    # EMPTY-HAND (PM 10-23 21:12): when the log has model and input_tokens but no model's minimum is in our table, what
+    # is missing is our table line, not a field of the customer's -- said so, with the input curve at common minimums
     W["cache_min"] = {"status": "cannot_judge" if not judged else "found" if any(b["below"] for b in by.values()) else "none",
-                      "missing": None if judged else "model listed in cache_constants.json + input_tokens",
+                      "missing": None if judged else "threshold table" if open_rows else
+                      "model listed in cache_constants.json + input_tokens",
+                      "open_curve": {str(n): sum(1 for x in open_rows if x < n) / len(open_rows)
+                                     for n in (1024, 2048, 4096)} if open_rows and not judged else None,
+                      "open_calls": len(open_rows),
                       "constants_as_of": CACHE["as_of"], "calls_judged": judged, "not_judged": dict(na),
                       "by_model": [dict(vendor=v, model=m, **b) for (v, m), b in sorted(by.items(), key=lambda kv: -kv[1]["calls"])],
                       "curve": {str(n): (sum(1 for x in curve_rows if x < n) / len(curve_rows)) if curve_rows else None
@@ -2798,10 +4723,23 @@ def waste_checks(rows, pricing, path):
     hit = collections.defaultdict(lambda: {"calls": 0, "prompt_tokens": 0, "cache_read_tokens": 0, "calls_read_0": 0,
                                            "over_min_calls": 0, "over_min_prompt_tokens": 0, "over_min_cache_read_tokens": 0})
     hna = collections.Counter()
+    # the customer's own cache marks (Anthropic family, rows with a cache-write field): what the writes cost over no
+    # cache against what the reads saved, in input-token equivalents at the vendor's multiples -- the dearest read
+    # (the side that values reads least) and the 5-minute / 1-hour write premiums. Below 0 = written, not read back
+    ow = {"calls": 0, "calls_written": 0, "write_5m": 0, "write_1h": 0, "read": 0}
+    hit_open = 0  # counted calls whose model's minimum is not in the table
     for r in rows:
         inp = r.inp if r.inp is not None else r.x["inp_extra"]
         rd = r.cached if r.cached is not None else r.x["cache_read"]
         vendor, mn, st = cache_min(r.model, CACHE) if r.model else (None, None, "no_model")
+        cw = r.x.get("cache_write")
+        if vendor == "anthropic" and cw is not None:
+            w1 = min(r.x.get("cache_write_1h") or 0, cw)
+            ow["calls"] += 1
+            ow["calls_written"] += cw > 0
+            ow["write_1h"] += w1
+            ow["write_5m"] += cw - w1
+            ow["read"] += rd or 0
         if st == "unsupported":
             hna["unsupported"] += 1
             continue
@@ -2819,6 +4757,7 @@ def waste_checks(rows, pricing, path):
         b["prompt_tokens"] += inp
         b["cache_read_tokens"] += rd
         b["calls_read_0"] += not rd
+        hit_open += st in ("unknown", "unrecognised")
         if st == "known" and inp >= mn:
             b["over_min_calls"] += 1
             b["over_min_prompt_tokens"] += inp
@@ -2836,11 +4775,105 @@ def waste_checks(rows, pricing, path):
                       "by_model": [dict(vendor=v, model=m, hit_rate=rate(b["cache_read_tokens"], b["prompt_tokens"]),
                                         over_min_hit_rate=rate(b["over_min_cache_read_tokens"], b["over_min_prompt_tokens"]), **b)
                                    for (v, m), b in sorted(hit.items(), key=lambda kv: -kv[1]["prompt_tokens"])]}
+    W["cache_hit"]["open_calls"] = hit_open if tot["calls"] and not tot["over_min_calls"] and hit_open == tot["calls"] else 0
+    # OPENAI-PRE56 (10-24): OpenAI's prompt-caching guide (developers.openai.com, read 2026-10-24) gives no minimum for
+    # models before GPT-5.6 -- it "varies with request settings, including tools, images", output schemas, reasoning
+    # effort and verbosity. No number goes in the table; the report says so and gives the shortest prompt in this log
+    # that did read from the cache (an upper bound on that model's minimum under these settings, from the log itself)
+    oa5 = [r for r in rows if r.model and r.inp and cache_min(r.model, CACHE)[0] == "openai"
+           and cache_min(r.model, CACHE)[2] != "known"]
+    if oa5:
+        W["cache_min"]["openai_pre56"] = W["cache_hit"]["openai_pre56"] = {
+            "calls": len(oa5), "shortest_read": min((r.inp for r in oa5 if r.cached or r.x["cache_read"]), default=None)}
+    if ow["calls"]:
+        av = CACHE["vendors"]["anthropic"]
+        wm = av.get("write_multiple") or {}
+        r_, m5, m1 = max(av["read_multiple"]), wm.get("5m", 1.25), wm.get("1h", 2.0)
+        ow.update(read_multiple=r_, write_5m_multiple=m5, write_1h_multiple=m1,
+                  saved=round(ow["read"] * (1 - r_)), premium=round(ow["write_5m"] * (m5 - 1) + ow["write_1h"] * (m1 - 1)))
+        ow["net"] = ow["saved"] - ow["premium"]
+        if ow["net"] < 0 and W["cache_hit"]["status"] == "none":
+            W["cache_hit"]["status"] = "found"
+    W["cache_hit"]["own_write"] = ow if ow["calls"] else None
+    # WASTE-4 (10-22): calls that already use every cache breakpoint the vendor allows -- no slot is left for
+    # another fixed part, and the engine adds none to them (it marks only a call with no mark)
+    sl = {"calls_with_body": 0, "calls_marked": 0, "calls_at_limit": 0, "at_limit_prompt": 0, "at_limit_read": 0,
+          "below_prompt": 0, "below_read": 0, "limit": CACHE_MARK_SLOTS}
+    sm = {"calls": 0, "below_min": 0, "input_tokens": 0}
+    for r in rows:
+        n = r.x.get("cmarks")
+        if n is None or not r.model or cache_min(r.model, CACHE)[0] != "anthropic":
+            continue
+        inp = r.inp if r.inp is not None else r.x["inp_extra"]
+        rd = r.cached if r.cached is not None else r.x["cache_read"]
+        sl["calls_with_body"] += 1
+        sl["calls_marked"] += n > 0
+        if n > 0 and inp and rd is not None:
+            k = "at_limit" if n >= CACHE_MARK_SLOTS else "below"
+            sl[k + "_prompt"] += inp
+            sl[k + "_read"] += rd
+        sl["calls_at_limit"] += n >= CACHE_MARK_SLOTS
+        # CACHE-HEAD (PM 10-23 17:55 / 18:05): marked, and the vendor neither wrote nor read -- Anthropic gives no error
+        # for a mark under the minimum, so both usage fields at 0 are the only sign. Both fields must be in the log
+        if n > 0 and rd == 0 and r.x["cache_write"] == 0 and not r.x["cache_write_1h"]:
+            below = inp is not None and inp < cache_min(r.model, CACHE)[1]
+            sm["calls"] += 1
+            sm["below_min"] += below
+            sm["input_tokens"] += inp or 0
+    W["cache_hit"]["mark_slots"] = sl if sl["calls_marked"] else None
+    W["cache_min"]["marked_silent"] = dict(sm, calls_marked=sl["calls_marked"]) if sm["calls"] else None
     # 10 shared prefix (PREFIX-CENSUS, PM 10-21 08:22): input a call shares with earlier calls of the same model --
     # whole units only (hive/waste.py prompt_units / PROMPT_BLOCK). A head entry lives SHARE_TTLS seconds after the
     # last call that used it (a cache hit refreshes it). Counted, not priced: no savings rate is claimed from it
     pr = sorted((r for r in rows if r.x["pchain"] is not None and r.inp and r.ts is not None), key=lambda r: (r.ts, r.i))
     sp = shared_prefix([(r.ts.timestamp(), r.model, r.inp, r.x["pchain"][0], r.x["pchain"][1]) for r in pr], CACHE)
+    # PAD-USD (10-22) / PAD-UNIFY (10-23): the engine's k1a_pad value (hive/waste.pad_candidate + pad_value, the one
+    # definition /admin/usage and autoknife use) on the calls with a fixed prefix, priced at their input price (7-5)
+    pcs, prs = [], []
+    for r in pr:
+        pre = r.x["prefix"]
+        if not pre or len(r.x["pchain"][1]) < len(pre):
+            continue
+        c = pad_candidate(r.ts.timestamp(), r.model, [b[1] for b in pre], [b[2] for b in pre],
+                          r.x["pchain"][1][len(pre) - 1], r.inp,
+                          r.cached if r.cached is not None else r.x["cache_read"], CACHE)
+        if c is not None:
+            pcs.append(c)
+            prs.append(r)
+    pv = pad_value(pcs, CACHE, PAD_MARGIN)  # SCAN-LIVE: the engine pads to M x PAD_MARGIN, not to M
+    pp = _in_price(prs, pricing)
+    W["cache_min"]["pad"] = pv if pv["calls"] else None
+    W["cache_min"]["usd_pad"] = pv["value_net"] * pp if pv["calls"] and pp is not None and pv["value_net"] > 0 else None
+    # KNIFE-2 knife 1 (10-23): bundling the calls whose fixed prefix is under the minimum, any vendor (hive/waste
+    # bundle_candidate / bundle_best, the engine's definition). The answer changes (n items in one call), so it is the
+    # customer's call and kept out of every item total; priced at each model's dated input / output rate
+    bcs = []
+    for r in pr:
+        pre = r.x["prefix"]
+        if not pre or len(r.x["pchain"][1]) < len(pre):
+            continue
+        c = bundle_candidate(r.ts.timestamp(), r.model, [b[2] for b in pre], r.x["pchain"][1][len(pre) - 1], r.inp,
+                             r.out_billed, r.x["stream"], r.x["failed"], CACHE)
+        if c is not None:
+            bcs.append(c)
+
+    def _bprice(m):
+        q = (pricing or {}).get("models", {}).get(m)
+        return (q["input_per_1m_usd"] / 1e6, q["output_per_1m_usd"] / 1e6) \
+            if q and "input_per_1m_usd" in q and "output_per_1m_usd" in q else None
+    bb = bundle_best(bcs, _bprice, BUNDLE_LIVE_WAIT) if bcs else None
+    W["cache_min"]["bundle"] = dict(bb, candidates=len(bcs)) if bb else None
+    W["cache_min"]["usd_bundle"] = bb["net"] if bb and bb["net"] > 0 else None
+    # PM 10-25 09:32 ladder: the tenant may let a bundle wait up to WS.BUNDLE_WAIT (server.bundle_cfg wait_s), so the
+    # 60 s replay is the favourable end of a range -- the 2 s amount above is the one the report counts
+    b60 = bundle_best(bcs, _bprice) if bcs else None
+    W["cache_min"]["usd_bundle_wait60"] = b60["net"] if b60 and b60["net"] > 0 else None
+    # BUNDLE-GRADE-B (10-24): calls known only by their prompt text or token hashes have no request structure; three
+    # estimates of their fixed prefix from the token hashes missed the grade-A amount by 0.1-10x, so they are counted
+    # as not judged, not estimated (results/bundle_gradeb_1024)
+    nr = sum(1 for r in pr if r.x.get("no_request"))
+    if nr:
+        W["cache_min"]["bundle_no_request"] = nr
     W["shared_prefix"] = {"status": "cannot_judge" if not sp["calls_judged"] else
                           "found" if sp["below_min_tokens"] or sp["missed_tokens"] > 0 else "none",
                           "missing": None if sp["calls_judged"] else "request body (messages / system / tools) or "
@@ -2848,30 +4881,357 @@ def waste_checks(rows, pricing, path):
     W["shared_prefix"].update((k, sp[k]) for k in ("calls_judged", "calls_shared_300", "share_300", "share_3600",
                                                     "share_all", "ttl_missed_share", "below_min_share",
                                                     "below_min_calls", "judged_min_calls", "block_tokens"))
+    # WASTE-2 (10-22): the same first prefix unit sent to more than one model -- a vendor cache is per model (and per
+    # vendor), so what one model's calls wrote the other's cannot read. Counted on whole first units (tools or system)
+    hd = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0.0]))
+    for r in pr:
+        c = hd[r.x["pchain"][0][0]][(cache_min(r.model, CACHE)[0] or "(unknown)", r.model or "(no model)")]
+        c[0] += 1
+        c[1] += r.x["pchain"][1][0] * r.inp
+    msplit = []
+    for h, by in hd.items():
+        if len(by) >= 2:
+            main = max(by.values(), key=lambda v: v[0])
+            msplit.append({"targets": len(by), "calls": sum(v[0] for v in by.values()), "calls_off_main": sum(v[0] for v in by.values()) - main[0],
+                           "tokens_off_main": round(sum(v[1] for v in by.values()) - main[1]),
+                           "vendors": len({k[0] for k in by}),
+                           "by_target": sorted(([k[0], k[1], v[0]] for k, v in by.items()), key=lambda x: -x[2])[:4]})
+    msplit.sort(key=lambda x: -x["tokens_off_main"])
+    W["shared_prefix"]["model_split"] = msplit[:10]
+    W["shared_prefix"]["model_split_tokens"] = sum(x["tokens_off_main"] for x in msplit)
+    if msplit and W["shared_prefix"]["status"] == "none":
+        W["shared_prefix"]["status"] = "found"
     # K2-TTL replay (the engine's cache_ttl "auto", hive/waste.ttl_choice): Anthropic models' fixed prefix (tools +
     # system, the engine's mark key) under 5-minute marks alone vs with the 1-hour choice. Tokens, not priced
-    tr = ttl_replay([(r.ts.timestamp(), r.model, tuple(b[1] for b in r.x["prefix"]),
-                      r.x["pchain"][1][len(r.x["prefix"]) - 1] * r.inp) for r in pr
-                     if r.x["prefix"] and len(r.x["pchain"][1]) >= len(r.x["prefix"])
-                     and cache_min(r.model, CACHE)[0] == "anthropic"])
+    # FIX-USD-34 (10-23): a fixed prefix under the model's minimum is left out, as the engine's own replay does
+    # (autoknife: "under the minimum the vendor neither writes nor reads") -- before this the replay cached them
+    trows = [(r, r.x["pchain"][1][len(r.x["prefix"]) - 1] * r.inp) for r in pr
+             if r.x["prefix"] and len(r.x["pchain"][1]) >= len(r.x["prefix"])
+             and cache_min(r.model, CACHE)[0] == "anthropic"]
+    trows = [(r, tok) for r, tok in trows if tok >= (cache_min(r.model, CACHE)[1] or 0)]
+    tr = ttl_replay([(r.ts.timestamp(), r.model, tuple(b[1] for b in r.x["prefix"]), tok) for r, tok in trows])
     W["shared_prefix"]["ttl_replay"] = tr if tr["calls"] else None
     # K14 section 3: GPT-5.6+ calls (cache_min known for openai) -- input the default implicit mode writes that no
     # later call of the same model reads within the 30-minute life. Tokens, not priced
     tu = tail_unread([(r.ts.timestamp(), r.model, r.x["pchain"][0], r.x["pchain"][1], r.inp) for r in pr
-                      if cache_min(r.model, CACHE)[0] == "openai" and cache_min(r.model, CACHE)[2] == "known"])
+                      if cache_min(r.model, CACHE)[0] == "openai" and cache_min(r.model, CACHE)[2] == "known"], constants=CACHE)
     W["cache_hit"]["openai_tail"] = tu if tu["calls"] else None
+    # CACHE-USD (10-22, PREREG-CACHEUSD): the token counts above priced at the counted calls' own input price
+    # (token-weighted, dated table); multiples from cache_constants.json, the ones the engine uses
+    an = [r for r in rows if cache_min(r.model, CACHE)[0] == "anthropic"]
+    oa = [r for r in pr if cache_min(r.model, CACHE)[0] == "openai" and cache_min(r.model, CACHE)[2] == "known"]
+    pa, po = _in_price(an, pricing), _in_price(oa, pricing)
+    ow = W["cache_hit"].get("own_write")
+    owm = ((CACHE["vendors"]["openai"].get("write_multiple") or {}).get("default") or 1.0)
+    parts = {"implicit_unread": tu["unread_tokens"] * (owm - 1) * po if tu["calls"] and po is not None else None,
+             "own_mark_loss": -ow["net"] * pa if ow and ow["net"] < 0 and pa is not None else None}
+    W["shared_prefix"]["usd_ttl"] = None
+    W["prefix_unstable"]["usd_sort"], W["prefix_unstable"]["usd_sort_parts"] = None, {}
+    W["prefix_unstable"]["usd_values"], W["prefix_unstable"]["usd_values_parts"] = None, {}
+    if tr["calls"] and pa is not None:
+        av = CACHE["vendors"]["anthropic"]
+        wm, r_ = av.get("write_multiple") or {}, max(av["read_multiple"])
+
+        def cost(n, fixed=tr["fixed_tokens"]):
+            return (fixed - n["read"] - n["write_5m"] - n["write_1h"]) + n["read"] * r_ \
+                + n["write_5m"] * wm.get("5m", 1.25) + n["write_1h"] * wm.get("1h", 2.0)
+        sv = cost(tr["mark_5m"]) - cost(tr["auto"])
+        W["shared_prefix"]["usd_ttl"] = sv * pa if sv > 0 else None
+        # FIX-USD-34 (R25 item 5, 10-23): a customer with no Anthropic cache mark of their own (no write, nothing read)
+        # leaks what the engine's cache_mark knife saves -- the same 5-minute-mark replay against sending unmarked
+        # (calls_written, not calls: the Anthropic API returns cache_creation_input_tokens 0 on every unmarked call)
+        if not (ow and ow["calls_written"]) and not any(r.cached or r.x["cache_read"] for r in an):
+            g = tr["fixed_tokens"] - cost(tr["mark_5m"])
+            parts["no_mark_gain"] = g * pa if g > 0 else None
+        # FIX-USD-34: 7-4 in dollars -- the engine's prefix_normalize value, the same 5-minute marking replayed on the
+        # key-sorted prefix hashes vs the as-sent ones (one form reads where several forms each wrote)
+        trc = ttl_replay([(r.ts.timestamp(), r.model, tuple(b[2] for b in r.x["prefix"]), tok) for r, tok in trows])
+        sg = cost(tr["mark_5m"]) - cost(trc["mark_5m"], trc["fixed_tokens"])
+        if sg > 0 and W["prefix_unstable"]["status"] == "found":
+            W["prefix_unstable"]["usd_sort_parts"]["anthropic"] = sg * pa
+        # VALUE-USD (10-23): the value blocks (one template, per-call values) in dollars -- what moving the values out
+        # of the prefix would save, the customer's change (the engine does not move them): the same replay on the
+        # value-masked hashes vs the key-sorted ones (the masked hash is built on the key-sorted form, so (3) is apart)
+        vrows = [(r, tok) for r, tok in trows if len(r.x.get("vprefix") or ()) == len(r.x["prefix"])]
+        if vrows and W["prefix_unstable"].get("value_blocks"):
+            tv = ttl_replay([(r.ts.timestamp(), r.model, tuple(v[1] for v in r.x["vprefix"]), tok) for r, tok in vrows])
+            tk = ttl_replay([(r.ts.timestamp(), r.model, tuple(b[2] for b in r.x["prefix"]), tok) for r, tok in vrows])
+            vg = cost(tk["mark_5m"], tk["fixed_tokens"]) - cost(tv["mark_5m"], tv["fixed_tokens"])
+            # VALUE-CHAIN (10-24, CHAT-HISTORY CT [synthetic]: the system-only replay gave 0.30 of the real difference):
+            # a value in the system also keeps the conversation behind it from being read. With unit hashes, the same
+            # 5-minute marking is replayed on whole chains, as sent vs with the system's values masked
+            ch = [(r, tok) for r, tok in vrows if r.x["uh"] is not None and r.x["pchain"] is not None
+                  and len(r.x["uh"]) == len(r.x["pchain"][1]) and r.x["nfix"] == len(r.x["vprefix"])]
+            if ch:
+                def chains(masked):
+                    out = []
+                    for r, _ in sorted(ch, key=lambda x: (x[0].ts, x[0].i)):
+                        h, hs = hashlib.blake2b(r.model.encode("utf-8"), digest_size=8).digest(), []
+                        for i, u in enumerate(r.x["uh"]):
+                            uu = r.x["vprefix"][i][1] if masked and i < r.x["nfix"] else u
+                            h = hashlib.blake2b(h + str(uu).encode("utf-8"), digest_size=8).digest()
+                            hs.append(h)
+                        out.append((r.ts.timestamp(), r.model, hs, [c * r.inp for c in r.x["pchain"][1]]))
+                    return out
+                ca, cm = chain_mark_replay(chains(False)), chain_mark_replay(chains(True))
+
+                def ccost(n):
+                    return n["read"] * r_ + n["write_5m"] * wm.get("5m", 1.25)
+                vg = max(vg, ccost(ca) - ccost(cm))
+            if vg > 0:
+                W["prefix_unstable"]["usd_values_parts"]["anthropic"] = vg * pa
+    # FIX-USD-OA74 (10-23): the OpenAI side of 7-4 -- GPT-5.6+ implicit caching replayed on the as-sent vs key-sorted
+    # prefix heads, the engine's own replay (waste.pn_openai_replay, autoknife prefix_normalize), at those calls' price
+    oc = [(r.ts.timestamp(), r.model, [tuple(b[1] for b in r.x["prefix"][:i + 1]) for i in range(len(r.x["prefix"]))],
+           [tuple(b[2] for b in r.x["prefix"][:i + 1]) for i in range(len(r.x["prefix"]))], None,
+           list(r.x["pchain"][1][:len(r.x["prefix"])]), r.inp)
+          for r in oa if r.x["prefix"] and len(r.x["pchain"][1]) >= len(r.x["prefix"])]
+    pno = pn_openai_replay(oc, CACHE) if oc else None
+    W["prefix_unstable"]["openai_replay"] = pno
+    if pno and po is not None and pno["value_net"] > 0 and W["prefix_unstable"]["status"] == "found":
+        W["prefix_unstable"]["usd_sort_parts"]["openai"] = pno["value_net"] * po
+    # KNIFE-2 (PM 10-23 18:10): 7-4 schema field order in dollars -- the same implicit replay with each schema block on
+    # its fully sorted hash vs the field-order-kept one (the engine's A form). Fixing the field order changes the
+    # answer's field order, so it is the customer's call: kept apart from usd_sort, like usd_values
+    W["prefix_unstable"]["usd_schema_order"] = None
+    if po is not None and any(r.x.get("schema") for r in oa):
+        def _heads(r, full):
+            ks = [(r.x["schema"][0][2] if full and b[0] == "schema" and r.x.get("schema") else b[2]) for b in r.x["prefix"]]
+            return [tuple(ks[:i + 1]) for i in range(len(ks))]
+        ob = [(r.ts.timestamp(), r.model, _heads(r, False), _heads(r, True), None,
+               list(r.x["pchain"][1][:len(r.x["prefix"])]), r.inp)
+              for r in oa if r.x["prefix"] and r.x["pchain"] and len(r.x["pchain"][1]) >= len(r.x["prefix"])]
+        pnb = pn_openai_replay(ob, CACHE) if ob else None
+        W["prefix_unstable"]["schema_order_replay"] = pnb
+        if pnb and pnb["value_net"] > 0:
+            W["prefix_unstable"]["usd_schema_order"] = pnb["value_net"] * po
+    if W["prefix_unstable"].get("value_blocks") and po is not None:  # VALUE-USD, OpenAI side (implicit replay)
+        ov = [(r.ts.timestamp(), r.model, [tuple(b[2] for b in r.x["prefix"][:i + 1]) for i in range(len(r.x["prefix"]))],
+               [tuple(v[1] for v in r.x["vprefix"][:i + 1]) for i in range(len(r.x["prefix"]))], None,
+               list(r.x["pchain"][1][:len(r.x["prefix"])]), r.inp)
+              for r in oa if r.x["prefix"] and len(r.x["pchain"][1]) >= len(r.x["prefix"])
+              and len(r.x.get("vprefix") or ()) == len(r.x["prefix"])]
+        pvo = pn_openai_replay(ov, CACHE) if ov else None
+        if pvo and pvo["value_net"] > 0:
+            W["prefix_unstable"]["usd_values_parts"]["openai"] = pvo["value_net"] * po
+    # SANDWICH (PM 10-23 18:05): a fixed block after the changing part -- hive/waste sandwich, priced as moving it
+    # forward. Per (model, template) in time order: a call within SHARE_TTLS[0] of the template's last call reads the
+    # moved block (and, when the front alone was under the minimum but the two reach it, the front too) at the
+    # vendor's dearest read multiple; any other call writes it (Anthropic / OpenAI write multiple). Tokens are the
+    # characters' share of the call's usage input. The customer's call (B layer): kept out of every item total
+    scs = []
+    for r in rows:
+        if r.x.get("paras") is None or not r.inp or r.ts is None or not r.model:
+            continue
+        pre = r.x["prefix"]
+        key = (r.model, tuple(b[2] for b in pre))
+        scs.append((key, r.x["pfront"], r.x["paras"], r.x["ptotal"], r))
+    sw = sandwich(scs) if scs else []
+    # SCAN-LIVE: the engine moves nothing for a template's first SANDWICH_MIN_CALLS calls (server.sandwich_fixed)
+    seen_ = collections.Counter()
+    warm_ = set()
+    for r_, s_, _, _, _ in sorted(sw, key=lambda x: (x[0].ts, x[0].i)):
+        k_ = (r_.model, tuple(b_[2] for b_ in r_.x["prefix"]))
+        seen_[k_] += 1
+        if seen_[k_] <= SANDWICH_MIN_CALLS:
+            warm_.add(id(r_))
+    shape = collections.Counter(s for _, s, _, _, _ in sw if s)
+    by = sandwich_value([(r.ts.timestamp(), r.model, tuple(b_[2] for b_ in r.x["prefix"]), s_, front, tail, tot, r.inp)
+                         for r, s_, front, tail, tot in sorted(sw, key=lambda x: (x[0].ts, x[0].i))
+                         if id(r) not in warm_], CACHE)
+    usd_sw, priced = 0.0, False
+    for m, b in by.items():
+        q = (pricing or {}).get("models", {}).get(m)
+        if q and "input_per_1m_usd" in q:
+            usd_sw += b["tokens"] * q["input_per_1m_usd"] / 1e6
+            priced = True
+    W["prefix_unstable"]["sandwich"] = {"calls_judged": len(sw), "shape_calls": dict(shape),
+                                        "tail_tokens": round(sum(x[3] / x[4] * x[0].inp for x in sw if x[1] and x[4])),
+                                        "by_model": {m: dict(b, tokens=round(b["tokens"])) for m, b in by.items()}} \
+        if shape else None
+    W["prefix_unstable"]["usd_sandwich"] = usd_sw if priced and usd_sw > 0 else None
+    # TA-BUNDLE (10-24, TRANSLATE TA [synthetic]): a call with no prefix block whose fixed text sits after the changing
+    # part had no bundling candidate (bundle_candidate reads the fixed front) -- the TA form showed no amount while the
+    # same traffic with the rules moved in front showed $6.05. When the fixed paragraphs, moved in front, are still under
+    # the minimum, the call is a candidate for "move, then bundle", keyed by its last (fixed) paragraph
+    sbc = []
+    for r, s_, front, tail, tot in sw:
+        if s_ and tail and tot and not r.x["prefix"] and r.x.get("paras"):
+            c = bundle_candidate(r.ts.timestamp(), r.model, ["moved", r.x["paras"][-1][0]], (front + tail) / tot, r.inp,
+                                 r.out_billed, r.x["stream"], r.x["failed"], CACHE)
+            if c is not None:
+                sbc.append(c)
+    if sbc:
+        bb2 = bundle_best(bcs + sbc, _bprice, BUNDLE_LIVE_WAIT)
+        if bb2:
+            W["cache_min"]["bundle"] = dict(bb2, candidates=len(bcs) + len(sbc), moved_candidates=len(sbc))
+            W["cache_min"]["usd_bundle"] = bb2["net"] if bb2["net"] > 0 else None
+            b60 = bundle_best(bcs + sbc, _bprice)
+            W["cache_min"]["usd_bundle_wait60"] = b60["net"] if b60 and b60["net"] > 0 else None
+    sp_ = W["prefix_unstable"]["usd_sort_parts"]
+    W["prefix_unstable"]["usd_sort"] = sum(sp_.values()) if sp_ else None
+    vp_ = W["prefix_unstable"]["usd_values_parts"]
+    W["prefix_unstable"]["usd_values"] = sum(vp_.values()) if vp_ else None
+    W["cache_hit"]["usd_waste_parts"] = parts
+    W["cache_hit"]["usd_waste"] = sum(v for v in parts.values() if v) if any(parts.values()) else None
+    # HITLOW-CEIL (10-24, REGISTRY-30 #7, R17): 7-7's line is half of what this log could have read (the 7-8 replay's
+    # ceiling on the calls over the minimum), not half of a fixed 100%; a log without a body keeps the fixed line
+    # (prompt text or token hashes alone leave the system / tools out of the chain, so such a ceiling runs low: BUNDLE-GRADE-B)
+    ch = W["cache_hit"]
+    ceil = sp.get("over_min_ceiling") if not any(r.x.get("no_request") for r in pr) else None
+    if ceil is not None and ch["status"] != "cannot_judge" and ch.get("over_min_hit_rate") is not None:
+        ch["ceiling"], ch["line"] = ceil, CACHE_HIT_LOW * ceil
+        # the ceiling only lowers the rate test: a find that carries money under the fixed line (usd_waste) or a net
+        # loss on the customer's own Anthropic marks stays found -- dropping those hid $0.17-2.05 on 12 synthetic logs.
+        # Counting usd_waste over the fixed line too was tried and dropped: OpenAI's ~$0.001 implicit premium flagged
+        # neg1/neg6 (34 cells)
+        keep = (ch["status"] == "found" and bool(ch.get("usd_waste"))) or (ch.get("own_write") or {}).get("net", 0) < 0
+        ch["status"] = "found" if ch["over_min_hit_rate"] < CACHE_HIT_LOW * ceil or keep else "none"
+        ch["kept_by_money"] = ch["status"] == "found" and ch["over_min_hit_rate"] >= CACHE_HIT_LOW * ceil
+    # SPREAD-USD (10-23, commerce C): OpenAI caches by itself, so a prefix that came back within 5 minutes over the
+    # minimum and was not read went to another machine or came before the first answer. Fact fix (10-23): these are
+    # GPT-5.6+ calls only (oa), and for those the guide says OpenAI routes the cache itself -- its ~15 calls a
+    # minute per key is advice for earlier models (prompt-caching guide, read 2026-10-23), so the report names no rate.
+    # Upper bound: (that share - what was read) x input x (1 - the smallest read discount). Not a knife's gain (the
+    # engine cannot route a request) -- reported apart from usd_waste
+    spx_ = W["shared_prefix"]
+    W["cache_hit"]["usd_spread"] = None
+    if oa and po is not None and W["cache_hit"]["status"] == "found" and spx_.get("share_300") is not None:
+        o_in = sum(r.inp or 0 for r in oa)
+        o_rd = sum((r.cached if r.cached is not None else r.x["cache_read"]) or 0 for r in oa)
+        mat = (spx_["share_300"] - (spx_.get("below_min_share") or 0)) * o_in if spx_.get("calls_judged") else 0
+        rmo = max((CACHE["vendors"]["openai"].get("read_multiple") or [1.0]))
+        gap = mat - o_rd
+        if gap > 0 and rmo < 1:
+            W["cache_hit"]["usd_spread"] = gap * (1 - rmo) * po
+            W["cache_hit"]["spread_tokens"] = round(gap)
+    # SCAN-3REPLAY (10-23): the engine's three replays of the day on this log, the same hive/waste functions (one
+    # source): cutting the history every k turns (HISTORY-K, 7-8), one tool list per template (TOOL-UNION, 7-4) and
+    # cache keys split by rate on OpenAI models before GPT-5.6 (CACHE-KEY-SPLIT, 7-7). Input-token equivalents per
+    # model, priced at each model's input price
+    def _priced(by):
+        tot, ok = 0.0, False
+        for m_, v_ in by.items():
+            q_ = (pricing or {}).get("models", {}).get(m_)
+            if q_ and "input_per_1m_usd" in q_:
+                tot += v_ * q_["input_per_1m_usd"] / 1e6
+                ok = True
+        return tot if ok and tot > 0 else None
+
+    def _cached(r):
+        return (r.cached if r.cached is not None else r.x["cache_read"]) or 0
+    ok_rows = sorted((r for r in rows if r.x["pchain"] is not None and r.inp and r.ts is not None
+                      and r.x["failed"] is not True), key=lambda r: (r.ts, r.i))
+    hc = [(r.ts.timestamp(), r.model, list(r.x["uh"]), list(r.x["pchain"][1]), r, r.inp, r.x["nfix"], _cached(r))
+          for r in ok_rows if r.x["uh"] is not None and len(r.x["uh"]) == len(r.x["pchain"][1])]
+    # SELFHOST-SPREAD (10-24, GPU-SELFHOST [synthetic]): a self-hosted server caches per GPU, and the router is the
+    # customer's. A call is linked to the earlier call (within HISTORY_GAP) it shares the longest prompt prefix with; when
+    # that call went to another GPU, the shared prefix this call did not read from the cache was computed again because
+    # of the routing. A call on the same GPU that still misses is eviction, not routing, and is not counted. Tokens, not
+    # dollars: a self-hosted model has no token price (device time needs the log's own timings)
+    ur = sorted((r for r in ok_rows if r.x.get("upstream") and r.x["pchain"] is not None and r.ts is not None and r.inp),
+                key=lambda r: (r.ts, r.i))
+    W["cache_hit"]["upstream_spread"] = None
+    if len({r.x["upstream"] for r in ur}) >= 2:
+        idx, lost, spread, linked = {}, 0.0, 0, 0
+        for r in ur:
+            t, (hs, cs) = r.ts.timestamp(), r.x["pchain"]
+            par = None
+            for j in range(len(hs) - 1, -1, -1):
+                e = idx.get((r.model, hs[j]))
+                if e is not None and t - e[1] <= HISTORY_GAP:
+                    par = (j, e[0])
+                    break
+            if par is not None:
+                linked += 1
+                if par[1] != r.x["upstream"]:
+                    spread += 1
+                    lost += max(0.0, cs[par[0]] * r.inp - (_cached(r) or 0))
+            for h in hs:
+                idx[(r.model, h)] = (r.x["upstream"], t)
+        W["cache_hit"]["upstream_spread"] = {"calls": len(ur), "upstreams": len({r.x["upstream"] for r in ur}),
+                                             "linked": linked, "spread": spread, "recomputed_tokens": round(lost),
+                                             "input_tokens": sum(r.inp for r in ur)}
+    hb = history_best(hc, CACHE) if hc else None
+    W["shared_prefix"]["history"], W["shared_prefix"]["usd_history"] = None, None
+    if hb and hb["replay"]["rewrites"]:
+        W["shared_prefix"]["history"] = {"rewrites": hb["replay"]["rewrites"], "counted": hb["replay"]["counted"],
+                                         "k": hb["k"], "net_tokens": hb["net"], "grid": hb["grid"]}
+        if hb["k"] > 1:
+            W["shared_prefix"]["usd_history"] = _priced({m_: history_replay([c for c in hc if c[1] == m_], hb["k"], CACHE)["net"]
+                                                         for m_ in {c[1] for c in hc}})
+    tc = [(r.ts.timestamp(), r.model, "|".join(b[2] for b in r.x["prefix"][1:]), r.x["prefix"][0][2], r,
+           list(r.x["tools_h"]), r.x["pchain"][1][0] * r.inp, r.x["pchain"][1][len(r.x["prefix"]) - 1] * r.inp, _cached(r))
+          for r in ok_rows if r.x["tools_h"] and r.x["prefix"] and r.x["prefix"][0][0] == "tools"
+          and len(r.x["pchain"][1]) >= len(r.x["prefix"])
+          and cache_min(r.model, CACHE)[0] == "openai"]  # SCAN-LIVE: the engine's tool path is OpenAI only (tool_union_ok)
+    tv = tool_union_replay(tc, CACHE) if tc else None
+    W["prefix_unstable"]["tool_union"], W["prefix_unstable"]["usd_tool_union"] = None, None
+    if tv and tv["switches"]:
+        W["prefix_unstable"]["tool_union"] = {k_: tv[k_] for k_ in ("calls", "templates", "tool_sets", "switches",
+                                                                    "cold_sets", "gain", "cost", "net")}
+        W["prefix_unstable"]["tool_union"]["tool_sets"] = len({c[3] for c in tc})  # distinct, not per template
+        W["prefix_unstable"]["usd_tool_union"] = _priced({m_: tool_union_replay([c for c in tc if c[1] == m_], CACHE)["net"]
+                                                          for m_ in {c[1] for c in tc}})
+        # TOOL-CHAIN (10-24, AGENT AG3 [synthetic]: $0.80 vs a real $75.53): a tool list that changes every call keeps
+        # every call from reading anything, so the replay above (it waits for a template to show a read, and prices the
+        # fixed prefix only) misses the conversation behind it. For marked Anthropic calls with unit hashes, the same
+        # 5-minute marking is replayed on whole chains: as sent vs with each template's union tool list (one hash per
+        # template, its union's tokens at the call's own tokens per character)
+        tch = [(c[0], c[1], c[2], list(c[4].x["uh"]), [v * c[4].inp for v in c[4].x["pchain"][1]], c[5], c[6], c[4].i)
+               for c in tc if c[4].x["uh"] is not None and len(c[4].x["uh"]) == len(c[4].x["pchain"][1])
+               and cache_min(c[1], CACHE)[0::2] == ("openai", "known")]  # TOOL-CHAIN-OA: GPT-5.6+ implicit (SCAN-LIVE:
+        # Anthropic chains dropped -- the engine has no tool-union path for them)
+        by_ = tool_union_chain_value(tch, CACHE) if tch else {}
+        uc_ = _priced({m_: v_ for m_, v_ in by_.items() if v_ > 0})
+        if uc_ and uc_ > (W["prefix_unstable"]["usd_tool_union"] or 0):
+            W["prefix_unstable"]["usd_tool_union"] = uc_
+    kc = [(r.ts.timestamp(), r.model, r.x["pchain"][0][r.x["nfix"] - 1], r.x["pchain"][1][r.x["nfix"] - 1] * r.inp, r,
+           _cached(r)) for r in ok_rows if not r.x["own_key"] and r.x["nfix"] and len(r.x["pchain"][1]) >= r.x["nfix"]
+          and key_split_ok(r.model, CACHE)]
+    kv = key_split_value(kc) if kc else None
+    W["cache_hit"]["key_split"], W["cache_hit"]["usd_key_split"] = None, None
+    if kv and kv["spread_misses"]:
+        W["cache_hit"]["key_split"] = kv
+        W["cache_hit"]["usd_key_split"] = _priced({m_: key_split_value([c for c in kc if c[1] == m_])["value_net"]
+                                                   for m_ in {c[1] for c in kc}})
+    # MORE-USD (10-23): a replay that prices a saving is a finding -- the item said "none ... nothing to reduce" above
+    # its own dollar line (as model_split already does for 7-8). EMPTY-HAND (PM 10-23 21:12): the sandwich's B shape too
+    for k_, f_ in (("shared_prefix", "usd_history"), ("prefix_unstable", "usd_tool_union"), ("cache_hit", "usd_key_split"),
+                   ("prefix_unstable", "usd_sandwich")):
+        if W[k_].get(f_) and W[k_]["status"] == "none":
+            W[k_]["status"] = "found"
+        # RAG-SANDWICH (10-23): the A shape has no system / tools block by definition, so 7-4 was cannot_judge and the
+        # report hid its priced sandwich (RAG A [synthetic]: $1.20 vs a $1.95 bill difference). The sandwich is read
+        # from the message paragraphs, not those blocks: it is found, and nothing is missing for it
+        if f_ == "usd_sandwich" and W[k_].get(f_) and W[k_]["status"] == "cannot_judge":
+            W[k_]["status"], W[k_]["missing"] = "found", None
+    # EMPTY-HAND (PM 10-23 21:12): every counted call's minimum unknown and nothing else found -> no 'over the minimum'
+    # rate to judge, which said 'none ... no waste' over a 0% hit rate; it is the table's gap, said with the whole rate
+    if W["cache_hit"].get("open_calls") and W["cache_hit"]["status"] == "none" \
+            and (W["cache_hit"]["hit_rate"] or 0) < CACHE_HIT_LOW:  # a whole-log rate over the line says 'none' itself
+        W["cache_hit"].update(status="cannot_judge", missing="threshold table")
+    # SPARSE-77 (PREREG-SPARSE77): a low hit rate is a leak only when the cache had something to read -- input shared
+    # within the longest cache life (1 h) above what was read -- or when money was actually lost on cache writes
+    ch, spx = W["cache_hit"], W["shared_prefix"]
+    if ch["status"] == "found" and spx["status"] != "cannot_judge" and spx.get("share_3600") is not None \
+            and ch.get("hit_rate") is not None and spx["share_3600"] <= ch["hit_rate"] and not ch.get("usd_waste") \
+            and not ch.get("usd_key_split") and not (ow and ow["net"] < 0):  # PLANT-5 (10-24): spread misses are material
+        ch["status"], ch["sparse_no_material"] = "none", True
     # 8 billing check: vendor-billed output vs the body counted here (o200k) + reported reasoning. Calls with a tool
     # call are left out (their arguments are billed output the text body does not hold) and counted
+    # the answer's o200k count: the body's, or the one a collector line's shadow carries (LEVER2-SHADOW)
+    blen = lambda r: (r.length or 0) if r.has_body else r.shadow["n"] if r.shadow is not None else 0  # noqa: E731
     bill = [r for r in rows if r.out_billed is not None and not r.out_counted and not r.x["tool"]
-            and ((r.has_body and r.length is not None) or r.x["empty"])]
+            and ((r.has_body and r.length is not None) or r.shadow is not None or r.x["empty"])]
     tool_left = sum(1 for r in rows if r.out_billed is not None and not r.out_counted and r.x["tool"])
     b_tok = sum(r.out_billed for r in bill)
     z_tok = sum(r.x["reasoning"] or 0 for r in bill)
-    m_tok = sum((r.length or 0) if r.has_body else 0 for r in bill)
-    gap = [(max(r.out_billed - (r.x["reasoning"] or 0) - ((r.length or 0) if r.has_body else 0), 0), r) for r in bill]
+    m_tok = sum(blen(r) for r in bill)
+    gap = [(max(r.out_billed - (r.x["reasoning"] or 0) - blen(r), 0), r) for r in bill]
     u_tok = sum(g for g, _ in gap)
-    empty = [r for r in bill if not r.has_body and r.out_billed > (r.x["reasoning"] or 0)]
-    ratios = [r.out_billed / ((r.x["reasoning"] or 0) + r.length) for r in bill if r.has_body and r.length]
+    empty = [r for r in bill if not r.has_body and r.shadow is None and r.out_billed > (r.x["reasoning"] or 0)]
+    ratios = [r.out_billed / ((r.x["reasoning"] or 0) + blen(r)) for r in bill if blen(r)]
     fam = collections.defaultdict(lambda: [0, 0])
     for g, r in gap:
         v = cache_min(r.model, CACHE)[0] if r.model else None
@@ -2890,19 +5250,72 @@ def waste_checks(rows, pricing, path):
                     "ratio_max": max(ratios) if ratios else None,
                     "by_vendor": {k: {"billed_output_tokens": a, "unexplained_share": (u / a) if a else None}
                                   for k, (a, u) in sorted(fam.items(), key=lambda kv: -kv[1][0])}}
+    # WASTE-1 (10-22): on calls that report reasoning, how much of the billed output it is -- counted, no line
+    rr = [r for r in bill if r.x["reasoning"] is not None]
+    if rr:
+        top = max(rr, key=lambda r: r.x["reasoning"])
+        W["billing"]["reasoning"] = {"calls": len(rr), "billed_output_tokens": sum(r.out_billed for r in rr),
+                                     "reasoning_tokens": sum(r.x["reasoning"] for r in rr),
+                                     "calls_reasoning_over_body": sum(1 for r in rr if r.x["reasoning"] > blen(r)),
+                                     "max_reasoning": top.x["reasoning"], "max_reasoning_body": blen(top)}
     # 7-9 (K17 pair): calls on an OpenAI Flex-table model that were not streamed -- what Flex would halve if the
     # traffic can wait. Whether it can wait is not in the log, so this is the upper side. Not a waste item: an option
-    fx = [r for r in rows if flex_ok(r.model)]
+    fx = [r for r in rows if flex_ok(r.model, r.inp)]
     known = [r for r in fx if r.x["stream"] is not None]
     ns = [r for r in known if not r.x["stream"]]
     fu, fp = _money(ns, pricing)
-    W["flex"] = {"status": "cannot_judge" if not known else "found" if ns else "none",
-                 "missing": None if known else "an OpenAI model on the Flex table + the request's stream field",
+    W["flex"] = {"status": "cannot_judge" if fx and not known else "found" if ns else "none",
+                 "missing": None if known or not fx else "an OpenAI model on the Flex table + the request's stream field",
                  "calls_flex_models": len(fx), "calls_known_stream": len(known), "nonstream_calls": len(ns),
                  "input_tokens": sum(r.inp or 0 for r in ns), "output_tokens": sum(r.out_billed or 0 for r in ns),
+                 "input_known": sum(1 for r in ns if r.inp is not None),
                  "usd": fu, "priced_calls": fp, "saving_upper_usd": None if fu is None else fu * (1 - FLEX_RATE),
                  "table_as_of": FLEX_AS_OF}
+    for k, w in W.items():
+        w["kind"], w["in_report"] = WKIND[k], k not in NO_KNIFE
     return W
+
+
+def _in_price(rs, pricing):
+    """Token-weighted base input price (USD per token) of these calls from the dated table; None when none is priced."""
+    n = d = 0.0
+    for r in rs:
+        p = (pricing or {}).get("models", {}).get(r.model) if r.model else None
+        if p and "input_per_1m_usd" in p and r.inp:
+            n += r.inp * p["input_per_1m_usd"] / 1e6
+            d += r.inp
+    return n / d if d else None
+
+
+def limit_view(res):
+    """Billing axis (PM 10-22 19:20) and the limit view (19:18). Mode: 'subscription' when every call is marked flat
+    (--flat), 'unknown' for a coding agent's record (it does not say API key or Pro/Max plan), else 'api' (a service's
+    call log with vendor usage). Limit view: for each found item whose fix removes tokens, its share x of this log's
+    tokens and the extra work x / (1 - x) the same limit would allow -- counted twice, with and without cache reads,
+    because vendors do not publish whether a plan's limit counts them. Token counts of this log only, no estimate."""
+    fl, io, W = res.get("flat") or {}, res.get("io") or {}, res.get("waste") or {}
+    mode = ("subscription" if fl.get("calls") and fl["calls"] == res["calls"] else
+            "unknown" if res.get("agent_log_calls") else "api")
+    tot = (io.get("input_tokens") or 0) + (io.get("output_tokens") or 0)
+    rd = sum(b["cache_read_tokens"] for b in (W.get("cache_hit") or {}).get("by_model") or ())
+    items = []
+    # 7-2: the resent calls go (input + output); 7-3: the cut first attempt's output (its input is not kept: a floor)
+    # WRONG-SWEEP (10-24, RV1): 7-2's rewritten drafts (a judge loop) are a separate item -- not the same request,
+    # so not in "resent"'s tokens
+    rd_ = ((W.get("failed") or {}).get("split") or {}).get("discarded") or {}
+    for k, n, w in (("resent", lambda w: (w.get("input_tokens") or 0) + (w.get("output_tokens") or 0), W.get("resent")),
+                    ("truncated", lambda w: w.get("output_tokens") or 0, W.get("truncated")),
+                    ("redraft", lambda w: w.get("redraft_tokens") or 0, dict(rd_, status="found") if rd_.get("redraft_tokens") else None)):
+        if w and w["status"] == "found" and n(w) and tot:
+            x, x2 = n(w) / tot, (n(w) / (tot - rd) if tot > rd else None)
+            items.append({"item": k, "tokens": n(w), "share": x, "more_work": x / (1 - x) if x < 1 else None,
+                          "share_without_cache_reads": x2, "more_work_without_cache_reads": x2 / (1 - x2) if x2 is not None and x2 < 1 else None})
+    ch = W.get("cache_hit") or {}
+    good = ch.get("status") == "none" and ch.get("hit_rate") is not None and ch["hit_rate"] >= CACHE_HIT_LOW
+    # nothing in section 7 the report shows was found (the "already used well" result is said only then)
+    quiet = not any(w.get("status") == "found" for k, w in W.items() if k not in NO_KNIFE and isinstance(w, dict))
+    return mode, {"tokens": tot, "cache_read_tokens": rd, "items": items, "nothing_found": quiet,
+                  "already_good": {"cache_hit_rate": ch["hit_rate"]} if good else None}
 
 
 def _med(v):
@@ -2976,40 +5389,250 @@ def resent(a, b, window=RESEND_WINDOW):
 
 def fit_resend_window(per_pair):
     """The log's own re-send window (RS-4): gaps of consecutive same-prompt pairs up to the largest grid value; the
-    smallest grid value covering RESEND_COVER of them, when there are at least RESEND_MIN; else the default."""
-    g = [d for d in ((b.ts - a.ts).total_seconds() for a, b, _, _ in per_pair
-                     if a.prompt_sig and a.prompt_sig == b.prompt_sig) if 0 <= d <= RESEND_GRID[-1]]
-    if len(g) < RESEND_MIN:
-        return {"window_s": RESEND_WINDOW, "status": "default", "n_gaps": len(g), "min_gaps": RESEND_MIN}
-    w = next(x for x in RESEND_GRID if sum(d <= x for d in g) / len(g) >= RESEND_COVER)
-    return {"window_s": w, "status": "fitted", "n_gaps": len(g), "min_gaps": RESEND_MIN}
+    smallest grid value covering RESEND_COVER of them by the engine's rule (hive/switch.cover_window: determined at
+    95% below RESEND_MIN gaps, the point pick from there); else the default."""
+    return cover_window([(b.ts - a.ts).total_seconds() for a, b, _, _ in per_pair
+                         if a.prompt_sig and a.prompt_sig == b.prompt_sig], RESEND_WINDOW)
 
 
 # ------------------------------------------------------------------ hashify (customer-side, before scanning)
+HASHIFY_TEXT_MAX = 200  # HASHIFY-REQ: a string longer than this left in a hashed line stops the run (no ids that long)
+
+
+def request_hashes(req):
+    """HASHIFY-REQ (10-24): a request body as the hashes the scanner reads (sizes and hashes, no text) -- the same
+    fields linklbee_collect._request_hashes writes as `linklbee_req`, so a hashed line reads like a collector line."""
+    pu = prompt_units(req)
+    pc = prefix_chain([(u, len(u)) for u in pu]) if pu else None
+    return {"uh": unit_hashes(req, pu) if pu else None, "nfix": fixed_units(req) if pu else 0,
+            "tools": tool_hashes(req), "paras": [list(x) for x in message_paragraphs(req) or []] if pu else None,
+            "pfront": sum(len(u) for u in pu[:len(prefix_blocks(req))]) if pu else 0,
+            "ptotal": sum(len(u) for u in pu) if pu else 0, "own_key": "prompt_cache_key" in req,
+            "rsig": hashlib.sha256(wdump(req, canonical=True).encode("utf-8")).hexdigest()[:24],
+            "rsig_nc": hashlib.sha256(wdump(_nocap(req), canonical=True).encode("utf-8")).hexdigest()[:24],
+            "prefix": [list(b) for b in block_hashes(req)], "vprefix": [list(v) for v in value_hashes(req)],
+            "schema": [list(b) for b in schema_blocks(req)],
+            "cmarks": cache_marks(req), "pchain": [list(pc[0]), list(pc[1])] if pc else None}
+
+
+# HASHIFY-TOP (PM 10-24 08:44): the keep list. A string survives --hashify only under one of these key names (the
+# leaf key, at any depth or wrapper) and only as a short ASCII value -- times, model ids, status / finish / type tags,
+# billing marks. Every other string is dropped, whatever its key: an unknown key loses its text, not keeps it.
+HASHIFY_KEEP_STR = frozenset(
+    ["ts", "model", "upstream", "linklbee_source", "service_tier", "object", "type", "schemaType", "call_type",
+     "run_type", "trafficType", "billing", "billing_mode", "pricing_mode"]
+    + [p.rsplit(".", 1)[-1] for f in ("ts", "model") for p in ALIASES[f]]
+    + [p.rsplit(".", 1)[-1] for ps in (STATUS_PATHS, FINISH_PATHS) for p in ps]
+    + ["end_time", "endTime", "completed_at", "end_ts"])  # END_TS_PATHS (defined with --peek, further down)
+HASHIFY_SHORT = re.compile(r"[\x21-\x7e]+( [\x21-\x7e]+){0,2}")  # ASCII, at most three words (an ISO time with a space)
+HASHIFY_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-]{0,63}")  # a key name kept as a name (CSV: usage.prompt_tokens)
+# where answer / request text sits: a string there goes even when it is only digits (an answer "42")
+HASHIFY_TEXT_KEYS = frozenset(["prompt", "text", "content", "arguments", "parts", "input", "instructions", "system"]
+                              + [p.rsplit(".", 1)[-1] for p in ALIASES["output"]])
+HASHIFY_HASHED = ("linklbee_req", "linklbee_shadow", "output_token_hashes", "prompt_token_hashes", "prompt_hash")
+
+
+def _skeleton(v, key=None, skip=None):
+    """HASHIFY-TOP: v with no text left -- numbers, bools, nulls and empty strings as they are, a non-empty string only
+    under a HASHIFY_KEEP_STR key and HASHIFY_SHORT, dicts and lists walked (a key that is not a plain name is dropped
+    with its value). An error value becomes {"type": "error"} (the scanner reads only that there was one). The object
+    `skip` (the request body, written as linklbee_req) is left out whole: its skeleton would be read as the request."""
+    if v is None or isinstance(v, (bool, int, float)) or v == "":
+        return v
+    if v is skip:
+        return _DROP
+    if isinstance(v, str):  # a number written as text (every CSV cell) is a number, outside the text fields
+        keep = key in HASHIFY_KEEP_STR and HASHIFY_SHORT.fullmatch(v) or key not in HASHIFY_TEXT_KEYS and NUM_STR.match(v)
+        return v if keep else _DROP
+    if isinstance(v, list):
+        return [x for x in (_skeleton(x, key, skip) for x in v) if x is not _DROP]
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            if not (isinstance(k, str) and HASHIFY_KEY.fullmatch(k)):
+                continue
+            x = ({"type": "error"} if x else x) if k == "error" else _skeleton(x, k, skip)
+            if x is not _DROP:
+                out[k] = x
+        return out
+    return _DROP
+
+
+_DROP = object()
+
+
+def _text_left(v, path=""):
+    """HASHIFY-TOP self-check: the path of the first string a hashed line should not hold (longer than
+    HASHIFY_TEXT_MAX, or not HASHIFY_SHORT outside the hashed fields), or None."""
+    if isinstance(v, str):
+        bad = len(v) > HASHIFY_TEXT_MAX or (v and not HASHIFY_SHORT.fullmatch(v) and not NUM_STR.match(v)
+                                            and not path.startswith(HASHIFY_HASHED))
+        return path or "(line)" if bad else None
+    items = v.items() if isinstance(v, dict) else enumerate(v) if isinstance(v, list) else ()
+    for k, x in items:
+        hit = _text_left(x, "%s.%s" % (path, k) if path else str(k))
+        if hit:
+            return hit
+    return None
+
+
+# HASHIFY-USAGE (PM 10-24 10:48): what a usage / billing export keeps through --hashify. Its own vocabulary --
+# meter, model, token-type and tier names the usage reader needs -- stays as written; ids that group rows (keys,
+# projects, workspaces, accounts) become salted hashes, so the per-key split still works; everything else (e-mails,
+# project / organisation names, descriptions, tags) goes.
+HASHIFY_USAGE_STR = frozenset(x.lower() for x in ["model", "base_model_name", "model_name", "token_type", "usage_type", "context_window",
+                               "cost_type", "service_tier", "batch", "amount_currency", "currency", "quantity_unit",
+                               "line_item", "line item", "metername", "metercategory", "metersubcategory", "unitofmeasure",
+                               "unit", "line_item_usage_type", "pricing_unit", "product_pricing_unit", "object", "type",
+                               "speed", "inference_geo", "api_key_status", "billing", "trafficType", "synthetic",
+                               # the exports' time columns (a usage row's day or hour)
+                               "start_time", "end_time", "start_time_iso", "end_time_iso", "usage_date_utc", "date",
+                               "starting_at", "ending_at", "startTime", "endTime", "usage_start_time",
+                               "line_item_usage_start_date", "line_item_usage_end_date", "UsageDateTime", "UsageDate"])
+HASHIFY_USAGE_ID = frozenset(["api_key_id", "api_key", "project_id", "user_id", "organization_id", "workspace",
+                              "workspace_id", "line_item_usage_account_id", "subscriptionid", "resourceid",
+                              "line_item_resource_id", "account_id"])
+HASHIFY_USAGE_MAX = 120  # characters: a meter or line-item name is shorter; a description or a note is not
+HASHIFY_USAGE_NAME = re.compile(r"[\x21-\x7e≤]+( [\x21-\x7e≤]+){0,7}")  # ASCII (and ≤), 8 words at most -- a meter
+# name ("gpt 4o 0806 cached Inp glbl Tokens") fits, a sentence in another script does not
+
+
+def _usage_skeleton(v, key, s):
+    """A usage record with no customer text: numbers and number strings as they are, the usage vocabulary
+    (HASHIFY_USAGE_STR, HASHIFY_USAGE_MAX at most, no e-mail) as written, grouping ids as salted hashes, the rest
+    dropped. Keys are the export's own column names and stay (an e-mail-like key goes)."""
+    if v is None or isinstance(v, (bool, int, float)) or v == "":
+        return v
+    k = (key or "").lower()
+    if isinstance(v, str):
+        if k in HASHIFY_USAGE_ID:
+            return "h:" + hashlib.sha256(s + b"|" + v.encode("utf-8")).hexdigest()[:12]
+        if NUM_STR.match(v) or key in HASHIFY_KEEP_STR and HASHIFY_SHORT.fullmatch(v):
+            return v
+        if k in HASHIFY_USAGE_STR and len(v) <= HASHIFY_USAGE_MAX and "@" not in v and HASHIFY_USAGE_NAME.fullmatch(v):
+            return v
+        return _DROP
+    if isinstance(v, list):
+        return [x for x in (_usage_skeleton(x, key, s) for x in v) if x is not _DROP]
+    if isinstance(v, dict):
+        out = {}
+        for kk, x in v.items():
+            if not isinstance(kk, str) or len(kk) > 64 or "@" in kk:
+                continue
+            x = _usage_skeleton(x, kk, s)
+            if x is not _DROP:
+                out[kk] = x
+        return out
+    return _DROP
+
+
+def _hashify_usage(src, dst, s):
+    """--hashify on a usage / billing export: each record as its _usage_skeleton, one JSON object a line (the usage
+    reader reads that back the same way). Self-check: a string left longer than HASHIFY_USAGE_MAX, holding an e-mail
+    or not a HASHIFY_USAGE_NAME stops the run with nothing written."""
+    n = 0
+    with open(dst, "w", encoding="utf-8") as fo:
+        for d in _usage_docs(src):
+            if not isinstance(d, dict):
+                continue
+            h = _usage_skeleton(d, None, s)
+
+            def bad(v, path=""):
+                if isinstance(v, str):
+                    return path if v and (len(v) > HASHIFY_USAGE_MAX or "@" in v or not (NUM_STR.match(v)
+                                                                                        or HASHIFY_USAGE_NAME.fullmatch(v))) else None
+                items = v.items() if isinstance(v, dict) else enumerate(v) if isinstance(v, list) else ()
+                return next((p for p in (bad(x, "%s.%s" % (path, kk) if path else str(kk)) for kk, x in items) if p), None)
+            hit = bad(h)
+            if hit:
+                fo.close()
+                os.remove(dst)
+                raise SystemExit("record %d: field `%s` still holds text after hashing -- nothing was written." % (n + 1, hit))
+            fo.write(json.dumps(h, ensure_ascii=False) + "\n")
+            n += 1
+    print("usage / billing export: ids hashed, names and e-mails dropped")
+    return n
+
+
 def hashify(src, dst, salt):
-    """Replace output text with salted o200k token hashes and prompt with a salted digit-masked hash.
-    The overlap of hashes equals the overlap of token ids; text never reaches the scan input file."""
+    """Rewrite a log with no text in it (HASHIFY-TOP, PM 10-24 08:44: the old version swapped only top-level `output`,
+    `prompt` and `request` and wrote every other field as it was -- a raw vendor line kept all its messages and answers
+    while it said "hashed"). Each line is read the way the scanner reads it (descend + resolve: Chat Completions /
+    Responses / Anthropic / Gemini answers, a request body under any REQUEST_PATHS name or the flat record itself), then
+    written as: the answer as salted o200k token hashes, the prompt as a salted digit-masked hash plus token hashes, the
+    request as the collector's hashed form (`linklbee_req`) with its stream flag and output cap, and the rest of the
+    line as its _skeleton (numbers and short tags only). The overlap of hashes equals the overlap of token ids. Input
+    is read by the scanner's own reader (records_of: JSON lines, a JSON array, CSV, log lines with a prefix, several
+    calls a line, a folder, .gz), so whatever the scanner reads can be hashed; a record it cannot read is left out
+    (counted). A line that still holds text stops the run with nothing written, and so does a file with no readable
+    call."""
     if not salt:
         raise SystemExit("--salt is required (without it token hashes are reversible from the vocabulary)")
     s = salt.encode("utf-8")
-    n = 0
-    with open(src, encoding="utf-8") as fi, open(dst, "w", encoding="utf-8") as fo:
-        for line in fi:
-            if not line.strip():
+    for d in _usage_docs(src):  # PM 10-24 10:48 (a): a usage / billing export is cleaned and passed, never refused
+        if usage_kind(d):
+            return _hashify_usage(src, dst, s)
+        break
+
+    def th(text):
+        return [hashlib.sha256(s + b"|" + str(t).encode()).hexdigest()[:16] for t in o200k.encode(text)]
+
+    n, bad = 0, 0
+    with open(dst, "w", encoding="utf-8") as fo:
+        def stop(msg):
+            fo.close()
+            os.remove(dst)
+            raise SystemExit(msg)
+        for line in records_of(src):
+            d = load_record(line)
+            if d == "empty":
                 continue
-            d = json.loads(line)
-            out = d.pop("output", None)
+            if isinstance(d, str):
+                bad += 1  # an unreadable record is left out: its text is not copied
+                continue
+            d = descend(d)
+            canon, _ = resolve(d)
+            req = _request(d)
+            if not canon and req is None:  # nothing the scanner reads as a call (a CSV of plain text)
+                bad += 1
+                continue
+            # a flat gateway record is its own request: its request keys go, the rest (usage, answer) stays
+            h = _skeleton({k: x for k, x in d.items() if k not in HASHIFY_HASHED and
+                           not (req is d and k in REQUEST_KEYS)}, skip=req)
+            h.update({k: d[k] for k in HASHIFY_HASHED if k in d})  # already hashed (a collector line, a second pass)
+            for f in ("ts", "model"):  # also when read under a name the keep list does not hold (Created_At, ...)
+                if f in canon and (not isinstance(canon[f], str) or HASHIFY_SHORT.fullmatch(canon[f])):
+                    h[f] = canon[f]
+            if isinstance(canon.get("group_key"), str):  # equal keys stay equal, the key itself does not travel
+                h["group_key"] = "g:" + hashlib.sha256(s + b"|" + canon["group_key"].encode("utf-8")).hexdigest()[:24]
+            out = canon.get("output")
             if isinstance(out, str):
-                ids = o200k.encode(out)
-                d["output_token_hashes"] = [hashlib.sha256(s + b"|" + str(t).encode()).hexdigest()[:16] for t in ids]
-                d.setdefault("output_tokens", len(ids))
-            p = d.pop("prompt", None)
+                h["output_token_hashes"] = th(out)  # the billed count stays where the log has it (usage...)
+            elif _empty_answer(d):
+                h["output"] = ""  # an empty answer stays visible as one (7-2)
+            if isinstance(req, dict):
+                h["linklbee_req"] = request_hashes(req)
+                if isinstance(req.get("stream"), bool):
+                    h.setdefault("stream", req["stream"])
+                mt = next((req[k] for k in MAX_TOKENS_PATHS if isinstance(req.get(k), int)), None)
+                if mt is not None:
+                    h.setdefault("max_tokens", mt)
+            p = canon.get("prompt")
             if isinstance(p, str) and p:
-                d["prompt_hash"] = hashlib.sha256(s + b"|" + mask_digits(p).encode("utf-8")).hexdigest()
+                h["prompt_hash"] = hashlib.sha256(s + b"|" + mask_digits(p).encode("utf-8")).hexdigest()
                 # axis 3 compares request and answer tokens as multisets: the same salted per-token hash as output
-                d["prompt_token_hashes"] = [hashlib.sha256(s + b"|" + str(t).encode()).hexdigest()[:16] for t in o200k.encode(p)]
-            fo.write(json.dumps(d, ensure_ascii=False) + "\n")
+                h["prompt_token_hashes"] = th(p)
+            hit = _text_left(h)
+            if hit:
+                stop("line %d: field `%s` still holds text after hashing -- nothing was written. Drop that field and "
+                     "run again." % (n + bad + 1, hit))
+            fo.write(json.dumps(h, ensure_ascii=False) + "\n")
             n += 1
+        if n == 0:
+            stop("no call could be read in %s (%d records not readable) -- --hashify cannot clean this format yet; "
+                 "nothing was written. Run `--peek` on it to see what the scanner reads." % (src, bad))
+    if bad:
+        print("left out %d lines that are not JSON objects (their text was not copied)" % bad)
     return n
 
 
@@ -3097,18 +5720,18 @@ def usd(x):
 
 T = {
     "ko": {
-        "title": "링클비 진단 리포트 — 출력 토큰", "s0": "0. 읽은 것", "s1": "1. 청구서에서 출력이 차지하는 몫",
-        "s2": "2. 두 축 분포 (겹침 × 답 길이)", "s3": "3. 적격 비중 — 결론", "s4": "4. 절감 추정 (밴드)",
-        "s5": "5. 호출 0 후보", "s6": "6. 판단 못 한 것",
+        "title": "링클비 진단 리포트", "s0": "0. 읽은 것", "s1": "1. 청구서에서 출력이 차지하는 몫",
+        "s2": "2. 답 쌍 분포 (닮음 × 답 길이)", "s3": "3. 줄일 수 있는 요청의 비중 — 결론", "s4": "4. 절감 추정 (예상 범위)",
+        "s5": "5. 호출 없이 답하기 후보", "s6": "6. 읽을 때 참고할 것",
         "net": "이 스크립트는 네트워크 코드가 0줄입니다. 확인: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` → 0. "
-               "응답 본문은 메모리에서만 읽고, 이 리포트와 JSON 에는 본문·키가 들어가지 않습니다(개수와 비율만).",
+               "응답 본문은 메모리에서만 읽고, 이 리포트와 JSON 에는 본문과 문서 id 가 들어가지 않습니다(개수와 비율만).",
     },
     "en": {
-        "title": "Linklbee diagnostic report — output tokens", "s0": "0. What was read", "s1": "1. Output share of the bill",
-        "s2": "2. Two-axis table (overlap x answer length)", "s3": "3. Qualified share — the conclusion",
-        "s4": "4. Savings estimate (band)", "s5": "5. Zero-call candidates", "s6": "6. What could not be judged",
-        "net": "This script has zero lines of network code. Check: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` -> 0. "
-               "Answer text is read in memory only; this report and the JSON hold no text and no keys (counts and shares only).",
+        "title": "Linklbee diagnostic report", "s0": "0. What was read", "s1": "1. How much of the bill is output",
+        "s2": "2. Answer pairs by similarity and length", "s3": "3. Reducible share — the conclusion",
+        "s4": "4. Estimated savings (expected range)", "s5": "5. Answering without a call", "s6": "6. Notes",
+        "net": "The scanner has no network code. To check: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` -> 0. "
+               "Answer text stays in memory. This report and the JSON hold counts and shares only — no text, no document ids.",
     },
 }
 
@@ -3116,113 +5739,254 @@ T = {
 def _gaps_common(res, ko):
     gaps = []
     if res["output_tokens_counted_by_scanner"]:
-        gaps.append(("output_tokens 없는 호출 %d개 — 본문을 o200k 로 세었다(OpenAI 밖 모델이면 근사)" if ko else
-                     "%d calls without output_tokens — counted from the body with o200k (approximate for non-OpenAI models)")
+        gaps.append(("output_tokens 없는 호출 %d개 — 본문을 o200k 로 세었습니다(OpenAI 밖 모델이면 근사)" if ko else
+                     "%d calls had no output_tokens. Their output was counted from the body with o200k (approximate for non-OpenAI models)")
                     % res["output_tokens_counted_by_scanner"])
     if res["output_tokens_missing"]:
         gaps.append(("output_tokens 도 본문도 없는 호출 %d개 — 출력 토큰 합에서 빠짐" if ko else
-                     "%d calls with neither output_tokens nor a body — left out of the output total") % res["output_tokens_missing"])
+                     "%d calls had neither output_tokens nor a body. They are not in the output total") % res["output_tokens_missing"])
     unpriced = [m for m in res["pricing"]["unpriced_models"] if m != "(none)"]
+    for m, (base, why) in sorted((res["pricing"].get("read_as") or {}).items()):
+        gaps.append(("`%s` 는 가격표의 `%s` 단가로 셌습니다(%s)." if ko else "`%s` was priced at the table's `%s` rate (%s).")
+                    % (m, base, ("OpenRouter 같은 중계는 공급사 단가를 그대로 받습니다. 크레딧 구매 수수료는 빠져 있습니다"
+                                 if ko else "a router such as OpenRouter bills the provider's rate; its credit-purchase "
+                                 "fee is not included") if why == "router_prefix" else
+                       ("Bedrock 모델 id — Bedrock 온디맨드 단가가 공급사 정가와 같은 모델입니다" if ko else
+                        "Bedrock model id -- Bedrock's on-demand rate for this model is the vendor's list rate")))
     no_model = res["models"].get("(none)", 0)
     if no_model:
         gaps.append(("model 필드 없는 호출 %d개 — 금액 환산에서 빠짐(토큰 수만 보고)" if ko else
-                     "%d calls without a model field — left out of dollars (token counts only)") % no_model)
+                     "%d calls had no model field. They are counted in tokens, not dollars") % no_model)
+        mc = res.get("model_candidates") or []
+        if mc:
+            gaps.append(("`%s` 에 모델 이름 같은 값이 보입니다. `--map model=%s` 로 다시 돌리세요(금액에는 입력·출력 토큰 수도 있어야 합니다)."
+                         if ko else "`%s` holds values that look like model names. Run again with `--map model=%s` "
+                         "(dollars also need the input and output token counts).") % (mc[0], mc[0]))
+    if res.get("zero_usage_calls"):
+        gaps.append(("호출 %d건 전부 입력·출력 토큰이 0 입니다. 로그가 사용량을 못 담은 것으로 보입니다(스트림 응답이면 OpenAI 는 "
+                     "`stream_options: {\"include_usage\": true}` 를 켜야 사용량이 옵니다). 금액 $0 은 실제 청구가 아닙니다." if ko else
+                     "All %d calls say 0 input and 0 output tokens. The log looks like it lost the usage (for streamed "
+                     "responses OpenAI sends usage only with `stream_options: {\"include_usage\": true}`). The $0 is not "
+                     "the real bill.") % res["zero_usage_calls"])
+    tc = res.get("token_candidates") or []
+    if tc:
+        gaps.append(("토큰 수 같은 값이 있는 칸: %s — `--map input_tokens=<칸> output_tokens=<칸>` 로 지정하세요." if ko else
+                     "Fields that hold token-like counts: %s -- point at them with `--map input_tokens=<field> "
+                     "output_tokens=<field>`.") % ", ".join("`%s`" % x for x in tc))
     if unpriced:
-        gaps.append(("가격표에 없는 모델: %s — 금액에서 빠짐" if ko else "models not in the price table: %s — left out of dollars")
+        gaps.append(("가격표에 없는 모델: %s — 금액에서 빠짐" if ko else "Not in the price table, so not in dollars: %s")
                     % ", ".join(unpriced))
     return gaps
 
 
 def resend_note(rw, ko):
     if rw["status"] == "fitted":
-        return ("창 %d초는 이 로그의 같은 프롬프트 재전송 %d건으로 맞춘 값이다(90%%를 덮는 가장 작은 격자값)." % (rw["window_s"], rw["n_gaps"])
-                if ko else "The %d s window was fitted on this log's %d same-prompt re-sends (smallest grid value covering 90%%)."
+        return ("창 %d초는 이 로그의 같은 프롬프트 재전송 %d건으로 맞춘 값입니다(90%%를 덮는 가장 작은 격자값)." % (rw["window_s"], rw["n_gaps"])
+                if ko else "The %d s window was fitted to this log's %d same-prompt resends (the smallest grid value that covers 90%%)."
                 % (rw["window_s"], rw["n_gaps"]))
-    return ("재전송이 %d건(맞추려면 %d건)이라 기본 창 %d초를 썼다." % (rw["n_gaps"], rw["min_gaps"], rw["window_s"]) if ko else
-            "Only %d same-prompt re-sends (%d needed to fit), so the default %d s window is used." % (rw["n_gaps"], rw["min_gaps"], rw["window_s"]))
+    return ("재전송이 %d건(맞추려면 %d건)이라 기본 창 %d초를 썼습니다." % (rw["n_gaps"], rw["min_gaps"], rw["window_s"]) if ko else
+            "This log has %d same-prompt resends (%d are needed to fit a window), so the default %d s window is used." % (rw["n_gaps"], rw["min_gaps"], rw["window_s"]))
 
 
-def report(res, lang="ko"):
+def cache_head(res, ko):
+    """CACHE-HEAD (PM 10-23 17:55): the cache hit rate first, above section 0 -- (label, big number or None, note).
+    None when there is no section 7 (an error, or grade D)."""
+    h = (res.get("waste") or {}).get("cache_hit") if not res.get("error") else None
+    if not h:
+        return None
+    if h["hit_rate"] is None:
+        return (("캐시 적중률" if ko else "Cache hit rate"), None,
+                ("이 로그로는 못 냅니다. 입력 토큰과 벤더의 캐시 읽기 값(`cached_tokens` / `cache_read_input_tokens` / "
+                 "`cachedContentTokenCount`)이 있어야 합니다." if ko else
+                 "Not in this log. It needs input tokens and the vendor's cache-read value (`cached_tokens` / "
+                 "`cache_read_input_tokens` / `cachedContentTokenCount`)."))
+    om = h.get("over_min_hit_rate")
+    return (("캐시 적중률" if ko else "Cache hit rate"), pct(h["hit_rate"]),
+            ("입력 토큰 중 캐시에서 읽힌 몫입니다(호출 %s건, 벤더 usage 기준)%s. 자세한 것은 7-7." if ko else
+             "The share of input tokens read from the cache (%s calls, the vendor's usage)%s. Details in 7-7.")
+            % ("{:,}".format(h["calls_judged"]),
+               ((" · 최소 길이 이상인 호출만 보면 %s" if ko else " · %s on calls over the minimum") % pct(om))
+               if om is not None and h.get("over_min_calls") != h["calls_judged"] else ""))
+
+
+def marked_head(res, ko):
+    """CACHE-HEAD (PM 10-23 18:20): beside the hit rate, the Anthropic calls that carried a cache mark and got neither
+    a write nor a read (7-5 marked_silent) -- (label, number, note), or None when there are none."""
+    ms = (((res.get("waste") or {}).get("cache_min") or {}).get("marked_silent")) if not res.get("error") else None
+    if not ms:
+        return None
+    return (("캐시를 신청했는데 못 받은 호출" if ko else "Calls that asked for the cache and got nothing"),
+            ("%s건" if ko else "%s") % "{:,}".format(ms["calls"]),
+            ("캐시 표시를 붙인 호출 %s건 중입니다. 쓰기와 읽기가 둘 다 0 이고, 벤더는 오류를 내지 않습니다(그중 최소 길이 미달 %s건). "
+             "자세한 것은 7-5." if ko else
+             "Out of %s calls with a cache mark: cache writes and reads both 0, and the vendor gives no error (%s of them "
+             "under the minimum). Details in 7-5.") % ("{:,}".format(ms["calls_marked"]), "{:,}".format(ms["below_min"])))
+
+
+def report(res, lang="ko", cache_line=True):
     t, ko = T[lang], lang == "ko"
     L = ["# " + t["title"], "", "scanner %s · %s" % (res["version"], res["input"]), ""]
+    ch = cache_head(res, ko) if cache_line else None  # the HTML page shows it as its first tile instead
+    if ch:
+        L += ["**%s %s** — %s" % (ch[0], ch[1], ch[2]) if ch[1] else "**%s** — %s" % (ch[0], ch[2]), ""]
+    mh = marked_head(res, ko) if cache_line else None
+    if mh:
+        L += ["**%s %s** — %s" % mh, ""]
     L += ["## " + t["s0"], ""]
     if res.get("error"):
-        L += [("- 줄 %d · JSON 오류 %d · ts 없음 거부 %d → 쓸 수 있는 호출 0" if ko else
-               "- %d lines · %d bad JSON · %d rejected for missing ts -> 0 usable calls")
+        L += [("- 줄 %d · JSON 오류 %d · ts 없음 거부 %d → 쓸 수 있는 호출 0건" if ko else
+               "- %d lines · %d not JSON · %d rejected for missing ts -> 0 usable calls")
               % (res["lines"], res["bad_json"], res["rejected_no_ts"])] + sources_line(res, ko) + \
              ["", "**" + res["error"] + "**", ""]
-        L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않는다." if ko else "everything. Sections 1-5 are not produced.")]
+        L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않습니다." if ko else "Nothing could be read, so sections 1-5 are not produced.")]
+        L += ["-" + x[1:] for x in unread_lines(None, ko, blank=not res["lines"]) if x]
         if res["rejected_no_ts"]:
-            L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 짝을 만들면 뒤의 답이 앞 답의 초안이 되어 겹침이 부풀고 진단이 거짓이 된다. "
-                              "고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣는다") if ko else
-                             ("%d lines rejected for missing ts — pairing without time order lets a later answer serve as an earlier "
-                              "one's draft, inflating overlap and making the diagnosis false. Fix: add ts (ISO-8601 or epoch "
-                              "seconds) to every line")) % res["rejected_no_ts"])
+            L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 답 쌍을 만들면 뒤의 답이 앞 답의 재료로 쓰여 닮음이 부풀고 진단이 거짓이 됩니다. "
+                              "고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요") if ko else
+                             ("%d lines were rejected for missing ts. Without time order a later answer could be paired as an "
+                              "earlier one's draft, which inflates similarity and makes the diagnosis false. To fix, add ts "
+                              "(ISO-8601 or epoch seconds) to every line")) % res["rejected_no_ts"])
             L += ["  - " + x for x in hint_lines(res, ko, "ts")]
         if res["bad_json"]:
-            L.append("- " + ("JSON 이 아닌 줄 %d개" if ko else "%d lines that are not JSON objects") % res["bad_json"])
+            L.append("- " + ("JSON 이 아닌 줄 %d개" if ko else "%d lines are not JSON objects") % res["bad_json"])
         L.append("")
         return "\n".join(L)
     b = res["body"]
     per = res["period"] or ["—", "—"]
+    for why in res.get("collector_stop") or ():  # COLLECT-STOP (10-23): the collector stopped writing; calls went on
+        L += [(("- **수집기가 파일 크기 상한(`max_mb`, 기본 512MB)에 닿아 기록을 멈췄습니다.** 그 뒤의 호출은 이 리포트에 없습니다. 새 파일 이름으로 다시 "
+                "붙이거나 `max_mb` 를 키우면 이어서 기록합니다." if why == "max_mb" else
+                "- **수집기가 정한 기록 시간(`hours`)이 지나 기록을 멈췄습니다.** 그 뒤의 호출은 이 리포트에 없습니다.") if ko else
+               ("- **The collector reached its file size cap (`max_mb`, 512 MB by default) and stopped writing.** Calls after that are not in "
+                "this report. Attach it again with a new file name, or raise `max_mb`, to keep logging." if why == "max_mb" else
+                "- **The collector's set logging time (`hours`) ran out and it stopped writing.** Calls after that are not "
+                "in this report."))]
+    if res.get("collector_nohash_calls"):  # EMPTY-HAND (10-23): said as the install, not as a field the log lacks
+        L += [("- **수집기가 `linklbee_scan.py` 를 찾지 못해 요청 해시를 적지 못한 호출 %d건.** 두 파일을 같은 폴더에 두면 다음 기록부터 "
+               "7절의 다시 보낸 요청·접두·같은 앞부분 항목까지 봅니다. 아래 '더 주시면 볼 수 있는 것'의 요청 본문은 이것 때문입니다." if ko else
+               "- **%d calls were logged by a collector that could not find `linklbee_scan.py`, so no request hashes were written.** "
+               "With both files in one folder, the next records also show section 7's re-sent calls, prefixes and shared "
+               "prefixes. That is why 'the request body' is listed under what more data would show.") % res["collector_nohash_calls"]]
+    if res.get("agent_log_calls"):
+        L += [("- **코딩 에이전트(Claude Code) 기록을 읽었습니다(호출 %d건).** 체험용 입구입니다. 링클비가 줄이려는 것은 회사 "
+               "서비스가 부르는 LLM 호출이고, 그 호출 로그로도 같은 리포트가 나옵니다." if ko else
+               "- **This is a coding agent's record (Claude Code, %d calls).** It is a way to try the scanner. Linklbee "
+               "cuts the LLM calls a company's own service makes, and that service's call log gives the same report.") % res["agent_log_calls"]]
+    if res.get("synthetic_calls"):
+        L += [("- **[합성] 예시 로그입니다.** 호출 %d건 중 %d건이 지어낸 것이라 실제 회사의 숫자가 아닙니다. 자기 로그는 "
+               "`python3 linklbee_scan.py --logs <파일>` 로 넣습니다." if ko else
+               "- **[synthetic] This is the example log.** %d of %d calls are made up, so these are not a real company's "
+               "figures. To scan your own log: `python3 linklbee_scan.py --logs <file>`.") % ((res["calls"], res["synthetic_calls"]) if ko else
+                                                                          (res["synthetic_calls"], res["calls"]))]
     L += [("- 호출 %d (줄 %d, JSON 오류 %d, ts 없음 거부 %d) · 기간 %s ~ %s" if ko else
-           "- %d calls (%d lines, %d bad JSON, %d rejected for missing ts) · period %s – %s")
+           "- %d calls (%d lines, %d not JSON, %d rejected for missing ts) · %s to %s")
           % (res["calls"], res["lines"], res["bad_json"], res["rejected_no_ts"], per[0][:10], per[1][:10]),
           ("- 모델: " if ko else "- models: ") + ", ".join("%s %d" % kv for kv in res["models"].items()),
           ("- 본문: 텍스트 %d · 토큰 해시 %d · 없음 %d" if ko else "- body: text %d · token hashes %d · none %d")
-          % (b["text"], b["token_hashes"], b["none"])] + sources_line(res, ko) + \
-        ([("- **시각 필드가 없어 시간 기반 축은 못 봅니다** (시각 없는 호출 %d건 — 2~5절 짝, 7-2 간격, 7-8 접두 수명에서 빠짐. "
+          % (b["text"], b["token_hashes"], b["none"])] + grade_line(res, ko) + billing_line(res, ko) + sources_line(res, ko) + \
+        ([("- **시각 필드가 없어 시각이 필요한 항목은 못 봅니다** (시각 없는 호출 %d건 — 2~5절 답 쌍, 7-2 간격, 7-8 접두 수명에서 빠짐. "
             "7-1·7-3·7-5·7-6·7-7 은 시각 없이 봅니다)" if ko else
-            "- **No time field, so the time-based axes cannot be seen** (%d calls without ts — left out of the pairs of "
-            "sections 2-5, the 7-2 gaps and the 7-8 prefix life; 7-1, 7-3, 7-5, 7-6 and 7-7 need no time)") % res["no_ts"]]
+            "- **No time field, so items that need time are skipped.** %d calls have no ts. They are left out of the "
+            "answer pairs in sections 2-5, the resend gaps (7-2) and the prefix lifetime (7-8). Items 7-1, 7-3, 7-5, 7-6 "
+            "and 7-7 work without time.") % res["no_ts"]]
          if res.get("no_ts") else []) + ["- " + t["net"], ""]
     L += ["## " + t["s1"], ""]
+    lim = limit_lines(res, ko)
+    if res.get("billing_mode") != "api":
+        L += lim
+        lim = []
+    fl = res.get("flat") or {}
+    if fl.get("calls"):
+        L += [("- **정액 구간 %d건**(%s, 출력 %s 토큰) — 정액제·약정 용량이라 토큰을 줄여도 청구액은 바뀌지 않습니다. 이 구간은 "
+               "금액에서 뺐습니다. 여기서 줄이는 출력은 같은 정액으로 더 처리할 수 있는 여유로 봅니다." if ko else
+               "- **Flat-rate traffic: %d calls** (%s, %s output tokens). On a flat rate or committed capacity, fewer "
+               "tokens do not change the bill, so this traffic is left out of every dollar figure. Output cut there "
+               "is spare capacity on the same plan.")
+              % (fl["calls"], ", ".join("%s %d" % kv for kv in sorted(fl["models"].items(), key=lambda kv: -kv[1])),
+                 "{:,}".format(fl["output_tokens"]))]
     if res.get("bill"):
         L += [("- 출력 금액 %s / 전체 %s = **%s** (가격 호출 %d건, 가격표 %s 기준)" if ko else
-               "- output %s / total %s = **%s** (%d priced calls, price table as of %s)")
+               "- output %s of %s total = **%s** (%d priced calls, prices as of %s)")
               % (usd(res["bill"]["usd_output"]), usd(res["bill"]["usd_total"]), pct(res["bill"]["output_share"]),
-                 res["pricing"]["priced_calls"], res["pricing"]["as_of"]), ""]
+                 res["pricing"]["priced_calls"], res["pricing"]["as_of"])]
+        if not fl.get("calls"):
+            L += [("- 금액은 토큰당 과금 기준입니다. 정액제·약정 용량(PTU) 트래픽이 섞여 있으면 `--flat <모델 이름>`(전부면 "
+                   "`--flat all`)으로 표시하세요. 그 구간은 금액을 내지 않습니다." if ko else
+                   "- Dollars assume per-token billing. If some traffic is flat-rate or committed capacity (PTU), mark it "
+                   "with `--flat <model name>`, or `--flat all` for everything. Marked traffic gets no dollar figure.")]
+        L += [""]
+    elif fl.get("calls") and fl["calls"] == res["calls"]:
+        L += [("- 모든 호출이 정액 구간이라 금액을 내지 않습니다. 출력 토큰 합 %s." if ko else
+               "- Every call is flat-rate traffic, so there is no dollar figure. Total output: %s tokens.")
+              % "{:,}".format(res["output_tokens_total"]), ""]
     else:
-        L += [("- 금액 환산 불가: 가격표에 있는 모델 + input_tokens 가 있는 호출이 없다. 출력 토큰 합 %d." if ko else
-               "- No dollar figure: no call has both a priced model and input_tokens. Output tokens total %d.")
-              % res["output_tokens_total"], ""]
+        L += [("- 금액 환산 불가: 가격표에 있는 모델 + input_tokens 가 있는 호출이 없습니다. 출력 토큰 합 %d." if ko else
+               "- No dollar figure: no call has both a priced model and input_tokens. Total output: %d tokens.")
+              % res["output_tokens_total"]]
+        lc = res.get("logged_cost")
+        if lc:
+            L += [("- 로그에 적힌 비용 합(로그 자신의 숫자, 링클비가 계산하지 않음): %s — 호출 %d건 · 모델별 %s" if ko else
+                   "- Cost the log itself records (its own number, not computed here): %s over %d calls; by model %s")
+                  % (lc["total"], lc["calls"], ", ".join("%s %s" % kv for kv in list(lc["by_model"].items())[:5]))]
+        L += [""]
+    if lim:
+        L += lim
     bv = res.get("billed_vs_body") or {}
     if bv.get("warn"):
-        L += [("- **주의 — 청구된 출력 토큰 %d 중 본문에서 셀 수 있는 것은 %d 입니다**(o200k, 두 값이 다 있는 호출 %d건, %.2f배). "
+        L += [("- **주의 — 청구된 출력 토큰 %s 중 본문에서 셀 수 있는 것은 %s 입니다**(o200k, 두 값이 다 있는 호출 %s건, %.2f배). "
                "차이는 추론 토큰으로 보입니다. **링클비는 모델이 쓰는 글을 줄이지 추론을 줄이지 않습니다.** 이 로그에서는 절감 "
                "여지가 아래 추정보다 작을 수 있습니다. (추론 없는 Claude 로그도 토크나이저 차이로 1.5~1.7배가 나와서, %.1f배 "
                "이상에서만 이 경고를 띄웁니다.)" if ko else
-               "- **Note — of %d billed output tokens, %d can be counted in the answer bodies** (o200k, %d calls with both, "
-               "%.2fx). The gap looks like reasoning tokens. **Linklbee shortens what the model writes, not its reasoning.** "
-               "Savings in this log can be smaller than the estimates below. (Claude logs without reasoning already show "
-               "1.5-1.7x from the tokenizer difference, so this note appears only at %.1fx or more.)")
-              % (bv["billed_output_tokens"], bv["body_o200k_tokens"], bv["calls"], bv["ratio"], bv["threshold"]), ""]
+               "- **Note: %s output tokens were billed, but only %s appear in the answer bodies** (o200k, %s calls with "
+               "both, %.2fx). The gap looks like reasoning tokens. **Linklbee shortens what the model writes, not how "
+               "it reasons**, so savings on this log can be smaller than the estimates below. Claude logs without "
+               "reasoning already show 1.5-1.7x from the tokenizer difference, so this note appears only at %.1fx or more.")
+              % ("{:,}".format(int(bv["billed_output_tokens"])), "{:,}".format(int(bv["body_o200k_tokens"])),
+                 "{:,}".format(int(bv["calls"])), bv["ratio"], bv["threshold"])]
+        if bv.get("small_sample"):
+            ci = bv.get("ci95")
+            L += [("  - 표본이 적어(호출 %d건) 이 배수는 폭이 넓습니다%s." if ko else
+                   "  - Small sample (%d calls): this ratio can move a lot%s.")
+                  % (bv["calls"], ((" — 95%% 구간 %.2f~%.2f배가 선 %.1f배를 걸칩니다" if ko else
+                                    " -- its 95%% interval %.2f-%.2fx straddles the %.1fx line") % (ci[0], ci[1], THINK_RATIO))
+                     if ci else "")]
+        L += [""]
     if res.get("no_time"):
+        ub = res.get("qualified_share_upper_bound")
+        if ub is not None:
+            L += ["## " + t["s3"], "", ("- 시각이 없어 같은 문서의 판을 잇지 못했습니다. 지금 데이터로 보이는 것: 답 ≥%d 토큰 호출의 출력 몫 = "
+                                        "**%s 이하(상한)**. 줄일 수 있는 요청의 실제 비중은 이보다 낮을 수 있고, 각 줄에 ts 가 있으면 "
+                                        "실제 비중과 절감 범위(4절)까지 나옵니다." if ko else
+                  "- Without time, a document's versions could not be put in order. What this data shows: calls with "
+                  "answers of %d+ tokens make up **at most %s of output (an upper bound)**. The real reducible share can "
+                  "be lower; with ts on every line the real share and the savings range (section 4) follow.")
+                  % (SWITCH["min_answer_tokens"], pct(ub, 2)), ""]
         L += ["## " + t["s6"], ""]
-        gaps = [("시각(ts) 없는 호출 %d개 — 같은 문서의 판을 시간 순서로 짝지을 수 없어 2절(두 축 분포)·3절(적격 비중)·4절(절감 밴드)·"
-                 "5절(호출 0 후보)을 내지 않았다. 고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣는다" if ko else
-                 "%d calls without ts — the versions of a document cannot be paired in time order, so sections 2 (two-axis "
-                 "table), 3 (qualified share), 4 (savings band) and 5 (zero-call candidates) were not produced. Fix: add ts "
-                 "(ISO-8601 or epoch seconds) to every line") % res["no_ts"]]
+        gaps = [("시각(ts) 없는 호출 %d개 — 같은 문서의 판을 시간 순서로 이을 수 없어 2절(답 쌍 분포)·3절의 실제 비중·4절(절감 예상 범위)·"
+                 "5절(호출 없이 답하기 후보)을 내지 않았습니다. 고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요" if ko else
+                 "%d calls have no ts. Without it the versions of a document cannot be put in order, so sections 2 "
+                 "(answer pairs), the real share in 3, 4 (estimated savings) and 5 (answering without a call) are not "
+                 "produced. To fix, add ts (ISO-8601 or epoch seconds) to every line") % res["no_ts"]]
         gaps += _gaps_common(res, ko)
         L += ["- " + x for x in gaps] + ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
         L += waste_lines(res, ko)
         L += zero_lines(res, ko)
         return "\n".join(L)
     if res.get("upper_bound_only"):
-        L += ["## " + t["s3"], "", ("- 응답 본문이 없어 겹침(축 1)을 못 쟀다. 답 ≥200 토큰 호출의 출력 몫 = **%s 이하(상한)**. "
-                                    "실제 적격 비중은 이보다 낮을 수 있고, 얼마나 낮은지는 본문(또는 토큰 해시) 없이는 알 수 없다." if ko else
-              "- No answer body, so overlap (axis 1) was not measured. Output share of calls with answers >= 200 tokens = "
-              "**at most %s (upper bound)**. The real qualified share can be lower; how much lower cannot be known without "
-              "bodies (or token hashes).") % pct(res["qualified_share_upper_bound"], 2), ""]
+        L += ["## " + t["s3"], "", ("- 응답 본문이 없어 닮음을 못 쟀습니다. 답 ≥200 토큰 호출의 출력 몫 = **%s 이하(상한)**. "
+                                    "줄일 수 있는 요청의 실제 비중은 이보다 낮을 수 있고, 얼마나 낮은지는 본문(또는 토큰 해시) 없이는 알 수 없습니다." if ko else
+              "- The log has no answer bodies, so similarity could not be measured. Calls with answers of 200+ tokens "
+              "make up **at most %s of output (an upper bound)**. The real reducible share can be lower. How much lower "
+              "needs the bodies (or token hashes).") % pct(res["qualified_share_upper_bound"], 2), ""]
         if res["qualified_share_upper_bound"] == 0:
-            L[-1:-1] = [("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 축은 8절에 적었다." if ko else
-                        "- Why this is 0% (counted on this log) and which axis to look at instead: section 8.")]
+            L[-1:-1] = [("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 항목은 8절에 적었습니다." if ko else
+                        "- Why this is 0% (counted on this log), and what to look at instead: section 8.")]
         L += ["## " + t["s6"], ""]
-        gaps = [("본문 없는 호출 %d개 — 겹침(축 1) 전부. 그래서 2절(두 축 분포)·4절(절감 밴드)·5절(호출 0 후보)을 내지 않았다. "
-                 "고칠 법: output 또는 output_token_hashes(--hashify)를 넣는다" if ko else
-                 "%d calls without a body — all of axis 1 (overlap). Sections 2 (two-axis table), 4 (savings band) and 5 "
-                 "(zero-call candidates) were not produced. Fix: add output or output_token_hashes (--hashify)") % b["none"]]
+        gaps = [("본문 없는 호출 %d개 — 닮음을 하나도 잴 수 없습니다. 그래서 2절(답 쌍 분포)·4절(절감 예상 범위)·5절(호출 없이 답하기 후보)을 내지 않았습니다. "
+                 "고칠 법: output 또는 output_token_hashes(--hashify)를 넣으세요" if ko else
+                 "%d calls have no body, so no similarity can be measured. Sections 2 (answer pairs), 4 (estimated "
+                 "savings) and 5 (answering without a call) are not produced. To fix, add output, or "
+                 "output_token_hashes from --hashify") % b["none"]]
         gaps[0] += ". " + " ".join(hint_lines(res, ko, "output"))
         gaps += _gaps_common(res, ko)
         L += ["- " + x for x in gaps] + ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
@@ -3230,14 +5994,16 @@ def report(res, lang="ko"):
         L += zero_lines(res, ko)
         return "\n".join(L)
     g = res["grouping"]
+    at_s2 = len(L)
     L += ["## " + t["s2"], "",
-          ("짝 %d개 (키 %d개; 고객 지정 키 호출 %d · 자동 탐색 호출 %d, 자동 짝 %d · 같은 ts 로 건너뜀 %d). "
-           "각 짝 = 같은 키에서 시각이 더 이른 직전 답 → 이 답. 겹침은 이 답을 알고 잰 값이다." if ko else
-           "%d pairs (%d keys; customer-key calls %d · auto-found calls %d, auto pairs %d · skipped for equal ts %d). "
-           "Each pair = the latest earlier answer of the same key -> this answer. Overlap here is measured knowing the answer.")
+          ("비교한 답 쌍 %d개(문서 %d개). 쌍마다 같은 문서의 바로 앞 답과 이번 답을 비교했습니다. 닮음은 이번 답을 보고 잰 "
+           "값입니다. 문서를 정한 방법: 지정한 문서 키 호출 %d · 엔진이 찾아 묶은 호출 %d(쌍 %d) · 같은 시각이라 건너뜀 %d." if ko else
+           "%d answer pairs from %d documents. Each pair compares an answer with the previous answer for the same "
+           "document. Similarity here is measured with the answer known. How documents were found: %d calls by the "
+           "document key in the log · %d calls grouped by the scanner (%d pairs) · %d skipped for an identical timestamp.")
           % (g["pairs"], g["keys"], g["customer_key_calls"], g["auto_key_calls"], g["pairs_auto"], g["same_ts_skipped"]), ""]
     lbs = [x[0] for x in CELLS["length_bands"]]
-    L += ["| " + ("겹침 \\ 답 길이" if ko else "overlap \\ length") + " | " + " | ".join(lbs) + " |",
+    L += ["| " + ("닮음 \\ 답 길이" if ko else "similarity \\ length") + " | " + " | ".join(lbs) + " |",
           "|---|" + "---|" * len(lbs)]
     tot = res["output_tokens_total"] or 1
     for ob in reversed([x[0] for x in CELLS["overlap_bands"]]):
@@ -3247,111 +6013,121 @@ def report(res, lang="ko"):
             mark = "**" if ob in ("0.78-0.95", ">=0.95") and lb_ != "<200" else ""
             cells.append("—" if not c else "%s%d · %s%s" % (mark, c["pairs"], pct(c["out_tokens"] / tot), mark))
         L.append("| " + ob + " | " + " | ".join(cells) + " |")
-    L += ["", ("칸 = 짝 수 · 전체 출력 토큰 중 몫. 굵은 칸 = 켜짐(겹침 ≥0.78 그리고 답 ≥200 토큰). 짝 겹침 토큰 가중 %.3f, 중앙 %.3f." if ko else
-               "cell = pairs · share of all output tokens. Bold = switch on (overlap >= 0.78 and answer >= 200 tokens). "
-               "Pair overlap token-weighted %.3f, median %.3f.") % (res["overlap_token_weighted"] or 0, res["overlap_median"] or 0), ""]
+    L += ["", ("표의 값 = 답 쌍 수 · 전체 출력 토큰 중 몫. 굵은 값 = 줄일 수 있는 요청(닮음 0.78 이상, 답 200토큰 이상). 쌍 닮음 토큰 가중 %.3f, 중앙 %.3f." if ko else
+               "Each cell: answer pairs · share of all output tokens. Bold = reducible (similarity 0.78+ and answer "
+               "200+ tokens). Pair similarity, token-weighted %.3f, median %.3f.") % (res["overlap_token_weighted"] or 0, res["overlap_median"] or 0), ""]
     q, rp = res["qualified"], res["replay"]
     cl = res.get("call_loss") or {}
     warn = []
     if cl.get("warn"):
-        warn = [("- **주의 — 이 재료는 LLM 호출 자체가 손해일 수 있다.** 짝이 있는 출력의 %s 가 겹침 %.2f 이상이다(초안이 이미 "
-                 "다음 답과 거의 같다). 이런 재료에서는 차분이든 전량이든 LLM 을 부른 쪽이 초안 그대로보다 품질이 낮았다(행정규칙 "
-                 "실호출 277: 초안 0.9635 > 차분 0.9611 > 전량 0.9545). 여기서 줄일 것은 호출 자체이고, 그것은 링클비 제품의 일이 "
-                 "아니다 — 링클비는 호출을 없애는 판단(호출 0)을 기본으로 켜지 않는다. 아래 수치는 '부른다면'의 값이다. "
-                 "선(겹침 %.2f 이상 출력 %s)은 다른 재료 3종(통과 2종 8~16%%, 손해 1종 27~28%%)에서 정한 것이고 이 로그의 선이 아니다." if ko else
-                 "- **Caution — on this material the LLM call itself may be the loss.** %s of paired output is at overlap >= %.2f "
-                 "(the draft already is the next answer). On such material calling, diff or full, scored below the draft as is "
-                 "(admin rules, 277 real calls: draft 0.9635 > diff 0.9611 > full 0.9545). What should shrink here is the call "
-                 "itself, and that is not Linklbee's product -- Linklbee does not turn on removing the call (zero-call) by "
-                 "default. The figures below are 'if you call'. The line (%s of output at >= %.2f) was set on three other "
-                 "materials (two that passed, 8-16%%; one that lost, 27-28%%), not on this log.")
-                % ((pct(cl["top_share_of_paired_output"]), cl["band"], cl["band"], pct(cl["line"])) if ko else
+        warn = [("- 이 로그에는 이전 답이 이미 다음 답과 거의 같은(닮음 %.2f 이상) 요청이 비교한 답 쌍 출력의 %s 있습니다. 그런 요청은 "
+                 "애초에 부르지 않는 편이 낫습니다(행정규칙 실호출 277건에서 이전 답 그대로 0.9635 > 바뀐 부분만 고쳐 쓰기 0.9611 > "
+                 "처음부터 다시 쓰기 0.9545). 링클비는 호출을 없애는 판단을 기본으로 켜지 않습니다. 위 수치는 그 요청도 부른다고 보고 "
+                 "잰 값입니다. 이 설명을 붙이는 선(닮음 %.2f 이상이 출력의 %s 이상)은 다른 재료 3종에서 정했고, 이 로그의 선이 아닙니다." if ko else
+                 "- In this log, %s of paired output comes from calls whose previous answer is already almost the "
+                 "same (similarity %.2f+). Those calls are better not made at all. On administrative rules (277 real "
+                 "calls), reusing the previous answer scored 0.9635, rewriting only the changed parts 0.9611, and "
+                 "rewriting from scratch 0.9545. Linklbee does not skip calls by default, so the figures above count "
+                 "these calls as made. This note appears at %s of output at %.2f+, a line set on three other materials, "
+                 "not on this log.")
+                % ((cl["band"], pct(cl["top_share_of_paired_output"]), cl["band"], pct(cl["line"])) if ko else
                    (pct(cl["top_share_of_paired_output"]), cl["band"], pct(cl["line"]), cl["band"]))]
     small = []  # its own list: the rescue branch below replaces warn
     if res.get("small_models"):
         sm = ", ".join("%s (%gB, %d)" % m for m in res["small_models"][:4])
-        small = [("- **주의 — 작은 모델: %s.** 이름이 %gB 미만을 밝힌 모델은 차분(편집형)에서 빼고 보십시오. 우리 법령 재료에서 3B 의 "
-                  "편집형은 초안 그대로보다 품질이 낮았다(토큰 F1 0.9163 < 0.9348, 개정 반영 0.114 — 7B 0.377·14B 0.422). 재료 하나·모델 "
-                  "계열 하나에서 정한 선이고 이 로그의 값이 아니다." if ko else
-                  "- **Caution — small models: %s.** Leave models whose name states under %gB out of the diff (edit) route. On "
-                  "our law material a 3B's edit form scored below the draft as is (token F1 0.9163 < 0.9348, amendments "
-                  "applied 0.114 vs 7B 0.377 and 14B 0.422). The line comes from one material and one model family, not "
-                  "from this log.") % (sm, SMALL_MODEL_B)]
+        small = [("- **주의 — 작은 모델: %s.** 이름이 %gB 미만을 밝힌 모델은 바뀐 부분만 고쳐 쓰기에서 빼고 보세요. 우리 법령 재료에서 3B 의 "
+                  "고쳐 쓰기는 이전 답 그대로보다 품질이 낮았습니다(토큰 F1 0.9163 < 0.9348, 개정 반영 0.114 — 7B 0.377·14B 0.422). 재료 하나·모델 "
+                  "계열 하나에서 정한 선이고 이 로그의 값이 아닙니다." if ko else
+                  "- **Caution — small models: %s.** Don't use models whose name says under %gB for rewriting only the "
+                  "changed parts. On our statute material, a 3B model's rewrite scored below the unchanged previous "
+                  "answer (token F1 0.9163 vs 0.9348; amendments applied 0.114, against 0.377 for 7B and 0.422 for 14B). "
+                  "This line comes from one material and one model family, not from this log.") % (sm, SMALL_MODEL_B)]
     sp, rc = res.get("span"), cl.get("rescue")
     if rc:
         how = (("길이 층별 적합 폭 %s" % "/".join(str(c["span"]) for c in sp["chosen"])) if rc["by"] == "fitted" else
                ("모든 문서에 폭 %d" % rc["span"])) if ko else \
-              (("fitted per length tier, spans %s" % "/".join(str(c["span"]) for c in sp["chosen"])) if rc["by"] == "fitted"
-               else ("span %d for every document" % rc["span"]))
-        warn = [("- **판마다 부르면 호출 자체가 손해인 구간이 크지만(겹침 %.2f 이상 출력 %s), 몇 판에 한 번 부르면 적격 구간이 된다.** "
-                 "%s(그 판 수마다 한 번 부름): 겹침 %.2f 이상 %s · 차분이 손해인 0.78 미만 %s · 돈이 나는 %.2f~%.2f 구간 %s. "
-                 "폭은 이 로그에서 정했다(아래 표)." if ko else
-                 "- **Calling at every version leaves a large band where the call itself loses (%s of output at overlap >= "
-                 "%.2f), but calling once per few versions brings it into the qualifying range.** %s (one call per that many "
-                 "versions): >= %.2f %s · under 0.78 where diff loses %s · the money band %.2f-%.2f %s. The span was fitted "
-                 "on this log (table below).")
+              (("spans fitted per length tier: %s" % "/".join(str(c["span"]) for c in sp["chosen"])) if rc["by"] == "fitted"
+               else ("a span of %d for every document" % rc["span"]))
+        warn = [("- **판마다 부르면 호출 자체가 손해인 구간이 크지만(닮음 %.2f 이상 출력 %s), 몇 판에 한 번 부르면 줄일 수 있는 구간이 됩니다.** "
+                 "%s(그 판 수마다 한 번 부름): 닮음 %.2f 이상 %s · 고쳐 쓰기가 손해인 0.78 미만 %s · 돈이 나는 %.2f~%.2f 구간 %s. "
+                 "폭은 이 로그에서 정했습니다(아래 표)." if ko else
+                 "- **Calling at every version wastes many calls (%s of output at similarity %.2f+). Calling once every "
+                 "few versions makes them reducible.** With %s (one call per that many versions): %.2f+ %s · under 0.78, "
+                 "where rewriting the changed parts costs more, %s · %.2f-%.2f, where it saves money, %s. The span was "
+                 "fitted on this log (table below).")
                 % ((cl["band"], pct(cl["top_share_of_paired_output"]), how, cl["band"], pct(rc["top_share"]), pct(rc["low_share"]),
                     MONEY_BAND[0], MONEY_BAND[1], pct(rc["money_share"])) if ko else
                    (pct(cl["top_share_of_paired_output"]), cl["band"], how, cl["band"], pct(rc["top_share"]), pct(rc["low_share"]),
                     MONEY_BAND[0], MONEY_BAND[1], pct(rc["money_share"])))]
-    if sp:
-        warn += ["", ("묶음 폭(몇 판 앞의 답을 초안으로 보나) — 짝이 있는 출력 중 몫. 겹침 ≥%.2f / <0.78 / %.2f~%.2f:" if ko else
-                      "Span (how many versions back the draft is) — share of paired output at >= %.2f / < 0.78 / %.2f-%.2f:")
+    # the span table only when some span has a share to move (REPORT-READ 10-22: an all-0.0% table of internal terms
+    # told the reader nothing)
+    if sp and any(pct(c[k]) not in ("—", pct(0)) for c in sp["by_span"] for k in ("top_share", "money_share")):
+        warn += ["", ("몇 판마다 부르나(몇 판 앞의 답을 이전 답으로 보나) — 답 쌍이 있는 출력 중 몫. 닮음 ≥%.2f / <0.78 / %.2f~%.2f:" if ko else
+                      "Span (how many versions back the previous answer is taken from) — share of paired output at "
+                      "%.2f+ / under 0.78 / %.2f-%.2f:")
                  % (CALL_LOSS_BAND, MONEY_BAND[0], MONEY_BAND[1]), "",
-                 ("이 표는 바로 앞 답과 같은 답(반복: 짝 %d개, 폭 1 짝 출력의 %s)을 접고, 더 이른 판으로 돌아간 답(되돌림: 짝 %d개, "
-                  "%s)을 뺀 사슬에서 쟀다. 그 둘은 몇 판에 한 번 부르든 부를 필요가 없는 자리라 폭의 효과로 세지 않는다." if ko else
-                  "This table is measured after folding answers equal to the previous answer (repeats: %d pairs, %s of span-1 "
-                  "paired output) and leaving out answers that went back to an earlier version (reverts: %d pairs, %s). "
-                  "Neither needs a call at any span, so neither counts as an effect of the span.")
+                 ("이 표는 바로 앞 답과 같은 답(반복: 답 쌍 %d개, 폭 1 답 쌍 출력의 %s)을 접고, 더 이른 판으로 돌아간 답(되돌림: 답 쌍 %d개, "
+                  "%s)을 뺀 사슬에서 쟀습니다. 그 둘은 몇 판에 한 번 부르든 부를 필요가 없는 자리라 폭의 효과로 세지 않습니다." if ko else
+                  "Before measuring, answers identical to the previous one were folded (repeats: %d pairs, %s of span-1 "
+                  "paired output), and answers that went back to an earlier version were left out (reverts: %d pairs, "
+                  "%s). Neither needs a call at any span, so neither counts toward the span's effect.")
                  % (sp["repeat_pairs"], pct(sp["repeat_share"]), sp["revert_pairs"], pct(sp["revert_share"])), "",
-                 "| %s | %s | >=%.2f | <0.78 | %.2f-%.2f |" % ("폭" if ko else "span", "짝" if ko else "pairs",
+                 "| %s | %s | >=%.2f | <0.78 | %.2f-%.2f |" % ("폭" if ko else "span", "답 쌍" if ko else "answer pairs",
                                                              CALL_LOSS_BAND, MONEY_BAND[0], MONEY_BAND[1]), "|---|---|---|---|---|"]
         warn += ["| %d | %d | %s | %s | %s |" % (c["span"], c["pairs"], pct(c["top_share"]), pct(c["low_share"]),
                                                 pct(c["money_share"])) for c in sp["by_span"]]
-        warn += ["", ("길이 층(답 토큰 경계 %s, 이 로그의 3분위)별로 고른 폭: %s. 짝이 %d개 미만인 층은 폭 1을 쓴다. "
-                      "폭 2 이상은 같은 답을 한 판 앞 초안으로 쟀을 때보다 돈 구간 몫이 클 때만 고른다"
+        warn += ["", ("길이 층(답 토큰 경계 %s, 이 로그의 3분위)별로 고른 폭: %s. 답 쌍이 %d개 미만인 층은 폭 1을 씁니다. "
+                      "폭 2 이상은 같은 답을 한 판 앞 이전 답으로 쟀을 때보다 돈 구간 몫이 클 때만 고릅니다"
                       "(문서 단위 재표집 2.5 백분위로도)." if ko else
-                      "Span picked per length tier (answer-token edges %s, this log's tertiles): %s. A tier with under %d "
-                      "pairs keeps span 1. A span of 2 or more is picked only where it beats span 1 on the same answers "
-                      "(also at the 2.5th percentile of a document resample).")
+                      "Span chosen per length tier (answer-token edges %s, this log's tertiles): %s. A tier with fewer "
+                      "than %d answer pairs keeps span 1. A span of 2 or more is chosen only where it beats span 1 on the "
+                      "same answers, including at the 2.5th percentile of a per-document resample.")
                  % (sp["tier_edges_answer_tokens"], ", ".join("%d%s" % (c["span"], "" if c["fitted"] else "*")
                                                               for c in sp["chosen"]), SPAN_MIN_PAIRS), ""]
-        if sp.get("fit_off"):
-            warn += [("호출이 %s건으로 %s건 미만이라 폭을 이 로그에 맞추지 않았다(모든 층 폭 1, 위 표는 참고). 작은 로그에서 고른 "
-                      "폭은 우연에 기댄다." if ko else
-                      "With %s calls (under %s) the span is not fitted to this log (span 1 for every tier; the table above "
-                      "is for reference). A span picked on a small log rests on chance.")
-                     % ("{:,}".format(sp["calls"]), "{:,}".format(sp["min_calls"])), ""]
-    L += ["## " + t["s3"], ""] + warn + small + [
-          ("- **켜짐 칸의 출력 토큰 = 전체 출력의 %s** (짝 %d개). 짝이 있는 출력 중에서는 %s." if ko else
-           "- **Output tokens in switch-on cells = %s of all output** (%d pairs). Of paired output: %s.")
+    L += ["## " + t["s3"], ""] + [
+          ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (답 쌍 %d개). 답 쌍이 있는 출력 중에서는 %s." if ko else
+           "- **Reducible calls produce %s of all output tokens** (%d answer pairs), and %s of paired output.")
           % (pct(q["share_of_all_output"]), q["on_pairs"], pct(q["share_of_paired_output"])),
-          ("- 엔진 재생(답을 보기 전, 같은 키의 과거 짝만 보고 켬): 전체 출력의 %s (짝 %d개). 키의 첫 짝은 이력이 없어 꺼진다." if ko else
-           "- Engine replay (switch decides before the answer, from the key's earlier pairs only): %s of all output "
-           "(%d pairs). A key's first pair has no history and stays off.") % (pct(rp["share_of_all_output"]), rp["on_pairs"])]
+          ("- 링클비 엔진이 그때그때 판단했다면(답을 보기 전, 그 문서의 지난 기록만 보고): 전체 출력의 %s (답 쌍 %d개). 문서의 첫 비교는 기록이 없어 줄이지 않습니다." if ko else
+           "- If the Linklbee engine had decided each call as it came (before the answer, from that document's history "
+           "only): %s of all output (%d answer pairs). A document's first pair has no history, so it is not reduced.") % (pct(rp["share_of_all_output"]), rp["on_pairs"])]
+    gn = (rp.get("guard_full_pairs") or {}).get("new_text") or 0
+    if gn:
+        L.append(("  - 스위치는 답 쌍 %d개를 켰지만, 새 글 가드(요청에 이전 답에 없는 글이 답 길이의 절반 이상이면 처음부터 쓰기)가 그중 "
+                  "%d개(전체 출력의 %s)를 처음부터 쓰기로 보냈습니다. 이 가드는 고정이 아닙니다. 엔진은 막힌 요청의 일부를 "
+                  "고쳐 쓰기로 시험해 보고, 그 고객에서 가드를 올리거나 끕니다. 이 몫은 시험 결과가 나오기 전에는 줄일 수 있는지 "
+                  "모르는 몫입니다." if ko else
+                  "  - The switch turned on %d answer pairs, but the new-text guard (a full write when the request holds "
+                  "new text of at least half the answer's length) sent %d of them (%s of all output) to a full write. The "
+                  "guard is not fixed: the engine tries a share of the blocked calls as edits and raises "
+                  "or drops the guard for that customer. Until those trials are in, it is not known whether this share "
+                  "can be reduced.")
+                 % (rp["switch_on_pairs"], gn, pct(rp.get("guard_new_text_output_share") or 0)))
     if not q["on_pairs"]:
-        L.append(("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 축은 8절에 적었다." if ko else
-                      "- Why this is 0% (counted on this log) and which axis to look at instead: section 8."))
+        L.append(("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 항목은 8절에 적었습니다." if ko else
+                      "- Why this is 0% (counted on this log), and what to look at instead: section 8."))
     if q["on_pairs_with_prompt"]:
-        L.append(("- 그중 같은 프롬프트를 다시 보낸 짝 %d개(프롬프트가 있는 켜짐 짝 %d개 중), 출력 %s — 사용자가 다른 답을 원해 "
-                  "다시 보냈을 수 있는 몫이다. 그중 %d개는 %d초 안에 다시 보냈다 — 서빙은 이것을 다시 생성으로 보고 전량으로 "
-                  "보낸다(엔진 재생·호출 0 칸에서 뺐다). %s" if ko else
-                  "- Of these, %d pairs resent the same prompt (of %d switch-on pairs with a prompt), %s of all output — "
-                  "the user may have resent to get a different answer. %d of them came within %d s — the serving path "
-                  "treats those as regenerate and sends them in full (left out of the engine replay and zero-call figures). %s")
+        L.append(("- 그중 같은 프롬프트를 다시 보낸 답 쌍 %d개(프롬프트가 있는, 줄일 수 있는 답 쌍 %d개 중), 출력 %s — 사용자가 다른 답을 원해 "
+                  "다시 보냈을 수 있는 몫입니다. 그중 %d개는 %d초 안에 다시 보냈습니다 — 링클비 엔진은 이것을 다시 생성으로 보고 처음부터 다시 쓰기로 "
+                  "보냅니다('엔진이 판단했다면'과 '호출 없이 답하기' 값에서 뺐습니다). %s" if ko else
+                  "- Of these, %d answer pairs resent the same prompt (out of %d reducible pairs with a prompt), %s of "
+                  "all output. The user may have wanted a different answer. %d of them came within %d s. The Linklbee "
+                  "engine treats those as a regenerate and rewrites from scratch, so they are left out of the "
+                  "'if the engine had decided' and 'without a call' figures. %s")
                  % (q["on_pairs_same_prompt"], q["on_pairs_with_prompt"],
                     pct(q["on_output_tokens_same_prompt"] / res["output_tokens_total"]) if res["output_tokens_total"] else "-",
                     q["on_pairs_same_prompt_in_window"], res["resend_window"]["window_s"], resend_note(res["resend_window"], ko)))
     fi, ref = res["fact_input"], CELLS["fact_input_reference"]
     if fi["on_pairs_with_request"]:
-        L.append(("- 사실 입력(축 3): 요청 본문이 있는 켜짐 짝 %d개(켜짐 짝 %d개 중). 답에 새로 들어간 토큰 중 요청이 미리 알려 준 비율 = "
-                  "토큰 가중 %s · 중앙 %s (p10 %s ~ p90 %s) · 0.5 이상인 짝 %s · 다른 요청을 넣은 대조군 %s → **고유 몫 %s**. **[선 미확정]** 이 축의 적격선은 아직 정하지 않았다. "
-                  "참고(저희 재료, 자사 값 아님 — %s): 품질 통과 재료 %s ~ %s · 품질 미달 재료 %s ~ %s." if ko else
-                  "- Fact input (axis 3): %d switch-on pairs with a request body (of %d). Share of the answer's new tokens the "
-                  "request told in advance = token-weighted %s · median %s (p10 %s – p90 %s) · pairs at 0.5 or more %s · "
-                  "control with another request %s -> **own share %s**. "
-                  "**[line not set]** No qualifying line is set for this axis yet. For reference (our materials, not yours — %s): "
-                  "quality-pass materials %s – %s · quality-miss materials %s – %s.")
+        L.append(("- 사실 입력: 요청 본문이 있는, 줄일 수 있는 답 쌍 %d개(줄일 수 있는 답 쌍 %d개 중). 답에 새로 들어간 토큰 중 요청이 미리 알려 준 비율 = "
+                  "토큰 가중 %s · 중앙 %s (p10 %s ~ p90 %s) · 0.5 이상인 답 쌍 %s · 다른 요청을 넣은 대조군 %s → **고유 몫 %s**. **[선 미확정]** 이 값으로 줄일 수 있는지 가르는 선은 아직 정하지 않았습니다. "
+                  "참고(링클비가 잰 다른 재료의 값이며 이 로그의 값이 아닙니다 — %s): 품질 통과 재료 %s ~ %s · 품질 미달 재료 %s ~ %s." if ko else
+                  "- Facts in the request: %d reducible answer pairs have a request body (out of %d). Share of an "
+                  "answer's new tokens that the request gave in advance: token-weighted %s · median %s (p10 %s, p90 %s) "
+                  "· pairs at 0.5+ %s · control with a different request %s -> **unique share %s**. "
+                  "**[no line yet]** No line decides yet whether this value makes a request reducible. For reference "
+                  "(Linklbee's measurements on other materials, not this log — %s): materials that passed on quality "
+                  "%s – %s · materials that did not %s – %s.")
                  % (fi["on_pairs_with_request"], fi["on_pairs"], pct(fi["pooled"]), pct(fi["median"]), pct(fi["p10"]),
                     pct(fi["p90"]), pct(fi["share_ge_half"]), pct(fi["control_pooled"]),
                     ("%+.2f" % fi["unique_over_control"]) if fi["unique_over_control"] is not None else "-",
@@ -3359,142 +6135,317 @@ def report(res, lang="ko"):
                     pct(ref["miss"][0]), pct(ref["miss"][1])))
         gm = fi["ge_min"]
         if gm["pairs"]:
-            L.append(("  - 새 토큰이 %d개 이상인 짝만(%d개 — 한두 토큰 고침은 거저 100%%가 나와서 따로 본다): 토큰 가중 %s · 중앙 %s · "
+            L.append(("  - 새 토큰이 %d개 이상인 답 쌍만(%d개 — 한두 토큰 고침은 거저 100%%가 나와서 따로 봅니다): 토큰 가중 %s · 중앙 %s · "
                       "대조군 %s → 고유 몫 %s." if ko else
-                      "  - Pairs with at least %d new tokens only (%d — a one- or two-token fix scores 100%% for free): "
-                      "token-weighted %s · median %s · control %s -> own share %s.")
+                      "  - Only pairs with %d+ new tokens (%d; a one- or two-token fix scores 100%% for free): "
+                      "token-weighted %s · median %s · control %s -> unique share %s.")
                      % (fi["added_min"], gm["pairs"], pct(gm["pooled"]), pct(gm["median"]), pct(gm["control_pooled"]),
                         ("%+.2f" % gm["unique_over_control"]) if gm["unique_over_control"] is not None else "-"))
     elif q["on_pairs"]:
-        L.append(("- 사실 입력(축 3) **미확인**: 켜짐 짝에 요청 본문(prompt)이 없다. 위 켜짐 칸 %s 는 두 축만 본 값이다 — 요청이 "
-                  "무엇이 바뀌었는지 알려 주지 않는 트래픽이면 실제 절감은 이보다 낮을 수 있다." if ko else
-                  "- Fact input (axis 3) **not checked**: switch-on pairs carry no request body (prompt). The %s above "
-                  "comes from two axes only — if a request does not say what changed, the real saving can be lower.")
+        L.append(("- 위 %s 는 닮음과 답 길이만 본 값입니다. 로그에 요청 본문(prompt)이 있으면 요청이 바뀐 내용을 알려 주는지도 봅니다. "
+                  "알려 주지 않는 트래픽이면 실제 절감은 이보다 낮을 수 있습니다." if ko else
+                  "- The %s above uses similarity and answer length only. If the log has the request body (prompt), the "
+                  "report also checks whether each request says what changed. Where it does not, the real saving can be "
+                  "lower.")
                  % pct(q["share_of_all_output"]))
-    L.append("")
+    notes = warn + small
+    if notes:
+        L += ([] if notes[0] == "" else [""]) + notes
+    if L[-1] != "":
+        L.append("")
     s = res["savings"]
     L += ["## " + t["s4"], "",
-          ("이 절은 문서 차분 칸만 봅니다. 문서가 닮지 않은 로그에서는 0 이 정상이며, 7절을 보십시오." if ko else
-           "This section looks at the document-diff cells only. On a log whose documents do not resemble each other 0 is "
-           "the normal result; see section 7."), "",
-          ("**이 로그에서 잰 절감이 아니다.** 켜짐 칸마다 저희가 측정한 범위(아래)를 대입한 밴드다. 칸 밖은 0." if ko else
-           "**Not a saving measured on this log.** Each switch-on cell gets the range we measured (below) as a band; "
-           "outside the switch it is 0."), "",
-          ("- 출력 토큰: 전체 출력의 %s ~ %s (칸 대입)" if ko else "- output tokens: %s – %s of all output (bands applied)")
+          ("이 절은 바뀐 부분만 고쳐 쓸 수 있는 구간만 봅니다. 문서가 닮지 않은 로그에서는 0 이 정상이며, 7절을 보세요." if ko else
+           "This section covers only calls that can be answered by rewriting the changed parts. On a log whose "
+           "documents do not resemble each other, 0 is the expected result; see section 7."), "",
+          ("**이 로그로 잰 절감이 아닙니다.** 링클비가 다른 공개 문서로 잰 범위(아래)를 이 로그의 해당 구간에 대입한 값입니다. 그 밖의 구간은 0으로 봅니다." if ko else
+           "**This is not a saving measured on this log.** The ranges Linklbee measured on other public documents "
+           "(below) are applied to this log's reducible calls. Everything else counts as 0."), "",
+          ("- 출력 토큰: 전체 출력의 %s ~ %s (구간에 대입)" if ko else "- output tokens: %s – %s of all output (ranges applied)")
           % (pct(s["share_of_all_output_low"]), pct(s["share_of_all_output_high"])),
-          ("- 엔진 재생 기준: %s ~ %s" if ko else "- with the engine replay switch: %s – %s")
-          % (pct(rp["saving_share_low"]), pct(rp["saving_share_high"]))]
+          ("- 엔진이 판단했다면: %s ~ %s" if ko else "- if the engine had decided: %s – %s")
+          % (pct(rp["saving_share_low"]), pct(rp["saving_share_high"])),
+          ("  - 엔진과 같은 규칙으로 다시 센 값입니다. 공개 재료(법령·eCFR, 문서 키 없는 로그)에서 엔진이 실제로 켠 양의 %s배였습니다. "
+           "엔진만 하는 판정(이어 쓸 이전 답 후보가 둘이라 모호한 요청 등)은 다시 세지 않습니다." if ko else
+           "  - Counted again with the engine's own rules. On public material (laws, eCFR; logs without a document key) "
+           "it came to %s times what the engine actually turned on. Judgments only the engine makes (such as a request "
+           "with two equally likely previous answers) are not replayed.") % ENGINE_REPLAY_RANGE]
     if s.get("share_of_bill_low") is not None:
-        L.append(("- 금액(캐시 없음 가정의 금액 절감 범위): %s ~ %s = 청구서의 %s ~ %s · 가격표 %s · 금액 못 낸 켜짐 짝 %d" if ko else
-                  "- dollars (cost-saving bands, measured without prompt cache): %s – %s = %s – %s of the bill · "
-                  "prices as of %s · switch-on pairs without a price %d")
+        L.append(("- 금액(캐시 없음 가정의 금액 절감 범위): %s ~ %s = 청구서의 %s ~ %s · 가격표 %s · 금액을 못 낸 줄일 수 있는 답 쌍 %d" if ko else
+                  "- dollars (cost ranges measured without a prompt cache): %s – %s = %s – %s of the bill · "
+                  "prices as of %s · reducible pairs without a price: %d")
                  % (usd(s["usd_low"]), usd(s["usd_high"]), pct(s["share_of_bill_low"]), pct(s["share_of_bill_high"]),
                     res["pricing"]["as_of"], s["unpriced_on_pairs"]))
+        if s.get("holdout_share"):
+            L.append(("  - 링클비는 줄일 수 있는 요청의 %s 를 비교용으로 그대로 보냅니다. 위 범위는 나머지 요청에서만 줄어든 값입니다." if ko else
+                      "  - Linklbee sends %s of the reducible pairs in full as its comparison group. The range above is "
+                      "what the rest saves.") % pct(s["holdout_share"]))
+    if (res.get("flat") or {}).get("on_output_tokens"):
+        L.append(("- 정액 구간의 줄일 수 있는 출력 %s 토큰 — 청구액은 그대로이고, 같은 정액 용량에서 그만큼 비는 몫입니다(금액 범위에서 뺐습니다)." if ko else
+                  "- Reducible output in flat-rate traffic: %s tokens. The bill stays the same; this is capacity freed "
+                  "on the same plan, so it is not in the dollar range.") % "{:,}".format(res["flat"]["on_output_tokens"]))
     if res.get("mode", {}).get("known"):
         m = res["mode"]
-        L.append(("- 작업이 %s 이면: 켜짐 칸 × %s ~ %s = 전체 출력의 %s ~ %s" if ko else
-                  "- if the task is %s: switch-on cells x %s – %s = %s – %s of all output")
+        L.append(("- 작업이 %s 이면: 줄일 수 있는 구간 × %s ~ %s = 전체 출력의 %s ~ %s" if ko else
+                  "- if the task is %s: reducible calls x %s – %s = %s – %s of all output")
                  % (m["label"][lang], pct(m["rate"][0], 0), pct(m["rate"][1], 0), pct(m["output_saving_share_low"]),
                     pct(m["output_saving_share_high"])))
-    L += ["", ("저희가 측정한 범위(%s):" if ko else "Ranges we measured (%s):") % CELLS["measured"][lang]]
+    L += ["", ("링클비가 측정한 범위(%s):" if ko else "Ranges Linklbee measured (%s):") % CELLS["measured"][lang]]
     for row, r in sorted(CELLS["on_rows"].items(), reverse=True):
-        L.append(("- 겹침 %s · 답 ≥200 토큰 칸: 출력 %s ~ %s, 금액 %s ~ %s" if ko else
-                  "- overlap %s · answer >= 200 tokens: output %s – %s, cost %s – %s")
+        L.append(("- 닮음 %s · 답 ≥200 토큰 구간: 출력 %s ~ %s, 금액 %s ~ %s" if ko else
+                  "- similarity %s · answer 200+ tokens: output %s – %s, cost %s – %s")
                  % (row, pct(r["output"][0], 0), pct(r["output"][1], 0), pct(r["usd"][0], 0), pct(r["usd"][1], 0)))
     L.append("")
+    if not g["pairs"]:  # no answer pair: an empty table and 0.0% ranges tell nothing (REPORT-READ 10-22)
+        L[at_s2:] = ["## " + t["s2"], "",
+                     ("- 비교할 답 쌍(같은 문서의 앞 답과 이번 답)이 없습니다(문서 %d개). 그래서 2절 표와 4절(절감 예상 범위)은 내지 않았습니다." if ko else
+                      "- There is no answer pair to compare (a document's previous answer and this one; %d documents), so the "
+                      "section 2 table and section 4 (estimated savings) are not produced.") % g["keys"], "",
+                     "## " + t["s3"], "",
+                     ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (답 쌍 0개). 왜 0 인지와 대신 볼 항목은 8절에 적었습니다." if ko else
+                      "- **Reducible calls produce %s of all output tokens** (0 answer pairs). Why, and what to look at "
+                      "instead: section 8.") % pct(0), ""]
     z = res["zero_call"]
     L += ["## " + t["s5"], ""]
     if z["pairs_with_prompt"]:
-        L += [("- 관문(직전 호출과 프롬프트가 숫자만 빼고 같으면 호출 0)이 고른 짝 %d개 = 전체 출력의 %s. 그중 실제 답이 직전 답과 같았던 몫: 완전 일치 %s · 숫자만 다름 포함 %s. **관문은 프롬프트만 보고 골랐다(답을 보지 않음).**" if ko else
-               "- The gate (prompt equal to the previous call's except digits -> zero call) picked %d pairs = %s of all output. "
-               "Of those, share whose answer really equalled the previous one: exact %s · digits-only difference included %s. "
-               "**The gate looked at prompts only, not answers.**")
+        L += [("- 켜는 조건(직전 호출과 프롬프트가 숫자만 빼고 같으면 호출 없이 답하기)이 고른 답 쌍 %d개 = 전체 출력의 %s. 그중 실제 답이 직전 답과 같았던 몫: 완전 일치 %s · 숫자만 다름 포함 %s. **켜는 조건은 프롬프트만 보고 골랐습니다(답을 보지 않음).**" if ko else
+               "- The rule (a prompt equal to the previous call's except for digits gets no call) picked %d answer "
+               "pairs, %s of all output. Of those, the answer really matched the previous one in: exactly %s · "
+               "allowing digit-only differences %s. **The rule looked only at prompts, never at answers.**")
               % (z["gate_selected"], pct(z["gate_share_of_all_output"]), pct(z["gate_precision_exact"]),
                  pct(z["gate_precision_digits_masked"]))]
+    elif not g["pairs"]:  # WRONG-SWEEP (10-24): no pair, not no prompt -- AG0 / RA / TL / A carry request bodies
+        L += ["- " + ("비교할 답 쌍이 없어 이 후보를 보지 못했습니다(같은 문서의 앞 호출이 있어야 합니다)." if ko else
+                      "No answer pair to compare, so this candidate is not checked (a document's earlier call is needed).")]
     else:
-        L += ["- " + ("프롬프트(또는 prompt_hash)가 없어 관문을 못 돌렸다." if ko else "No prompt (or prompt_hash), so the gate could not run.")]
-    L += [("- 참고(답을 보고 센 상한): 직전 답과 완전 일치 짝 %d · 숫자만 다른 짝 포함 %d" if ko else
-           "- Reference (counted with the answer known, an upper bound): pairs identical to the previous answer %d · "
-           "including digits-only differences %d") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]), ""]
+        L += ["- " + ("로그에 prompt(또는 prompt_hash)가 있으면 이 후보를 봅니다. 지금 로그에는 없습니다." if ko else "Shown when the log has prompt (or prompt_hash). This log does not.")]
+    L += [("- 참고(답을 보고 센 상한): 직전 답과 완전 일치 답 쌍 %d · 숫자만 다른 답 쌍 포함 %d" if ko else
+           "- For reference, counted with the answer known (an upper bound): pairs identical to the previous answer "
+           "%d · allowing digit-only differences %d") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]), ""]
+    at_s6 = len(L)
     L += ["## " + t["s6"], ""]
     gaps = []
     if res["rejected_no_ts"]:
-        gaps.append(("ts 없는 줄 %d개 거부(시간 순서 없이 짝을 만들면 미래 누수)" if ko else
-                     "%d lines rejected for missing ts (pairs without time order would leak the future)") % res["rejected_no_ts"])
+        gaps.append(("ts 없는 줄 %d개 거부(시간 순서 없이 답 쌍을 만들면 뒤의 답이 앞 답 쪽으로 샙니다)" if ko else
+                     "%d lines were rejected for missing ts (without time order, a later answer would leak into an earlier pair)") % res["rejected_no_ts"])
     if b["none"]:
-        gaps.append(("본문 없는 호출 %d개 — 짝·겹침에서 빠짐" if ko else "%d calls without a body — left out of pairs and overlap") % b["none"])
+        gaps.append(("본문 없는 호출 %d개 — 답 쌍·닮음에서 빠짐" if ko else "%d calls have no body, so they are not in the answer pairs or similarity") % b["none"])
     gaps += _gaps_common(res, ko)
     if g["auto_key_calls"]:
         # AP-1/AP-1b (10-18): with keys hidden, auto pairs matched the true on-cell volume on law / eCFR (0.98-1.00) but
         # read 1.15-1.54x on drug labels, where same-ingredient generics interleaved in time get chained as one key
-        gaps.append(("묶음 키 자동 탐색 호출 %d개(짝 %d) — 이 짝에서 나온 켜짐 물량은 상한이다. 키를 지우고 잰 시험에서 법령·eCFR 은 참 키의 0.98~1.00 배였으나, "
-                     "비슷한 형제 문서(같은 성분 제품 등)가 시간에 섞여 오면 다른 문서의 판을 앞 판으로 이어 붙여 최대 1.5배까지 부풀었다. "
-                     "서빙은 고객이 보내는 문서 id 로 짝을 짓는다 — 문서 id 를 로그에 넣으면 이 값이 서빙과 같아진다" if ko else
-                     "%d calls grouped by auto key discovery (%d pairs) — the on-cell volume from these pairs is an upper bound. "
-                     "With keys hidden it read 0.98-1.00x the true volume on statutes and eCFR, but up to 1.5x where similar "
-                     "sibling documents (same-ingredient products etc.) arrive interleaved in time and get chained as one "
-                     "document. Serving pairs by the document id the customer sends; with that id in the log this figure "
-                     "matches serving") % (g["auto_key_calls"], g["pairs_auto"]))
+        gaps.append(("엔진이 문서를 찾아 묶은 호출 %d개(답 쌍 %d) — 이 답 쌍에서 나온 줄일 수 있는 물량은 상한입니다. 문서 표시를 지우고 잰 시험에서 법령·eCFR 은 실제 문서로 묶었을 때의 0.98~1.00 배였으나, "
+                     "비슷한 형제 문서(같은 성분 제품 등)가 시간에 섞여 오면 다른 문서의 판을 앞 판으로 이어 붙여 최대 1.5배까지 부풀었습니다. "
+                     "링클비 엔진은 고객이 보내는 문서 id 로 답 쌍을 짓습니다 — 문서 id 를 로그에 넣으면 이 값이 엔진과 같아집니다" if ko else
+                     "The scanner grouped %d calls into documents itself (%d answer pairs), so the reducible volume from "
+                     "these pairs is an upper bound. In tests with document ids removed, it read 0.98-1.00x the true "
+                     "volume on statutes and eCFR. Where similar sibling documents (such as products with the same "
+                     "ingredient) arrive mixed in time, it chained them as one document and read up to 1.5x. The Linklbee "
+                     "engine pairs answers by the document id the service sends. Put that id in the log and this figure "
+                     "matches the engine") % (g["auto_key_calls"], g["pairs_auto"]))
     if res.get("mode") and not res["mode"]["known"]:
-        gaps.append(("모드 '%s' 는 확정 모드가 아니다 — 모드 없는 값만 보였다" if ko else "mode '%s' is not a confirmed mode — mode-free values only") % res["mode"]["name"])
-    gaps.append(("절감 범위는 다른 재료(공개 문서 2종)에서 잰 값이다. 이 고객 트래픽에서 잰 값은 홀드아웃 파일럿에서 나온다" if ko else
-                 "Saving ranges were measured on other materials (two public document sets). This customer's own value comes "
-                 "from a holdout pilot"))
-    L += ["- " + x for x in gaps] + ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        gaps.append(("모드 '%s' 는 확정 모드가 아닙니다 — 모드 없는 값만 보였습니다" if ko else "mode '%s' is not a confirmed mode, so only mode-free values are shown") % res["mode"]["name"])
+    if g["pairs"]:  # section 4 is produced only with answer pairs; its own line names the materials (3, not 2)
+        gaps.append(("4절의 절감 범위는 다른 재료(4절 끝에 적은 공개 문서)에서 잰 값입니다. 이 고객 트래픽에서 잰 값은 파일럿에서 비교용으로 남긴 요청과 견줘 나옵니다" if ko else
+                     "The saving ranges in section 4 were measured on other materials (the public documents named at the end "
+                     "of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison"))
+    if gaps:
+        L += ["- " + x for x in gaps] + [""]
+    else:  # 1.4.2: nothing to note -> no empty heading (the timing line stays)
+        del L[at_s6:at_s6 + 2]
+    L += [("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
     L += waste_lines(res, ko)
     L += zero_lines(res, ko)
+    L += ["", CONTACT[0 if ko else 1]]
     return "\n".join(L)
 
 
-WSTAT = {"found": ("발견", "found"), "none": ("해당 없음", "none"), "cannot_judge": ("판단 불가: 입력 부족", "cannot judge: input missing")}
+WSTAT = {"found": ("발견", "found"), "none": ("없음", "none"), "cannot_judge": ("더 보려면", "needs more data")}
+# section 7 'cannot_judge': what the log needs for the item, said as the next step (PM 10-22 15:45 item 4), not as a failure
+MISSING = {
+    "status": ("`status`", "`status`"),
+    "ts": ("`ts`(시각)", "`ts` (time)"),
+    "request (or prompt / prompt_hash)": ("요청 본문(`request`, 또는 `prompt` / `prompt_hash`)",
+                                          "the request body (`request`, or `prompt` / `prompt_hash`)"),
+    "finish_reason (or max_tokens + output_tokens)": ("`finish_reason`(또는 `max_tokens` 와 `output_tokens`)",
+                                                      "`finish_reason` (or `max_tokens` with `output_tokens`)"),
+    "request (tools / system)": ("요청 본문의 도구 정의·시스템 지시(`request` 의 `tools` / `system`)",
+                                 "the request's tool definitions and system text (`tools` / `system` in `request`)"),
+    "model listed in cache_constants.json + input_tokens": ("`model`(벤더 캐시 표에 있는 모델)과 `input_tokens`",
+                                                            "`model` (one in the vendor cache table) with `input_tokens`"),
+    "answer body (output) + the vendor's output_tokens": ("답 본문(`output`)과 벤더가 보고한 `output_tokens`",
+                                                          "the answer body (`output`) with the vendor's `output_tokens`"),
+    "input_tokens + the vendor's cache-read field (cached_tokens / cache_read_input_tokens / cachedContentTokenCount)":
+        ("`input_tokens` 와 벤더의 캐시 읽기 값(`cached_tokens` / `cache_read_input_tokens` / `cachedContentTokenCount`)",
+         "`input_tokens` with the vendor's cache-read value (`cached_tokens` / `cache_read_input_tokens` / "
+         "`cachedContentTokenCount`)"),
+    "request body (messages / system / tools) or prompt, + input_tokens + ts":
+        ("요청 본문(`messages` / `system` / `tools`) 또는 `prompt`, 그리고 `input_tokens` 와 `ts`",
+         "the request body (`messages` / `system` / `tools`) or `prompt`, with `input_tokens` and `ts`"),
+    "prompt": ("요청 본문(`prompt`, 또는 --hashify 의 `prompt_token_hashes`)", "the request body (`prompt`, or --hashify's `prompt_token_hashes`)"),
+    "output": ("답 본문(`output`, 또는 --hashify 의 `output_token_hashes`)", "the answer body (`output`, or --hashify's `output_token_hashes`)"),
+}
+
+
+def more(missing, ko):
+    """'Seen when the log has X; this log has none.' for a field name the scanner reports as missing."""
+    f = MISSING.get(missing, (missing, missing))[0 if ko else 1]
+    return ("로그에 이것이 있으면 봅니다: %s. 지금 로그에는 없습니다." if ko else "Shown when the log has %s. This log does not.") % f
+
+
+def pre56_note(w, ko):
+    """OPENAI-PRE56: the sentence that replaces "once the vendor's minimum is confirmed" for OpenAI models before 5.6."""
+    o = w.get("openai_pre56")
+    if not o:
+        return None
+    sr = o.get("shortest_read")
+    return ((" OpenAI 문서(2026-10-24 읽음)는 GPT-5.6 이전 모델의 최소 길이를 숫자로 정하지 않습니다 — 도구·이미지·출력 스키마·추론 강도 같은 "
+             "요청 설정에 따라 달라진다고 적습니다. 그래서 표에 숫자를 넣지 않습니다. " +
+             ("이 로그에서 캐시를 읽은 가장 짧은 호출은 입력 %s 토큰입니다(이 설정에서 최소는 그 이하)." % "{:,}".format(int(sr))
+              if sr else "이 로그에서는 캐시를 읽은 호출이 없습니다.")) if ko else
+            (" OpenAI's guide (read 2026-10-24) gives no number for models before GPT-5.6: the minimum varies with request "
+             "settings such as tools, images, output schemas and reasoning effort, so no number goes in the table. " +
+             ("The shortest call in this log that read from the cache had %s input tokens (the minimum under these "
+              "settings is at most that)." % "{:,}".format(int(sr)) if sr else "No call in this log read from the cache.")))
+
+
+def table_gap(w, ko):
+    """7-5 when the log has model and input_tokens but none of its models' minimum is in cache_constants.json: the gap is
+    Linklbee's table, so it is said that way, with the input curve at common minimums (EMPTY-HAND, PM 10-23 21:12)."""
+    if "open_curve" not in w and w.get("upstream_spread"):  # SELFHOST-SPREAD: a log that names its servers
+        return (("보낸 서버가 기록된 자체 호스팅 로그로 보입니다. 자체 호스팅 서버의 접두 캐시에는 벤더의 최소 길이가 없어 그 기준으로는 "
+                 "판정하지 않았습니다. 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. 서버를 옮겨 다니며 다시 계산한 몫은 "
+                 "아래에 셉니다." if ko else
+                 "This looks like a self-hosted log that names its servers. A self-hosted prefix cache has no vendor "
+                 "minimum, so it is not judged against one. The whole-log hit rate (cache reads / input) is **%s** (%d "
+                 "calls). What was computed again because calls moved between servers is counted below.")
+                % (pct(w.get("hit_rate")), w.get("open_calls", 0)))
+    if "open_curve" not in w:  # 7-7: the whole-log hit rate, which needs no minimum
+        return (("이 로그 모델의 캐시 최소 길이가 링클비 상수표에 아직 없어 최소 길이 이상 호출의 적중률을 판정하지 않았습니다(추측하지 "
+                 "않음). 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. 벤더 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
+                 "The cache minimum of this log's models is not in Linklbee's table yet, so the hit rate above the minimum "
+                 "is not judged (not guessed). The whole-log hit rate (cache reads / input) is **%s** (%d calls). Once "
+                 "the vendor's documented minimum is confirmed it goes in the table and this is judged.")
+                % (pct(w.get("hit_rate")), w.get("open_calls", 0))).replace(
+            " 벤더 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
+            " Once the vendor's documented minimum is confirmed it goes in the table and this is judged.",
+            pre56_note(w, ko) or (" 벤더 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
+                                  " Once the vendor's documented minimum is confirmed it goes in the table and this is judged."))
+    c = w.get("open_curve") or {}
+    return (("이 로그 모델의 캐시 최소 길이가 링클비 상수표에 아직 없어 미달 여부를 정하지 않았습니다(추측하지 않음). 입력 길이로 보면(%d건): "
+             if ko else "The cache minimum of this log's models is not in Linklbee's table yet, so under or over is not "
+             "decided (not guessed). By input length (%d calls): ") % w.get("open_calls", 0) +
+            " · ".join(("최소가 %s 라면 %s 미달" if ko else "a %s minimum -> %s under") % ("{:,}".format(int(n)), pct(v))
+                       for n, v in c.items()) +
+            ((("." + pre56_note(w, ko)) if pre56_note(w, ko) else ". 벤더 문서의 최소 길이가 확인되면 표에 넣어 금액까지 냅니다.") if ko else
+             (("." + pre56_note(w, ko)) if pre56_note(w, ko) else
+              ". Once the vendor's documented minimum is confirmed it goes in the table, and the amounts follow.")))
+# Report groups (PM 10-22 19:15). 'leak' = money going out now; a healthy log should have none. 'more' = a cheaper
+# way that can show on a healthy log too (padding a short prefix, a longer-lived cache, Flex, sections 4 and 5).
+WKIND = {"failed": "leak", "resent": "leak", "truncated": "leak", "prefix_unstable": "leak", "billing": "leak",
+         "cache_hit": "leak", "cache_min": "more", "shared_prefix": "more", "flex": "more"}
+# Items the engine has no fix for stay in the JSON and are left out of the report (PM 10-22 19:15 item 4)
+NO_KNIFE = ("failed", "billing")
+# 'Could cost less' (PM 10-23 07:05 item 1): found items in descending dollar order; two or more found items each
+# under this share of the log's bill go on one line instead of one block each (design value)
+MORE_SMALL_SHARE = 0.01
+# How fast a collector log wakes the report (N-MIN v2, results/nmin_1023/summary_keyed_req_1023-0813.json): matrix cells
+# with request bodies [synthetic], each replayed through the collector; actionable findings (class 1) a cut shows of
+# the whole cell's. Measured on cells of about 60 calls an hour, so minutes stand for those call counts
+COLLECT_WAKE = {"basis": ("매트릭스 22칸, 시간당 약 60건", "22 matrix cells, about 60 calls an hour"),
+                "rows": [(5, 5.5, 17, 31), (30, 31, 23, 31), (60, 61, 27, 31), (1440, 600, 31, 31)]}  # (min, calls, seen, of)
+# Scanner engine replay vs the engine's product path, on-token ratio on the keyless streams of SCAN-ENGINE-GAP v2
+# (results/scan_engine_gap_1023/scan_engine_gap_v2_1023-0144.json: law 317 0.92, law 2,737 0.96, eCFR 79 1.12 --
+# eCFR's two extra calls are the engine's ambiguous-attach refusals). Measured, not a design value
+ENGINE_REPLAY_RANGE = "0.92~1.12"
+# an item's priced ways; its amount is the largest (MORE-USD 10-23: the ways act on the same prefix tokens, so they
+# are not added -- bundling and padding both lift one short prefix, history-k and the 1-hour choice one shared prefix)
+MORE_USD = {"cache_min": ("usd_pad", "usd_bundle"), "shared_prefix": ("usd_ttl", "usd_history"),
+            "flex": ("saving_upper_usd",)}
+
+
+def more_amount(w, k):
+    """A 'more' item's amount: its largest priced way, or None."""
+    v = [w.get(f) for f in MORE_USD.get(k, ()) if w.get(f)]
+    return max(v) if v else None
+
+
+def more_order(res):
+    """(listed, small): the found 'more' items in report order, largest amount first, items with no amount after
+    the priced ones; and the small priced items bundled into one line (empty unless there are two or more)."""
+    W, bill = res["waste"], (res.get("bill") or {}).get("usd_total")
+    ks = [k for k in WKIND if WKIND[k] == "more" and k in W and k not in NO_KNIFE and W[k]["status"] == "found"]
+    amt = {k: more_amount(W[k], k) for k in ks}
+    ks.sort(key=lambda k: (amt[k] is None, -(amt[k] or 0)))
+    small = [k for k in ks if bill and amt[k] is not None and amt[k] < MORE_SMALL_SHARE * bill]
+    if len(small) < 2:
+        small = []
+    return [k for k in ks if k not in small], small
 # What the Linklbee engine does about each found item (docs/PAIRING-1021.md; PM 10-21 13:48: an item the engine does
 # not fix says so). Change this together with that table.
-WFIX = {
-    "failed": ("처방: 링클비 엔진은 이 항목을 찾기만 하고 고치지 않습니다. 고치는 일은 자사 쪽 작업입니다.",
-               "Fix: the Linklbee engine only finds this item and does not fix it; fixing it is in-house work."),
-    "resent": ("처방: 엔진이 같은 요청(본문 전체가 같은 것)이 정한 시간 안에 다시 오면 저장한 답을 호출 없이 돌려줄 수 있습니다"
-               "(기본 꺼짐, 스트림·되돌릴 수 없는 계열 제외). 사용자가 다른 답을 원해 다시 생성한 요청까지 같은 답이 가므로 켜는 쪽이 고릅니다.",
-               "Fix: the engine can answer the same call (whole body equal) again within a set time from what it kept, "
-               "with no vendor call (off by default; streams and irreversible-action texts left out). A regenerate "
-               "meant to get a different answer would get the same one, so the user of the switch decides."),
-    "truncated": ("처방: 같은 템플릿이 잘린 뒤 더 큰 상한으로 다시 가는 일이 반복되면, 엔진이 그 템플릿의 상한을 미리 올려 보낼 수 "
-                  "있습니다(기본 꺼짐) — 잘린 첫 시도에 내는 돈이 빠집니다. 그 밖의 잘림은 고치지 않습니다.",
-                  "Fix: when a template is cut and then sent again with a larger cap more than once, the engine can send "
-                  "it with that cap from the start (off by default), so the cut first attempt is not paid for. Other "
-                  "cuts are not fixed."),
-    "prefix_unstable": ("처방: 엔진이 도구 정의·시스템 블록의 키 순서를 한 가지로 맞춰 보낼 수 있습니다(기본 꺼짐). "
-                        "시각·ID 같은 가변 토막은 아직 고치지 않습니다.",
-                        "Fix: the engine can send tool definitions and system blocks with one key order (off by "
-                        "default). Volatile pieces such as times and ids are not fixed yet."),
-    "cache_min": ("처방: 엔진이 요청마다 하한까지 모자란 토큰을 세지만 아직 고치지 않습니다. 고치는 일은 지금은 자사 쪽 작업입니다.",
-                  "Fix: the engine counts each request's tokens short of the minimum but does not fix it yet; for now "
-                  "fixing it is in-house work."),
+WFIX = {  # what the engine at tag engine-2026.10.22 does (ko: docs/STYLE-KO.md on master)
+    "failed": ("처방: 링클비 엔진은 이 항목을 찾기만 하고 고치지 않습니다. 고치려면 서비스 코드를 직접 바꿔야 합니다.",
+               "Fix: the Linklbee engine detects this but does not fix it. The fix is in your service code."),
+    "resent": ("처방: 엔진은 같은 요청(본문 전체가 같은 것)이 정한 시간 안에 다시 오면 저장한 답을 호출 없이 돌려줄 수 있습니다"
+               "(스트리밍·되돌릴 수 없는 요청 제외). '다시 생성'에도 같은 답이 가므로, 엔진이 금액과 함께 먼저 제안하고 켤지는 직접 정합니다.",
+               "Fix: when an identical request (same full body) comes back within a set time, the engine can return "
+               "the stored answer without calling the vendor. Streams and irreversible actions are excluded. A "
+               "regenerate would also get the stored answer, so the engine proposes this with the amount first, and "
+               "you decide whether to turn it on."),
+    "truncated": ("처방: 같은 요청이 잘린 뒤 더 큰 상한으로 다시 가는 일이 반복되면, 엔진이 그 상한으로 처음부터 보낼 수 있습니다. "
+                  "잘린 첫 시도에 내는 돈이 빠집니다. 답이 길어질 수 있어 엔진이 금액과 함께 먼저 제안하고, 켤지는 직접 정합니다.",
+                  "Fix: if the same request is often cut and then resent with a higher cap, the engine can send it with "
+                  "that cap from the start, so you stop paying for the cut first attempt. Answers may get longer, so the "
+                  "engine proposes this with the amount first, and you decide whether to turn it on."),
+    "prefix_unstable": ("처방: 엔진이 도구 정의·시스템 블록의 키 순서를 한 가지로 맞춰 보냅니다. 사용 기록에서 이득이 확인되면 엔진이 "
+                        "켤 수 있고, 손해로 돌면 끕니다(Anthropic·OpenAI GPT-5.6 이상 기록으로 판단). 시각·ID 같은 가변 부분은 "
+                        "아직 고치지 않습니다.",
+                        "Fix: the engine sends tool definitions and system blocks in one key order. It can turn this on "
+                        "when usage records show a gain, and turns it off when they show a loss (judged on Anthropic and "
+                        "OpenAI GPT-5.6+ records). Changing parts such as times and ids are not handled yet."),
+    "cache_min": ("처방: 엔진이 요청마다 하한까지 모자란 토큰을 셉니다. 직접 정한 고정 문구로 하한까지 채우는 기능이 있지만, "
+                  "문구를 넣어야 켜집니다. 같은 앞부분의 짧은 요청을 한 호출로 묶어 보내는 기능도 있습니다(OpenAI·Anthropic, "
+                  "도구 없는 단발 요청). 답이 달라질 수 있어 엔진이 켜지 않고, 켤지는 직접 정합니다.",
+                  "Fix: the engine counts how many tokens each request is short of the minimum. It can pad a short "
+                  "fixed prefix up to the minimum, but only with text you provide. It can also send short calls "
+                  "that share a prefix as one call (OpenAI and Anthropic, single calls without tools). The answers "
+                  "can change, so the engine never turns this on itself; you decide."),
     "billing": ("처방: 고치는 쪽은 벤더 청구 정정입니다. 링클비 엔진은 근거 숫자만 냅니다.",
-                "Fix: this is corrected on the vendor's bill; the Linklbee engine only gives the numbers."),
-    "cache_hit": ("처방: 엔진이 Anthropic·Bedrock(Claude·Nova) 요청의 반복되는 고정 접두에 캐시 표시를 붙일 수 있습니다(기본 꺼짐). "
-                  "OpenAI GPT-5.6 이상은 표시 코드가 있으나 실호출 확인 전이라 켜지 않습니다. 다른 벤더는 아직 고치지 않습니다.",
-                  "Fix: the engine can put a cache mark on a recurring fixed prefix of Anthropic and Bedrock (Claude, "
-                  "Nova) calls (off by default). For OpenAI GPT-5.6+ the mark is built but stays off until a live check. "
-                  "Other vendors are not fixed yet."),
-    "shared_prefix": ("처방: 엔진이 같은 숫자를 세고, Anthropic API 요청 중 같은 앞부분이 5~60분 간격으로 돌아오는 것에는 "
-                      "1시간 캐시 표시를 붙일 수 있습니다(기본 꺼짐). 같은 앞부분 요청을 묶어 보내는 것은 아직 고치지 않습니다.",
-                      "Fix: the engine counts the same numbers and can give a 1-hour cache mark to an Anthropic API "
-                      "prefix that keeps coming back 5-60 minutes apart (off by default). Sending same-prefix calls "
-                      "together is not built yet."),
-    "flex": ("처방: 엔진이 켜는 쪽이 고른 트래픽을 Flex 로 보낼 수 있습니다(기본 꺼짐) — Flex 자원이 없으면 표준으로 한 번 다시 "
-             "보냅니다(그 거절은 과금 없음). 어떤 호출이 기다려도 되는지는 켜는 쪽이 정합니다.",
-             "Fix: the engine can send the traffic the user of the switch picks at Flex (off by default), sending it "
-             "again once at standard when Flex has no capacity (that refusal is not billed). Which calls can wait is "
-             "the switch user's choice."),
+                "Fix: this is corrected by the vendor on the bill. The Linklbee engine provides the numbers as evidence."),
+    "cache_hit": ("처방: 엔진이 반복되는 고정 앞부분에 캐시 표시를 붙입니다. Anthropic·Bedrock(Claude·Nova)·Vertex Claude·"
+                  "OpenAI GPT-5.6 이상(Bedrock 포함)이 대상입니다. 사용 기록에서 이득이 확인되면 엔진이 켤 수 있고, 손해로 돌면 "
+                  "끕니다. Azure OpenAI 는 공급사 캐시가 기본으로 켜져 있고, 엔진의 캐시 표시는 엔진 설정으로 켭니다. Gemini 는 "
+                  "공급사가 이미 자동으로 캐시합니다.",
+                  "Fix: the engine adds a cache marker to a fixed prefix that keeps coming back. This covers Anthropic, "
+                  "Bedrock (Claude, Nova), Claude on Vertex, and OpenAI GPT-5.6+ (Bedrock included). It can turn this on "
+                  "when usage records show a gain, and turns it off when they show a loss. On Azure OpenAI the vendor's "
+                  "cache is on by default and the engine's marker is turned on in the engine settings. Gemini already "
+                  "caches automatically."),
+    "shared_prefix": ("처방: 엔진이 같은 숫자를 셉니다. 같은 앞부분이 5~60분 간격으로 돌아오면 1시간 캐시 표시를 붙입니다"
+                      "(Anthropic API·Bedrock·Vertex 의 Claude 4 이상, 사용 기록에서 이득일 때 엔진이 켤 수 있음). 같은 앞부분이 "
+                      "캐시 최소 길이보다 짧으면 캐시가 읽지 못합니다. 그런 요청은 한 호출로 묶어 보낼 수 있습니다. 답이 달라질 수 "
+                      "있어 켤지는 직접 정합니다.",
+                      "Fix: the engine counts the same numbers. When a prefix keeps coming back 5-60 minutes apart, it "
+                      "adds a 1-hour cache marker (Claude 4+ on the Anthropic API, Bedrock and Vertex; the engine can "
+                      "turn it on when usage records show a gain). A shared prefix shorter than the cache minimum cannot be "
+                      "cached; those calls can be sent as one bundled call instead. The answers can change, so you decide "
+                      "whether to turn it on."),
+    "flex": ("처방: 엔진이 Flex 로 보낼 수 있었던 호출과 금액을 계산해 먼저 제안합니다. 켜면 고른 트래픽을 Flex 로 보내고, "
+             "Flex 자원이 없으면 표준으로 한 번 다시 보냅니다(그 거절은 과금 없음). Flex 는 답이 표준보다 늦게 옵니다. "
+             "사람이 답을 기다리는 화면의 요청에는 켜지 마세요.",
+             "Fix: the engine works out which calls could have used Flex and how much that saves, and proposes it "
+             "first. Once on, it sends the chosen traffic at Flex. If Flex has no capacity, it retries once at "
+             "standard (the refusal is not billed). Flex answers come later than standard ones, so leave it off for "
+             "calls a person is waiting on."),
 }
 
 
 def _spent(w, ko):
     """'input X · output Y tokens, $Z (n priced calls)' of a section 7 item."""
-    t = ("입력 %s · 출력 %s 토큰" if ko else "input %s · output %s tokens") % ("{:,}".format(w["input_tokens"]),
-                                                                       "{:,}".format(w["output_tokens"]))
+    i = "{:,}".format(w["input_tokens"]) if w.get("input_known", 1) else ("미상" if ko else "unknown")
+    t = ("입력 %s · 출력 %s 토큰" if ko else "input %s · output %s tokens") % (i, "{:,}".format(w["output_tokens"]))
     if w.get("usd") is not None:
-        t += (", 금액 %s(가격 있는 호출 %d건, API usage × 가격표)" if ko else ", %s (%d priced calls, API usage x price table)") \
+        t += (", 금액 %s(가격 있는 호출 %d건, API usage × 가격표)" if ko else ", %s (%d priced calls, API usage x price list)") \
             % (usd(w["usd"]), w["priced_calls"])
     return t
 
@@ -3505,21 +6456,20 @@ def waste_lines(res, ko):
     W = res.get("waste")
     if not W:
         return []
-    L = ["## " + ("7. 낭비 점검서 — 본문 없이 보는 항목" if ko else "7. Waste checklist — items read without the answer body"), ""]
-    items = ("failed", "resent", "truncated", "prefix_unstable", "cache_min", "billing", "cache_hit", "shared_prefix")
-    if all(W[k]["status"] == "none" for k in items):
-        L += ["**" + ("입력된 로그 범위에서 아래 항목의 낭비는 발견되지 않았습니다." if ko else
-                      "Within the log given, no waste was found in the items below.") + "**", ""]
-    elif not any(W[k]["status"] == "found" for k in items):
-        L += [("판단한 항목에서는 낭비가 발견되지 않았고, 나머지는 입력이 부족해 판단하지 못했습니다(항목마다 필요한 필드를 적었습니다)." if ko else
-               "No waste was found in the items that could be judged; the rest lacked input (each item names the field it needs)."), ""]
+    L = ["## " + ("7. 점검서 — 새고 있는 것 · 더 줄일 수 있는 것" if ko else "7. Checklist — what is leaking, what could cost less"), ""]
+    marks = []  # (item, index of its first line): the items are regrouped at the end
 
     def head(n, k, title):
+        marks.append((k, len(L)))
         st = W[k]["status"]
         tag = WSTAT[st][0 if ko else 1]
         if st == "cannot_judge":
-            return "- %s %s — **[%s]** %s" % (n, title, tag, ("필요한 필드: %s" if ko else "needs: %s") % W[k]["missing"])
-        if st == "found" and k in WFIX:
+            if W[k]["missing"] == "threshold table":
+                return "- %s %s — %s" % (n, title, table_gap(W[k], ko))
+            return "- %s %s — %s" % (n, title, more(W[k]["missing"], ko))
+        if st == "found" and k in WFIX and not (k == "prefix_unstable" and not W[k]["calls_with_prefix"]) \
+                and not (k == "resent" and not W[k]["resent_calls"]):  # (REDRAFT alone: its own line says the fix)
+            # (RAG-SANDWICH: 7-4 found on the sandwich alone has no block to sort; its own line says the fix)
             return "- %s %s — **%s**\n  - %s" % (n, title, tag, WFIX[k][0 if ko else 1])
         return "- %s %s — **%s**" % (n, title, tag)
 
@@ -3527,105 +6477,337 @@ def waste_lines(res, ko):
     L.append(head("7-1", "failed", "실패 호출 과금" if ko else "billed failed calls"))
     if w["status"] != "cannot_judge":
         L.append(("  - 상태가 있는 호출 %d건 중 실패 %d건, 그중 토큰이 청구된 것 %d건: %s." if ko else
-                  "  - Of %d calls with a status, %d failed and %d of those were billed tokens: %s.")
+                  "  - %d calls have a status. %d failed, and %d of those were still billed: %s.")
                  % (w["calls_with_status"], w["failed_calls"], w["failed_calls_billed"], _spent(w, ko)))
+    if w.get("usd_back_on_retry") and usd(w["usd_back_on_retry"]) != usd(0):
+        L.append(("  - 이 금액은 청구된 %s 에서 %s 를 뺀 것입니다. 뺀 몫은 재시도 %d건이 실패 호출이 써 둔 캐시를 읽어 덜 낸 "
+                  "돈입니다. 그래서 실패가 없었다면 실제로 아꼈을 돈은 이 금액입니다." if ko else
+                  "  - This is the billed %s less %s: %d retries read the cache the failed calls wrote and paid that "
+                  "much less. So this amount is what the bill would have saved without the failures.")
+                 % (usd(w["usd_billed"]), usd(w["usd_back_on_retry"]), w["calls_back_on_retry"]))
+    if w["status"] == "found":
+        L.append(("  - 이유: 벤더가 끊기거나 실패한 호출을 어디까지 청구하는지 공식 문서에 없어, 확인 전에는 고치지 않습니다. "
+                  "링클비 서버는 고객 연결이 끊긴 스트림도 기록에 남겨(`client_gone`) 이 숫자를 계속 셉니다." if ko else
+                  "  - Why: vendor documents do not say how much of a cut or failed call is billed, so nothing changes "
+                  "until that is confirmed. The Linklbee server also records streams whose client disconnected "
+                  "(`client_gone`), so this number keeps being counted."))
     w = W["resent"]
     L.append(head("7-2", "resent", "짧은 간격으로 다시 보낸 같은 요청" if ko else "the same request sent again shortly after"))
-    if w["status"] != "cannot_judge":
+    dc, rt = (W["failed"].get("split") or {}).get("discarded") or {}, (W["failed"].get("split") or {}).get("retries") or {}
+    if dc.get("usd") or rt.get("after_failed_usd"):
+        L.append(("  - 돈은 냈는데 쓰지 않은 호출, 두 갈래(같은 로그에서 가름): **버려진 산출물** %s(청구된 실패 %d건 + 같은 요청이 다시 "
+                  "가서 버려진 정상 답 %d건 — 품질 검사 탈락·형식 깨짐 재생성·사용자 다시 생성은 로그로 못 가른다) · **재시도** %s(실패·시간 초과 뒤 "
+                  "같은 요청 %d건 — 서비스의 재시도 설정). 잘린 뒤 다시 보낸 것은 7-3 에 셉니다." if ko else
+                  "  - Calls paid for and not used, two kinds (told apart in the same log): **discarded output** %s (%d "
+                  "failed calls still billed + %d OK answers the same request replaced — a quality check, a broken format or a "
+                  "user's regenerate cannot be told apart here) · **retries** %s (%d repeats after a failed or timed-out "
+                  "call — the service's retry setting). Repeats after a cut answer are counted in 7-3.")
+                 % (usd(dc.get("usd")) if dc.get("usd") else "—", dc.get("failed_billed_calls", 0),
+                    dc.get("dropped_ok_calls", 0), usd(rt.get("after_failed_usd")) if rt.get("after_failed_usd") else "—",
+                    rt.get("after_failed_calls", 0)))
+        fb = W["failed"]
+        if fb.get("usd_back_on_retry") and usd(fb["usd_back_on_retry"]) != usd(0):
+            L.append(("  - 버려진 산출물의 실패 몫은 청구된 %s 에서 %s 를 뺀 금액입니다. 뺀 몫은 재시도 %d건이 실패 호출이 써 둔 캐시를 "
+                      "읽어 덜 낸 돈입니다. 실패가 없었다면 실제로 아꼈을 돈만 셉니다." if ko else
+                      "  - The failed part of the discarded output is the billed %s less %s: %d retries read the cache the "
+                      "failed calls wrote and paid that much less. Only what the bill would have saved without the "
+                      "failures is counted.")
+                     % (usd(fb["usd_billed"]), usd(fb["usd_back_on_retry"]), fb["calls_back_on_retry"]))
+    if dc.get("redraft_calls"):
+        L.append(("  - 버려진 산출물 중 **다시 쓴 초안 %d건 %s** — 같은 입력을 앞 답과 함께 %d초 안에 다시 보낸 호출의 앞 답입니다"
+                  "(심사 미달 재작성 등). 그 사이에 그 초안을 읽은 심사 호출 %d건도 같이 셌습니다. 같은 요청이 아니라서 아래 "
+                  "'같은 요청' 셈에는 없습니다. 끝내 통과 못 한 항목의 마지막 초안은 다시 쓴 호출이 없어 빠졌습니다 — 이 금액은 "
+                  "하한입니다. 엔진은 이것을 찾기만 합니다. 줄이려면 생성 지시와 심사 기준을 맞춰야 합니다." if ko else
+                  "  - Of the discarded output, **%d redrafts, %s** — answers sent back with their own input within %d s "
+                  "(a judge's rewrite loop, for one). Not the same request, so the count below leaves them out. The judge's "
+                  "own calls that read those drafts are in it too (%d). An item that never passed has no rewrite after "
+                  "its last draft, so that is left out — a lower bound. The engine only finds this; aligning the writing "
+                  "instructions with the judge's criteria is what lowers it.")
+                 % ((dc["redraft_calls"], usd(dc.get("redraft_usd")) if dc.get("redraft_usd") else "—", RETRY_WINDOW,
+                     dc.get("redraft_judge_calls", 0))))
+    if w["status"] != "cannot_judge" and not w["resent_calls"]:
+        L.append(("  - 요청을 알 수 있는 호출 %d건 중 같은 요청이 %d초 안에 다시 간 호출은 없습니다." if ko else
+                  "  - Of %d calls whose request is known, none repeated the same request within %d s.")
+                 % (w["calls_with_request"], w["window_s"]))
+    elif w["status"] != "cannot_judge":
         a = w["after"]
-        L.append(("  - 같은 요청(고객 키가 있으면 같은 키 안)이 %d초 안에 다시 간 호출 %d건(요청을 알 수 있는 호출 %d건 중). "
+        L.append(("  - 같은 요청(문서 id 가 있으면 같은 문서 안)이 %d초 안에 다시 간 호출 %d건(요청을 알 수 있는 호출 %d건 중). "
                   "앞 호출이 실패 %d · 잘림 %d · 정상 %d · 모름 %d. 간격 중앙 %s초. %s. 정상 뒤에 다시 간 것은 사용자가 다른 답을 "
-                  "원해 다시 생성했을 수도 있다." if ko else
-                  "  - %d s window: %d calls repeated the request just sent (same customer key when there is one; of %d "
-                  "calls whose request is known). The call before had failed %d · been cut %d · been fine %d · unknown %d. "
-                  "Median gap %s s. %s. A repeat after a fine answer may be a user regenerating on purpose.")
+                  "원해 다시 생성했을 수도 있습니다." if ko else
+                  "  - Within %d s, %d calls repeated the request just sent (within the same document when the log has "
+                  "document ids; out of %d calls whose request is known). The earlier call had: failed %d · been cut %d · "
+                  "succeeded %d · unknown %d. Median gap %s s. %s. A repeat after a successful answer may be a user "
+                  "regenerating on purpose.")
                  % (w["window_s"], w["resent_calls"], w["calls_with_request"], a.get("failed", 0), a.get("truncated", 0),
                     a.get("ok", 0), a.get("unknown", 0), "—" if w["gap_median_s"] is None else "%.1f" % w["gap_median_s"],
                     _spent(w, ko)))
+        ua = w.get("usd_after") or {}
+        if w["status"] == "found" and any(v is not None for v in ua.values()):
+            m = lambda st: usd(ua[st]) if ua.get(st) is not None else ("없음" if ko else "none")  # noqa: E731
+            L.append(("  - 금액을 앞 호출 상태로 가르면: 정상 뒤 %s — 엔진이 저장한 답으로 고칠 수 있는 몫 · 실패 뒤 %s — 서비스의 재시도 "
+                      "설정으로 고칩니다 · 잘림 뒤 %s — 7-3 의 큰 상한이 고칩니다." if ko else
+                      "  - Split by the earlier call: after a successful answer %s — the engine's stored answer can fix this · "
+                      "after a failure %s — fixed by the service's retry settings · after a "
+                      "cut %s — fixed by 7-3's larger cap.") % (m("ok"), m("failed"), m("truncated")))
+            if ua.get("failed"):  # 1.4.2: the engine has no fix for this share (permanent; it only shows the chains)
+                L.append(("  - 실패 뒤 재시도 몫은 링클비 엔진이 줄이지 않습니다. 엔진은 재시도 연쇄를 보여 줄 뿐입니다. 서비스 코드의 재시도 "
+                          "설정(간격·최대 횟수)을 바꾸면 줄어듭니다." if ko else
+                          "  - The Linklbee engine does not reduce the share after a failure; it only shows the retry chains. "
+                          "Changing the retry settings in your service code (interval, maximum retries) is what lowers it."))
+        jl = w.get("after_ok_json_loose")
+        if jl:
+            L.append(("  - 정상 뒤 재요청 중 %d건(%s)은 앞 요청이 JSON 을 스키마 강제 없이 받았습니다(OpenAI `json_object`, 또는 "
+                      "`strict` 가 아닌 스키마). 형식이 깨져 다시 물은 것이라면 저장한 답으로는 못 고칩니다 — 저장한 답이 깨진 "
+                      "답입니다. 고칠 칼은 구조화 출력입니다: OpenAI 는 `json_schema` + `strict: true`, Anthropic 은 "
+                      "`output_config.format`. 두 벤더 문서 모두 스키마를 지키는 답을 보장한다고 적습니다(거절과 길이 상한에서 "
+                      "잘린 답은 예외. 2026-10-24 읽음). 다시 물은 이유는 이 로그로 못 가립니다." if ko else
+                      "  - Of the repeats after a successful answer, %d (%s) followed a request that took JSON without an "
+                      "enforced schema (OpenAI `json_object`, or a schema without `strict`). If the format broke and was "
+                      "asked again, the stored answer cannot fix it — the stored answer is the broken one. The fix is "
+                      "structured output: OpenAI `json_schema` with `strict: true`, Anthropic `output_config.format`. Both "
+                      "vendors' docs say the answer then follows the schema (except refusals and answers cut at the length "
+                      "limit; read 2026-10-24). This log cannot tell why a request was asked again.")
+                     % (jl["calls"], usd(jl["usd"]) if jl.get("usd") is not None else "—"))
     if W["failed"]["status"] == "found" or w["status"] == "found":
-        L.append(("  - 엔진: 링클비 서버는 응답 상태와 요청 서명을 장부에 남기고, `/admin/usage` 의 `waste.retry` 에 실패 뒤 "
+        L.append(("  - 엔진: 링클비 서버는 응답 상태와 요청 서명을 기록에 남깁니다. 엔진의 사용 현황에 실패 뒤 "
                   "재전송 연쇄·간격을 내어 재시도 정책(백오프 간격·최대 횟수·반복 실패 시 다른 경로로 전환) 교정안을 붙입니다." if ko else
-                  "  - Engine: the Linklbee server keeps each reply's status and request signature in its ledger and reports "
-                  "retry chains and gaps in `/admin/usage` `waste.retry`, with a retry-policy correction (backoff, maximum "
-                  "retries, switching route after repeated failures)."))
+                  "  - Engine: the Linklbee server records each response's status and request signature. The engine's "
+                  "usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff "
+                  "interval, maximum retries, switching route after repeated failures)."))
     w = W["truncated"]
-    L.append(head("7-3", "truncated", "길이 상한에서 잘린 답" if ko else "answers cut at the token limit"))
+    L.append(head("7-3", "truncated", "길이 상한에서 잘린 답" if ko else "answers cut off at the length limit"))
     if w["status"] != "cannot_judge":
         mt = ", ".join("%s×%d" % kv for kv in w["max_tokens_of_cut"].items())
         L.append(("  - 판단 가능한 호출 %d건 중 잘림 %d건(%s), 출력 %s 토큰 = 전체 출력의 %s, 그 호출들의 금액 %s.%s" if ko else
-                  "  - Of %d calls that can be judged, %d were cut (%s); output %s tokens = %s of all output; those calls "
-                  "cost %s.%s")
+                  "  - Of %d calls that can be checked, %d were cut off (%s). Their output was %s tokens, %s of all "
+                  "output, and they cost %s.%s")
                  % (w["calls_judged"], w["truncated_calls"], pct(w["share_of_judged_calls"]), "{:,}".format(w["output_tokens"]),
                     pct(w["share_of_all_output"]), usd(w["usd"]),
                     ((" 잘린 호출의 max_tokens: %s." if ko else " max_tokens of the cut calls: %s.") % mt) if mt else ""))
         if w["status"] == "found":
-            L.append(("  - 엔진: 링클비 서버는 답의 종료 사유와 요청의 max_tokens 를 장부에 남기고, `/admin/usage` 의 "
-                      "`waste.truncation` 에 잘린 요청의 상한별 몫과 상한 교정안을 냅니다." if ko else
-                      "  - Engine: the Linklbee server keeps each answer's finish reason and the request's max_tokens in its "
-                      "ledger and reports the cut share per limit with a limit correction in `/admin/usage` `waste.truncation`."))
+            L.append(("  - 엔진: 링클비 서버는 답의 종료 사유와 요청의 max_tokens 를 기록에 남깁니다. 엔진의 사용 현황에 "
+                      "잘린 요청의 상한별 몫과 상한 교정안을 냅니다." if ko else
+                      "  - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. "
+                      "The engine's usage view shows the cut share per limit, with a suggested limit."))
     w = W["prefix_unstable"]
     L.append(head("7-4", "prefix_unstable", "요청 접두(도구 정의·시스템 지시) 직렬화 불안정" if ko else
-                  "unstable serialization of the request prefix (tool definitions, system instructions)"))
+                  "request prefix serialized inconsistently (tool definitions, system instructions)"))
     if w["status"] != "cannot_judge":
-        L.append(("  - 접두가 있는 호출 %d건, 블록 %d종을 원본 해시와 키 정렬 해시로 비교." if ko else
-                  "  - %d calls with a prefix; %d blocks compared by as-sent hash and key-sorted hash.")
-                 % (w["calls_with_prefix"], w["blocks_checked"]))
+        if w["calls_with_prefix"]:  # (RAG-SANDWICH: a sandwich-only 7-4 has no block to compare)
+            L.append(("  - 접두가 있는 호출 %d건, 블록 %d종을 원본 해시와 키 정렬 해시로 비교." if ko else
+                      "  - %d calls have a prefix. %d kinds of block were compared by their as-sent hash and key-sorted "
+                      "hash.") % (w["calls_with_prefix"], w["blocks_checked"]))
         for b in w["unstable_blocks"]:
-            where = (((" 두 형태는 %s번째 글자부터 갈라진다(블록 %s자, o200k %s 토큰)." if ko else
-                       " The two forms part at character %s (block %s characters, %s o200k tokens).")
+            where = (((" 두 형태는 %s번째 글자부터 갈라집니다(블록 %s자, o200k %s 토큰)." if ko else
+                       " The forms first differ at character %s (the block is %s characters, %s o200k tokens).")
                       % ("{:,}".format(b["first_split_char"] + 1), "{:,}".format(b["chars"]), "{:,}".format(b["o200k_tokens"])))
                      if "first_split_char" in b else "")
-            L.append(("  - **블록 `%s`: 내용은 같고 키 순서만 다른 직렬화 %d가지 — 벤더 캐시에 항목 %d개로 쪼개져 있다.** "
+            L.append(("  - **블록 `%s`: 내용은 같고 키 순서만 다른 직렬화 %d가지 — 벤더 캐시에 항목 %d개로 쪼개져 있습니다.** "
                       "이 블록을 쓴 호출 %d건 중 주 형태가 아닌 것 %d건.%s" if ko else
-                      "  - **Block `%s`: %d serializations with the same content and only key order different — the vendor's "
-                      "cache holds it as %d entries.** Of %d calls with this block, %d were not in the main form.%s")
+                      "  - **Block `%s`: %d serializations with the same content in a different key order, so the vendor "
+                      "caches it as %d separate entries.** Of %d calls with this block, %d were not in the most common form.%s")
                      % (b["block"], b["as_sent_forms"], b["as_sent_forms"], b["calls"], b["calls_off_main_form"], where))
-        if w["status"] == "found":
-            L.append(("  - 근거(벤더 문서): Anthropic 프롬프트 캐싱 문서는 캐시 무효화 사유로 \"unstable tool_use JSON key ordering "
-                      "(Swift, Go)\" 를, OpenAI 프롬프트 캐싱 문서는 \"tools (names/descriptions/schemas/ordering)\" 를 든다." if ko else
-                      "  - Source (vendor documents): Anthropic's prompt caching document lists \"unstable tool_use JSON key "
-                      "ordering (Swift, Go)\" as a cause of cache misses, OpenAI's lists \"tools (names/descriptions/schemas/ordering)\"."))
-            L.append(("  - 엔진: 링클비 서버가 도구 정의·시스템 블록의 키를 정렬해 내보낸다(목록 순서·문자열은 그대로, 모델이 읽는 내용 "
-                      "같음). 테넌트 설정 `waste.json` 의 `\"prefix_normalize\": true` 로 켠다 — 기본은 꺼짐." if ko else
-                      "  - Engine: the Linklbee server sends tool definitions and system blocks with their keys sorted (list "
-                      "order and strings unchanged, the model reads the same content). Turned on per tenant with "
-                      "`\"prefix_normalize\": true` in `waste.json`; off by default."))
+        if any(b["block"] == "schema" for b in w["unstable_blocks"]):
+            L.append(("  - `schema` 는 구조화 출력 스키마입니다(OpenAI 는 스키마를 프롬프트 앞부분으로 캐시합니다). 엔진은 스키마의 "
+                      "필드 순서를 바꾸지 않습니다 — 답의 필드도 스키마 순서대로 나와서 답이 바뀝니다. 고칠 법: 스키마를 만드는 "
+                      "코드에서 같은 종류의 스키마는 늘 같은 필드 순서로 만드세요." if ko else
+                      "  - `schema` is a structured-output schema (OpenAI caches the schema as part of the prompt prefix). The "
+                      "engine does not reorder a schema's fields: the answer's fields follow the schema's order, so the "
+                      "answer would change. Fix: build each kind of schema with one field order in your code."))
+            if w.get("usd_schema_order"):
+                L.append(("  - 금액으로: 스키마의 필드 순서를 하나로 고정하면 **%s** 를 덜 냅니다 — 같은 스키마가 캐시에서 하나로 읽히는 "
+                          "몫입니다(키 순서 몫은 뺀 값, 그 호출들의 입력 단가, 가격표 %s). 답의 필드 순서가 바뀔 수 있어 고객이 정할 "
+                          "일입니다. 필드 순서 말고 다른 키의 순서는 엔진이 정렬해 보냅니다(답 그대로)." if ko else
+                          "  - In dollars: one field order for the schema saves **%s** — the same schema read from the cache "
+                          "as one (the key-order share left out; at those calls' input price, price list %s). It can change "
+                          "the answer's field order, so it is your call. The schema's other keys the engine sorts itself "
+                          "(the answer stays the same).")
+                         % (usd(w["usd_schema_order"]), (res.get("pricing") or {}).get("as_of") or "—"))
+        sp_ = w.get("usd_sort_parts") or {}
+        if w.get("usd_sort"):
+            how = []
+            if sp_.get("anthropic"):
+                how.append(("Anthropic 호출 %s — 같은 앞부분에 5분 캐시 표시를 달았을 때 형태마다 따로 쓰던 것을 한 번 쓰고 읽게 되는 몫"
+                            if ko else "Anthropic calls %s — with 5-minute cache marks on the repeated prefix, what each form "
+                            "wrote separately is written once and read") % usd(sp_["anthropic"]))
+            if sp_.get("openai"):
+                how.append(("OpenAI 호출 %s — 기본 캐시가 형태마다 따로 쓰던 앞부분을 한 형태로 읽게 되는 몫" if ko else
+                            "OpenAI calls %s — the default cache reads one form of the prefix where each form wrote its own")
+                           % usd(sp_["openai"]))
+            L.append(("  - 금액으로: 키를 한 순서로 맞추면 **%s** 를 덜 냅니다. %s(그 호출들의 입력 단가, 가격표 %s)." if ko else
+                      "  - In dollars: one key order saves **%s**. %s (at those calls' input price, price list %s).")
+                     % (usd(w["usd_sort"]), " · ".join(how), (res.get("pricing") or {}).get("as_of") or "—"))
+        for b in w.get("value_blocks") or []:
+            L.append(("  - **블록 `%s`: 같은 틀에 값(숫자·날짜·이메일·id)만 다른 형태 %d가지 — 벤더 캐시에 항목 %d개로 쪼개져 "
+                      "있습니다.** 이 틀을 쓴 호출 %d건 중 가장 많은 형태 %d건." if ko else
+                      "  - **Block `%s`: %d forms of the same template that differ only in values (numbers, dates, email, "
+                      "ids), so the vendor caches it as %d separate entries.** %d calls use this template; the most common "
+                      "form has %d of them.") % (b["block"], b["value_forms"], b["value_forms"], b["calls"], b["calls_in_main_form"]))
+        if w.get("usd_values"):
+            L.append(("  - 금액으로: 값을 앞부분에서 빼면 **%s** 를 덜 냅니다 — 값을 가린 틀이 하나로 캐시에서 읽히는 몫입니다(키 순서 몫은 "
+                      "뺀 값, 그 호출들의 입력 단가, 가격표 %s). 엔진이 하는 일이 아니라 서비스 코드를 고쳐야 나오는 금액입니다." if ko else
+                      "  - In dollars: taking the values out of the prefix saves **%s** — the masked template read from the "
+                      "cache as one (the key-order share left out; at those calls' input price, price list %s). This is "
+                      "what a change in your code saves, not something the engine does.")
+                     % (usd(w["usd_values"]), (res.get("pricing") or {}).get("as_of") or "—"))
+        sw = w.get("sandwich")
+        if sw:
+            sc = sw["shape_calls"]
+            L.append(("  - **바뀌지 않는 문단이 바뀌는 부분 뒤에 있는 호출 %s건**(앞에 고정부가 있는 샌드위치형 %s건 · 앞에 고정부가 "
+                      "아예 없는 형 %s건, 그 문단 몫 입력 %s 토큰). 캐시는 앞에서부터만 읽어서 이 문단은 매번 다시 냅니다." if ko else
+                      "  - **%s calls have a paragraph that never changes after the part that does** (%s sandwiched behind a "
+                      "fixed front, %s with no fixed front at all; %s input tokens in those paragraphs). The cache reads "
+                      "from the front only, so they are paid in full every time.")
+                     % ("{:,}".format(sum(sc.values())), "{:,}".format(sc.get("B", 0)), "{:,}".format(sc.get("A", 0)),
+                        "{:,}".format(sw["tail_tokens"])))
+            if w.get("usd_sandwich"):
+                L.append(("  - 금액으로: 그 문단을 바뀌는 부분 앞으로 옮기면 **%s** 덜 냅니다(앞부분이 최소 길이에 닿는 호출만, 그 호출들의 "
+                          "입력 단가, 가격표 %s). 출력 형식·인용 지시처럼 지울 수 없는 문단은 옮기면 됩니다. 링클비 엔진은 켜 두면"
+                          "(엔진 설정 파일 `waste.json` 의 `\"sandwich_move\": true`) 마지막 사용자 메시지 끝의 고정 문단을 시스템 쪽으로 옮겨 "
+                          "보냅니다. 모델이 읽는 순서가 바뀌어 답이 달라질 수 있어 켤지는 고객이 정합니다." if ko else
+                          "  - In dollars: moving those paragraphs ahead of the changing part saves **%s** (calls whose front "
+                          "reaches the minimum; at those calls' input price, price list %s). Blocks you cannot drop, such as "
+                          "output-format or citation instructions, can be moved. Turned on (`\"sandwich_move\": true` in "
+                          "the engine settings file `waste.json`), the Linklbee engine moves the fixed paragraphs at the end of the last user message "
+                          "to the system block itself. The model reads in another order, so the answer can change: your call.") % (usd(w["usd_sandwich"]), (res.get("pricing") or {}).get("as_of") or "—"))
+        tu_ = w.get("tool_union")
+        if tu_:
+            L.append(("  - **같은 지시에 도구 묶음을 바꿔 보낸 호출 %s건**(지시 %s종, 도구 묶음 %s가지). 도구 정의는 앞부분 맨 앞에 "
+                      "있습니다. 묶음이 바뀌면 그 뒤 캐시가 처음부터 다시 쓰입니다." if ko else
+                      "  - **%s calls sent the same instructions with a different tool set** (%s instruction sets, %s tool "
+                      "sets). Tool definitions come first in the prefix. When the set changes, the cache after it starts over.")
+                     % ("{:,}".format(tu_["switches"]), "{:,}".format(tu_["templates"]), "{:,}".format(tu_["tool_sets"])))
+            if w.get("usd_tool_union"):
+                L.append(("  - 금액으로: 도구 전체를 매번 같은 목록으로 보내고 부를 수 있는 도구만 제한하면 **%s** 덜 냅니다(늘어난 "
+                          "도구 정의 값을 뺀 금액, 가격표 %s). OpenAI 는 `tool_choice` 의 `allowed_tools` 로 제한합니다. 모델이 "
+                          "보는 도구가 늘어 답이 달라질 수 있어 고객이 정할 일입니다." if ko else
+                          "  - In dollars: sending the whole tool list every time and restricting which tools may be called "
+                          "saves **%s** (net of the extra tool definitions; price list %s). OpenAI restricts them with "
+                          "`allowed_tools` in `tool_choice`. The model sees more tools, so the answer can change: your call.")
+                         % (usd(w["usd_tool_union"]), (res.get("pricing") or {}).get("as_of") or "—"))
+        if w.get("value_blocks"):
+            L.append(("  - 고칠 법: 호출마다 바뀌는 값(오늘 날짜·사용자 이름·주문 번호)을 시스템 지시·도구 정의에서 빼서 사용자 메시지 "
+                      "쪽으로 옮기세요. 틀이 한 가지가 되면 앞부분을 캐시에서 읽습니다. 엔진은 값을 옮기지 않습니다(모델이 읽는 순서가 "
+                      "바뀌어 답이 바뀔 수 있습니다). 이름처럼 숫자가 아닌 값은 이 검사로 못 봅니다." if ko else
+                      "  - Fix: move values that change per call (today's date, the user's name, an order number) out of "
+                      "the system instructions and tool definitions and into the user message. With a single template form, "
+                      "the prefix is read from the cache. The engine does not move them itself, because the model would read "
+                      "things in a different order and the answer could change. This check cannot see non-numeric values "
+                      "such as names."))
+        if w["unstable_blocks"]:
+            L.append(("  - 근거(벤더 문서): Anthropic 프롬프트 캐싱 문서는 \"some languages (for example, Swift, Go) randomize key "
+                      "order during JSON conversion, breaking caches\" 라고 적습니다. OpenAI 프롬프트 캐싱 문서는 캐시에 영향을 주는 "
+                      "설정 표의 tools 줄에 \"Changes tool names, descriptions, schemas, ordering, or tool-specific "
+                      "instructions.\" 라고 적습니다." if ko else
+                      "  - Source (vendor documents): Anthropic's prompt caching guide says \"some languages (for example, "
+                      "Swift, Go) randomize key order during JSON conversion, breaking caches\". OpenAI's guide, in its table "
+                      "of settings that affect the cached prefix, says of tools: \"Changes tool names, descriptions, "
+                      "schemas, ordering, or tool-specific instructions.\""))
+            L.append(("  - 엔진: 링클비 엔진이 도구 정의·시스템 블록의 키를 정렬해 보냅니다(목록 순서·문자열은 그대로, 모델이 읽는 내용 "
+                      "같음. 구조화 출력 스키마는 필드 순서를 그대로 두고 나머지 키만 정렬). 사용 기록에서 이득이 확인되면 엔진이 켤 수 있고, 손해로 돌면 끕니다. 엔진 설정 파일 `waste.json` 에 "
+                      "`\"prefix_normalize\": false` 를 두면 꺼진 채로 둡니다." if ko else
+                      "  - Engine: the Linklbee engine sends tool definitions and system blocks with sorted keys. List order "
+                      "and strings stay the same, so the model reads the same content (a structured-output schema keeps "
+                      "its field order; only its other keys are sorted). It can turn this on when "
+                      "usage records show a gain, and turns it off when they show a loss. Set `\"prefix_normalize\": false` "
+                      "in the engine settings file `waste.json` to keep it off."))
     w = W["cache_min"]
-    L.append(head("7-5", "cache_min", "캐시 최소 길이 미달 요청" if ko else "prompts under the cache minimum"))
+    L.append(head("7-5", "cache_min", "캐시 최소 길이 미달 요청" if ko else "prompts shorter than the cache minimum"))
     if w["status"] != "cannot_judge":
         for b in w["by_model"][:8]:
             L.append(("  - %s (%s): 최소 %s 토큰 미만 %d건 / %d건(%s), 그중 캐시 읽기 0 %d건." if ko else
-                      "  - %s (%s): under %s tokens %d / %d calls (%s), %d of them with no cache read.")
-                     % (b["model"], b["vendor"], "{:,}".format(b["min_tokens"]), b["below"], b["calls"],
-                        pct(b["below"] / b["calls"] if b["calls"] else None), b["below_cache_read_0"]))
+                      "  - %s (%s): %d of %d calls under %s tokens (%s), %d of them with no cache read.")
+                     % ((b["model"], b["vendor"], "{:,}".format(b["min_tokens"]), b["below"], b["calls"],
+                         pct(b["below"] / b["calls"] if b["calls"] else None), b["below_cache_read_0"]) if ko else
+                        (b["model"], b["vendor"], b["below"], b["calls"], "{:,}".format(b["min_tokens"]),
+                         pct(b["below"] / b["calls"] if b["calls"] else None), b["below_cache_read_0"])))
         c = w["curve"]
-        L.append(("  - 문턱별(판단 가능 %d건): " if ko else "  - by threshold (%d calls judged): ") % w["calls_judged"] +
+        L.append(("  - 문턱별(판단 가능 %d건): " if ko else "  - by threshold (%d calls checked): ") % w["calls_judged"] +
                  " · ".join(("%s 이면 %s 미달" if ko else "%s -> %s under") % ("{:,}".format(int(n)), pct(v)) for n, v in c.items()))
         if w["by_model"] and any(b["vendor"] == "anthropic" and b["below"] for b in w["by_model"]):
-            L.append(("  - Anthropic 은 최소 길이에 못 미치면 오류 없이 캐시 없이 처리한다 — 로그에 아무 표시가 없다." if ko else
-                      "  - Anthropic processes a prompt under the minimum without cache and without an error — nothing in the log shows it."))
-        L.append(("  - 엔진: `/admin/usage` 의 `waste.cache_min` 이 같은 상수로 테넌트 장부의 미달 몫을 내고, 미달 요청에는 "
-                  "접두를 문턱 이상으로 묶거나 캐시 표시를 빼라는 교정안을 붙인다." if ko else
-                  "  - Engine: `/admin/usage` `waste.cache_min` reports the tenant ledger's share under the same constants, "
-                  "with a correction for those calls (merge the prefix past the threshold, or drop the cache marker)."))
-    if w["not_judged"]:
+            L.append(("  - Anthropic 은 최소 길이에 못 미치면 오류 없이 캐시 없이 처리합니다 — 로그에 아무 표시가 없습니다." if ko else
+                      "  - Anthropic runs a prompt under the minimum without caching and without an error, so nothing in the log shows it."))
+        ms = w.get("marked_silent")
+        if ms:
+            L.append(("  - 캐시 표시를 붙였는데 캐시 쓰기와 읽기가 둘 다 0 인 호출: **%d건** / 표시한 호출 %d건(그중 최소 길이 미달 %d건). "
+                      "할인을 신청했는데 받지 못한 호출입니다. 오류가 없어서 이 두 값으로만 보입니다." if ko else
+                      "  - Calls with a cache mark where cache writes and reads are both 0: **%d** of %d marked calls (%d of "
+                      "them under the minimum). The discount was asked for and not given. There is no error, so only these "
+                      "two values show it.") % (ms["calls"], ms["calls_marked"], ms["below_min"]))
+        bd = w.get("bundle")
+        if w.get("usd_bundle"):
+            rp = bd["replay"]
+            L.append(("  - 묶어 보내면: 고정 앞부분이 최소 길이에 못 미친 호출 %d건을 같은 앞부분끼리 %d개씩(2초 안에 온 것만 — 켰을 때 링클비가 기다리는 시간) 묶으면 "
+                      "**%s** 덜 냅니다 — 앞부분을 묶음마다 한 번만 보내는 몫입니다(묶음 %d개에 호출 %d건, 항목 번호 몫은 뺀 값, "
+                      "가격표 %s). 한 호출이 여러 건에 답하므로 답이 달라질 수 있습니다 — 상한이고, 켤지는 고객이 정합니다. "
+                      "답 품질은 아직 재지 않았습니다." if ko else
+                      "  - Bundled: %d calls whose fixed prefix is under the minimum, bundled %d at a time with the same "
+                      "prefix (only calls within 2 seconds of each other — how long Linklbee waits once it is on), cost **%s** less — the prefix sent once a bundle "
+                      "(%d bundles of %d calls, the item numbers taken off; price list %s). One call answers several items, "
+                      "so the answers can change: an upper bound, and your call. Answer quality is not measured yet.")
+                     % (bd["candidates"], bd["size"], usd(w["usd_bundle"]), rp["bundles"], rp["bundled_calls"],
+                        (res.get("pricing") or {}).get("as_of") or "—"))
+            u60, bill_ = w.get("usd_bundle_wait60"), ((res.get("bill") or {}).get("usd_total"))
+            if u60 and bill_ and u60 > w["usd_bundle"] * 1.01:
+                if u60 <= 10 * w["usd_bundle"]:
+                    L.append(("  - 기다리는 시간은 고객이 60초까지 늘릴 수 있습니다. 2초간 모을 때 청구서의 %s, 60초간 모을 때 %s 입니다"
+                              "(답이 그만큼 늦게 옵니다). 위 금액은 2초 기준입니다." if ko else
+                              "  - You can let a bundle wait up to 60 seconds. Gathering for 2 seconds saves %s of the bill, "
+                              "for 60 seconds %s (the answers come that much later). The amount above is the 2-second one.")
+                             % (pct(w["usd_bundle"] / bill_), pct(u60 / bill_)))
+                else:
+                    L.append(("  - 기다리는 시간을 60초까지 늘리면 더 묶이지만, 이 기록에서는 2초와 60초의 차이가 10배를 넘어 범위를 "
+                              "적지 않습니다. 요청이 몇 초 간격으로 드문드문 오는 트래픽이라서입니다." if ko else
+                              "  - Waiting up to 60 seconds bundles more, but on this log 2 and 60 seconds differ more than "
+                              "tenfold, so no range is given: the calls arrive seconds apart."))
+            if bd.get("moved_candidates"):
+                L.append(("  - 그중 %d건은 고정 문단이 바뀌는 부분 뒤에 있습니다(7-4 샌드위치). 그 호출들은 고정 문단을 앞으로 옮긴 뒤 묶는 "
+                          "것으로 셌습니다 — 옮기는 것도 답이 달라질 수 있는 고객 결정입니다." if ko else
+                          "  - %d of them have their fixed paragraphs after the changing part (7-4 sandwich). Those are counted "
+                          "as moved in front, then bundled — moving them can change the answer too, and is your call.")
+                         % bd["moved_candidates"])
+        if w["status"] == "found" and not w.get("usd_bundle") and w.get("bundle_no_request"):
+            L.append(("  - 묶어 보내면 얼마인지는 못 냅니다: 호출 %d건이 요청 본문 없이(질문 글 또는 그 토큰 해시만) 기록돼 고정 "
+                      "앞부분(도구·시스템 지시)과 스트리밍 여부를 모릅니다. 수집기(`linklbee_collect`) 줄이나 요청 본문(`request`)을 "
+                      "넣으면 나옵니다." if ko else
+                      "  - What bundling would save cannot be given: %d calls are logged without the request (only the "
+                      "prompt text or its token hashes), so their fixed prefix (tools, system instructions) and whether "
+                      "they stream are unknown. The collector's lines (`linklbee_collect`) or the request body (`request`) "
+                      "give it.") % w["bundle_no_request"])
+        if w["status"] == "found" and w.get("usd_pad"):
+            pv = w["pad"]
+            L.append(("  - 금액으로: 고정 문구로 최소 길이까지 채우면 **%s** 덜 듭니다. 고정 앞부분이 최소 길이에 못 미친 호출 %d건에 "
+                      "엔진의 5분 표시 규칙을 다시 적용한 값입니다. 캐시 읽기 %d번의 이득에서 쓰기 %d번의 웃돈을 뺐습니다"
+                      "(엔진 화면과 같은 셈, 그 호출들의 입력 단가, 가격표 %s)." if ko else
+                      "  - In dollars: padding to the minimum with fixed text costs **%s** less. The engine's 5-minute marking "
+                      "rule is replayed on the %d calls whose fixed prefix is under the minimum: the gain of %d cache reads "
+                      "minus the premium on %d writes (the engine screen's count, at those calls' input price, price "
+                      "list %s).")
+                     % (usd(w["usd_pad"]), pv["calls"], pv["reads"], pv["writes"],
+                        (res.get("pricing") or {}).get("as_of") or "—"))
+        L.append(("  - 엔진: 엔진의 사용 현황이 같은 상수로 사용 기록의 미달 몫을 내고, 미달 요청에는 "
+                  "접두를 문턱 이상으로 묶거나 캐시 표시를 빼라는 교정안을 붙입니다." if ko else
+                  "  - Engine: the engine's usage view reports the same share from your usage records, using "
+                  "the same constants, with a suggested fix for those calls (grow the prefix past the threshold, or "
+                  "drop the cache marker)."))
+    if w["not_judged"] and w["status"] != "cannot_judge":
         nj = w["not_judged"]
         parts = []
         for k, v in sorted(nj.items()):
             if k == "unsupported":
-                parts.append(("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A" if ko else "vendor without prompt caching (CLOVA etc.) %d — N/A") % v)
+                parts.append(("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A" if ko else "vendors without prompt caching (CLOVA and others) %d — N/A") % v)
             elif k.startswith("unknown:"):
                 parts.append(("%s 모델 중 문턱이 상수표에 없는 것 %d건 — 추정하지 않음" if ko else
-                              "%s models whose threshold is not in the table %d — not guessed") % (k[8:], v))
+                              "%s models with no threshold in the table %d — not guessed") % (k[8:], v))
             elif k == "unrecognised":
-                parts.append(("벤더를 알 수 없는 모델 %d건" if ko else "models of no known vendor %d") % v)
+                parts.append(("벤더를 알 수 없는 모델 %d건" if ko else "models from an unknown vendor %d") % v)
             elif k == "no_model":
                 parts.append(("model 필드 없음 %d건" if ko else "no model field %d") % v)
             elif k == "no_input_tokens":
                 parts.append(("input_tokens 없음 %d건" if ko else "no input_tokens %d") % v)
-        L.append(("  - 판단 못 한 호출: " if ko else "  - not judged: ") + " · ".join(parts))
-    L.append(("  - 상수 기준일 %s(벤더 공식 문서). Gemini 가격은 %s 에 바뀐다." if ko else
-              "  - Constants as of %s (vendor documents). Gemini prices change on %s.")
+        L.append(("  - 판단 못 한 호출: " if ko else "  - not checked: ") + " · ".join(parts))
+    L.append(("  - 상수 기준일 %s(벤더 공식 문서). Gemini 가격은 %s 에 바뀝니다." if ko else
+              "  - Thresholds as of %s (vendor documents). Gemini prices change on %s.")
              % (w["constants_as_of"], w["gemini_valid_until"]))
     w = W["billing"]
     L.append(head("7-6", "billing", "과금 대조 — 청구된 출력 토큰 vs 응답 본문" if ko else
@@ -3634,143 +6816,384 @@ def waste_lines(res, ko):
         f = lambda n: "{:,}".format(n)  # noqa: E731
         L.append(("  - 판단 가능한 호출 %d건: 청구 출력 %s 토큰 = 본문(o200k) %s + 추론(벤더 보고) %s + **설명되지 않는 차이 %s "
                   "토큰 (%s)**. 추론 토큰을 보고한 호출 %d건." if ko else
-                  "  - %d calls judged: billed output %s tokens = body (o200k) %s + reasoning (vendor-reported) %s + "
-                  "**unexplained difference %s tokens (%s)**. %d calls report reasoning tokens.")
+                  "  - %d calls checked: billed output %s tokens = body (o200k) %s + reasoning (vendor-reported) %s + "
+                  "**unexplained %s tokens (%s)**. %d calls report reasoning tokens.")
                  % (w["calls_judged"], f(w["billed_output_tokens"]), f(w["body_o200k_tokens"]), f(w["reasoning_tokens"]),
                     f(w["unexplained_tokens"]), pct(w["unexplained_share"]), w["calls_reporting_reasoning"]))
         if w["empty_body_billed_calls"]:
             L.append(("  - 그중 본문이 비었는데 출력 토큰이 청구된 호출 %d건(합 %s 토큰, 한 건 최대 %s)." if ko else
-                      "  - Of these, %d calls had an empty body but were billed output tokens (%s in all, at most %s in one).")
+                      "  - %d of these calls had an empty body but were billed for output (%s tokens in all, at most %s in one call).")
                      % (w["empty_body_billed_calls"], f(w["empty_body_billed_tokens"]), f(w["empty_body_billed_max"])))
         if w["ratio_max"] is not None:
             L.append(("  - 청구가 본문+추론의 %.1f배 이상인 호출 %d건, 최대 %.1f배." if ko else
-                      "  - Calls billed at %.1fx or more of body + reasoning: %d; at most %.1fx.")
+                      "  - Calls billed at %.1fx or more of body + reasoning: %d. Highest: %.1fx.")
                      % (w["ratio_line"], w["calls_ratio_ge_line"], w["ratio_max"]))
+        rz = w.get("reasoning")
+        if rz and rz["reasoning_tokens"]:
+            L.append(("  - 추론 토큰을 보고한 호출 %d건: 청구 출력 %s 토큰 중 추론 **%s**(%s 토큰). 추론이 보이는 본문보다 많은 호출 "
+                      "%d건. 한 호출 최대 추론 %s 토큰(그 호출 본문 %s 토큰). 링클비는 모델이 쓰는 글을 줄이지 추론을 줄이지 않습니다. "
+                      "추론을 줄이려면 reasoning effort·thinking budget 설정을 낮추세요(답 품질이 바뀔 수 있습니다)." if ko else
+                      "  - %d calls report reasoning tokens. Of %s billed output tokens, **%s** is reasoning (%s tokens). "
+                      "Reasoning is longer than the visible answer on %d calls. The most in one call is %s reasoning tokens "
+                      "(with a %s-token answer). Linklbee shortens what the model writes, not how it reasons. To cut "
+                      "reasoning, lower the reasoning effort or thinking budget (answers may change).")
+                     % (rz["calls"], f(rz["billed_output_tokens"]), pct(rz["reasoning_tokens"] / rz["billed_output_tokens"]
+                                                                         if rz["billed_output_tokens"] else None),
+                        f(rz["reasoning_tokens"]), rz["calls_reasoning_over_body"], f(rz["max_reasoning"]),
+                        f(rz["max_reasoning_body"])))
         if len(w["by_vendor"]) > 1:
-            L.append(("  - 벤더별 설명되지 않는 차이: " if ko else "  - Unexplained difference by vendor: ") +
+            L.append(("  - 벤더별 설명되지 않는 차이: " if ko else "  - Unexplained, by vendor: ") +
                      " · ".join("%s %s" % (k, pct(v["unexplained_share"])) for k, v in w["by_vendor"].items()))
-        L.append(("  - 이 차이는 과다 청구의 판정이 아니다. 정당한 사유가 있을 수 있다: 본문은 o200k 로 셌다(OpenAI 밖 모델은 "
-                  "토크나이저가 달라 그 차이가 여기 잡힌다 — 추론 없는 Claude 실호출에서도 청구/o200k 가 1.54~1.71배였다) · "
-                  "벤더가 붙이는 보이지 않는 시스템·형식 토큰 · 로그에 남지 않은 출력(도구 호출이 보이는 %d건은 뺐다)." if ko else
-                  "  - This difference is not a finding of overbilling. It can have legitimate causes: the body was counted "
-                  "with o200k (for non-OpenAI models the tokenizer difference lands here — paid Claude calls without "
-                  "reasoning showed 1.54-1.71x billed per o200k token) · hidden system or format tokens the vendor adds · "
-                  "output the log does not hold (the %d calls with a visible tool call are left out).")
+        L.append(("  - 이 차이는 과다 청구의 판정이 아닙니다. 정당한 사유가 있을 수 있습니다: 본문은 o200k 로 셌습니다(OpenAI 밖 모델은 "
+                  "토크나이저가 달라 그 차이가 여기 잡힙니다 — 추론 없는 Claude 실호출에서도 청구/o200k 가 1.54~1.71배였습니다) · "
+                  "벤더가 붙이는 보이지 않는 시스템·형식 토큰 · 로그에 남지 않은 출력(도구 호출이 보이는 %d건은 뺐습니다)." if ko else
+                  "  - This difference does not mean overbilling. It can have legitimate causes: the body was counted "
+                  "with o200k, so for non-OpenAI models the tokenizer difference shows up here (paid Claude calls without "
+                  "reasoning billed 1.54-1.71x per o200k token) · hidden system or format tokens added by the vendor · "
+                  "output the log does not keep (the %d calls with a visible tool call are left out).")
                  % w["calls_with_tool_call_left_out"])
-        L.append(("  - 엔진: 링클비 서버는 벤더가 보고한 추론 토큰과 응답 id 를 장부에 남기고, `/admin/usage` 의 `waste.billing` "
-                  "에 같은 차이와 차이가 큰 응답 id(벤더 문의에 쓸 증빙, 본문은 안 남김)를 낸다." if ko else
-                  "  - Engine: the Linklbee server keeps the vendor-reported reasoning tokens and the response id in its "
-                  "ledger, and reports the same difference in `/admin/usage` `waste.billing` with the response ids of the "
-                  "largest gaps (evidence for a vendor inquiry; no text kept)."))
+        L.append(("  - 엔진: 링클비 서버는 벤더가 보고한 추론 토큰과 응답 id 를 기록에 남깁니다. 엔진의 사용 현황에 "
+                  "같은 차이와 차이가 큰 응답 id(벤더 문의에 쓸 증빙, 본문은 안 남김)를 냅니다." if ko else
+                  "  - Engine: the Linklbee server records vendor-reported reasoning tokens and each response id. "
+                  "The engine's usage view shows the same difference, with the response ids of the largest gaps as "
+                  "evidence for a vendor inquiry (no text is kept)."))
     w = W["cache_hit"]
     L.append(head("7-7", "cache_hit", "캐시 적중률" if ko else "prompt cache hit rate"))
+    us_ = w.get("upstream_spread")
+    if us_ and us_["spread"]:
+        L.append(("  - **보낸 서버(upstream)가 기록된 호출 %s건, 서버 %d대.** 앞 호출과 앞부분을 나눠 갖는 호출 %s건 중 %s건이 앞 호출과 "
+                  "다른 서버로 갔습니다. 그 호출들이 캐시에서 못 읽고 다시 계산한 앞부분 **%s 토큰**(이 호출들 입력의 %s). 같은 대화·같은 "
+                  "앞부분을 한 서버로 보내는 라우팅이면 줄일 수 있는 상한입니다. 링클비 엔진의 상류에 서버 목록을 쉼표로 주면 엔진이 "
+                  "대화마다 한 서버로 보냅니다(답은 바뀌지 않습니다). 자체 호스팅은 토큰 단가가 없어 금액이 아니라 토큰으로 "
+                  "적습니다(장비 시간은 로그에 처리 시간이 있어야 잽니다)." if ko else
+                  "  - **%s calls name the server they went to (upstream), %d servers.** Of %s calls that share a prompt prefix "
+                  "with an earlier call, %s went to another server than that call. Those calls computed **%s tokens** of the "
+                  "shared prefix again instead of reading them from the cache (%s of their input). Routing a conversation / "
+                  "prefix to one server can save up to that. Given the servers as a comma-separated upstream, the Linklbee engine "
+                  "sends each conversation to one of them (the answer does not change). Tokens, not dollars: a self-hosted "
+                  "model has no token price (device time needs the log's own timings).")
+                 % ("{:,}".format(us_["calls"]), us_["upstreams"], "{:,}".format(us_["linked"]), "{:,}".format(us_["spread"]),
+                    "{:,}".format(us_["recomputed_tokens"]), pct(us_["recomputed_tokens"] / us_["input_tokens"])))
     if w["status"] != "cannot_judge":
         L.append(("  - 캐시 읽기 토큰 ÷ 입력 토큰 = **%s** (호출 %d건). 캐시 최소 길이 이상인 호출(7-5 를 통과한 %d건)만 보면 "
-                  "**%s** — %s 미만이면 발견으로 적는다(설계값)." if ko else
-                  "  - Cache-read tokens / prompt tokens = **%s** (%d calls). Over the cache minimum only (the %d calls "
-                  "that pass 7-5): **%s** — under %s is reported as found (a design value).")
+                  "**%s** — %s 미만이면 발견으로 적습니다(설계값)." if ko else
+                  "  - Cache-read tokens / prompt tokens = **%s** (%d calls). For calls above the cache minimum only "
+                  "(the %d that pass 7-5): **%s**. Below %s is reported as found (a design value).")
                  % (pct(w["hit_rate"]), w["calls_judged"], w["over_min_calls"], pct(w["over_min_hit_rate"]), pct(w["line"])))
+        if w.get("ceiling") is not None:
+            L.append(("  - 그 선은 이 로그가 닿을 수 있는 적중률의 절반입니다: 최소 길이 이상 호출의 입력 중 같은 모델의 앞 호출과 5분 "
+                      "안에 겹친 접두가 **%s**(7-8 재생, 완벽한 캐시의 천장) × 0.5. 같은 접두가 적은 로그에 남의 로그 기준을 대지 "
+                      "않습니다." if ko else
+                      "  - That line is half of what this log could read: of the input of the calls above the minimum, "
+                      "**%s** is a prefix shared with an earlier call of the same model within 5 minutes (the 7-8 replay, a "
+                      "perfect cache's ceiling) x 0.5. A log with little shared prefix is not held to another log's line.")
+                     % pct(w["ceiling"]))
+            if w.get("kept_by_money"):
+                L.append(("  - 적중률은 그 선 위지만, 아래 금액(캐시 쓰기 웃돈·놓친 몫)이 남아 있어 발견으로 둡니다." if ko else
+                          "  - The rate is over that line, but the money below (cache-write premium, missed reads) is still "
+                          "there, so this stays found."))
         for b in w["by_model"][:8]:
             L.append(("  - %s (%s): %s, 최소 길이 이상 %s (%d건), 캐시 읽기 0 인 호출 %d건." if ko else
-                      "  - %s (%s): %s, over the minimum %s (%d calls), %d calls with no cache read.")
+                      "  - %s (%s): %s; above the minimum %s (%d calls); %d calls with no cache read.")
                      % (b["model"], b["vendor"], pct(b["hit_rate"]), pct(b["over_min_hit_rate"]), b["over_min_calls"],
                         b["calls_read_0"]))
-        L.append(("  - 최소 길이를 넘고도 못 읽는 몫은 캐시를 켜지 않았거나(Anthropic·Bedrock 은 요청에 `cache_control` 을 달아야 "
-                  "캐시한다), 접두가 바이트 단위로 같지 않거나(7-4), 캐시 유지 시간이 지났거나, 벤더가 다른 서버로 보낸 경우다"
-                  "(OpenAI 는 같은 접두가 분당 약 15건을 넘으면 넘친 요청을 다른 서버로 보낸다)." if ko else
-                  "  - Calls over the minimum that still read nothing: caching was not turned on (Anthropic and Bedrock cache "
-                  "only with `cache_control` in the request), the prefix is not byte-identical (7-4), the cache expired, or "
-                  "the vendor routed the request to another server (OpenAI overflows a prefix past about 15 calls a "
-                  "minute)."))
-        L.append(("  - 엔진: `/admin/usage` 의 `waste.cache_hit` 이 테넌트 장부에서 같은 비율을 내고, 선 아래면 `cache_control` "
+        L.append(("  - 최소 길이를 넘고도 못 읽는 몫은 캐시를 켜지 않았거나(Anthropic API 는 요청에 `cache_control` 을 달아야 "
+                  "캐시합니다. Bedrock 은 표시 없이도 캐시를 시도하지만 최선 노력이라 적중이 보장되지 않습니다), 접두가 바이트 단위로 같지 않거나(7-4), 캐시 유지 시간이 지났거나, 벤더가 다른 서버로 보낸 경우입니다"
+                  "(GPT-5.6 전 OpenAI 모델은 한 키에 분당 약 15건을 넘으면 다른 서버로 넘칠 수 있다고 문서에 적혀 있습니다. "
+                  "GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정합니다)." if ko else
+                  "  - Why calls above the minimum still miss: caching was not turned on (the Anthropic API caches only "
+                  "with `cache_control` in the request; Bedrock tries without it, best effort, with no hit guaranteed), the prefix is not byte-identical (7-4), the cache expired, or the "
+                  "vendor sent the request to another server (OpenAI's guide says traffic over about 15 a minute on one key "
+                  "can overflow on models before GPT-5.6; from GPT-5.6 on OpenAI routes the cache itself)."))
+        L.append(("  - 엔진: 엔진의 사용 현황이 사용 기록에서 같은 비율을 내고, 선 아래면 `cache_control` "
                   "표시(Anthropic·Bedrock)·접두 정규화(`\"prefix_normalize\": true`)·고정 부분 앞 배치·OpenAI `prompt_cache_key` "
-                  "교정안을 붙인다." if ko else
-                  "  - Engine: `/admin/usage` `waste.cache_hit` reports the same rate from the tenant ledger and, under the "
-                  "line, proposes `cache_control` on the fixed prefix (Anthropic, Bedrock), prefix normalization "
-                  "(`\"prefix_normalize\": true`), the fixed part first, and OpenAI `prompt_cache_key`."))
+                  "교정안을 붙입니다." if ko else
+                  "  - Engine: the engine's usage view reports the same rate from your usage records. Below the "
+                  "line it suggests `cache_control` markers (Anthropic, Bedrock), prefix normalization "
+                  "(`\"prefix_normalize\": true`), putting fixed parts first, and OpenAI `prompt_cache_key`."))
+    ow = w.get("own_write")
+    if ow and not ow["calls_written"]:
+        L.append(("  - 직접 붙인 캐시 표시: 쓰기 필드가 있는 호출 %d건 중 캐시를 쓴 호출 0건 — 쓰고 못 읽은 캐시는 없습니다." if ko else
+                  "  - Your own cache markers: %d calls have a cache-write field and none wrote, so no cache was written and left unread.")
+                 % ow["calls"])
+    elif ow:
+        L.append(("  - 직접 붙인 캐시 표시(Anthropic 계열, 쓰기 필드가 있는 호출 %d건, 그중 쓴 호출 %d건): 쓰기 웃돈 %s 토큰분"
+                  "(5분 쓰기 %s 토큰 × %.2f배, 1시간 쓰기 %s 토큰 × %.1f배에서 정가를 뺀 몫), 읽기로 아낀 몫 %s 토큰분(읽기 %s 토큰, "
+                  "읽기 %.2f배) → **순 %s 토큰분**. 입력 토큰 정가로 환산한 값입니다." if ko else
+                  "  - Your own cache markers (Anthropic family; %d calls with a cache-write field, %d of them wrote): "
+                  "write premium %s tokens' worth (5-minute writes %s tokens at %.2fx, 1-hour writes %s tokens at %.1fx, "
+                  "minus the base price), saved by reads %s tokens' worth (%s tokens read at %.2fx) -> **net %s tokens' "
+                  "worth**, valued at the base input price.")
+                 % (ow["calls"], ow["calls_written"], "{:,}".format(ow["premium"]), "{:,}".format(ow["write_5m"]),
+                    ow["write_5m_multiple"], "{:,}".format(ow["write_1h"]), ow["write_1h_multiple"],
+                    "{:,}".format(ow["saved"]), "{:,}".format(ow["read"]), ow["read_multiple"],
+                    "{:+,}".format(ow["net"])))
+        if ow["net"] < 0:
+            L.append(("  - **쓴 캐시를 읽어서 돌려받지 못하고 있습니다.** 캐시를 안 쓰는 것보다 %s 토큰분 더 냈습니다. 바뀌는 블록"
+                      "(시각·사용자 값)에 표시를 달았거나, 다음 요청이 유지 시간 안에 오지 않는 경우입니다. 1시간 표시는 쓰기가 "
+                      "정가의 2배라 한 번 못 읽으면 읽기 약 20번 몫을 잃습니다. 고칠 법: 표시를 고정 앞부분 끝으로 옮기고, "
+                      "다음 요청 간격이 5분 안이면 1시간 대신 5분 표시를 쓰세요. 엔진은 직접 붙인 표시를 바꾸지 않습니다." if ko else
+                      "  - **The cache you write is not being read back.** It cost %s tokens' worth more than no cache. "
+                      "Usually a marker sits on a block that changes (times, user values), or the next request comes after "
+                      "the cache expires. A 1-hour write costs twice the base price, so one unread write wipes out about "
+                      "twenty reads. Fix: put the marker at the end of the fixed prefix, and use the 5-minute marker when "
+                      "the next request comes within 5 minutes. The engine does not change markers you set yourself.") % "{:,}".format(-ow["net"]))
+    sl = w.get("mark_slots")
+    if sl:
+        rate = lambda a, b: pct(a / b) if b else "—"  # noqa: E731
+        L.append(("  - 캐시 표시를 직접 단 요청 %d건(요청 본문이 있는 Anthropic 계열 %d건 중), 그중 표시 %d개를 다 써서 더 붙일 "
+                  "자리가 없는 요청 %d건. 캐시 읽기 비율: 다 쓴 요청 %s · 덜 쓴 요청 %s." if ko else
+                  "  - %d calls set their own cache markers (of %d Anthropic-family calls with a request body). %d of them "
+                  "use all %d slots, leaving no room for another. Cache-read share: at the limit %s · below it %s.")
+                 % (((sl["calls_marked"], sl["calls_with_body"], sl["limit"], sl["calls_at_limit"]) if ko else
+                     (sl["calls_marked"], sl["calls_with_body"], sl["calls_at_limit"], sl["limit"]))
+                    + (rate(sl["at_limit_read"], sl["at_limit_prompt"]), rate(sl["below_read"], sl["below_prompt"]))))
+        if sl["calls_at_limit"]:
+            L.append(("  - 고칠 법: 표시는 바뀌지 않는 앞부분의 끝(도구 정의 끝·시스템 지시 끝·오래 남는 대화 끝)에만 다세요. 매번 "
+                      "바뀌는 메시지에 단 표시는 자리만 차지합니다. 엔진은 표시가 이미 있는 요청에 표시를 더하지 않습니다." if ko else
+                      "  - Fix: put markers only at the end of parts that do not change (end of tools, end of system, end of "
+                      "a long-lived conversation). A marker on a message that changes every call just uses up a slot. The "
+                      "engine never adds a marker to a request that already has one."))
     ot = w.get("openai_tail")
     if ot:
-        L.append(("  - OpenAI GPT-5.6 이상 호출 %d건(입력 %s 토큰): 기본(implicit) 표시는 마지막 메시지 끝까지 쓴다(30분 쓰기 "
+        L.append(("  - OpenAI GPT-5.6 이상 호출 %d건(입력 %s 토큰): 기본(implicit) 표시는 마지막 메시지 끝까지 씁니다(30분 쓰기 "
                   "1.25배). 그렇게 쓰이는 몫 %s 토큰 중 30분 안에 뒤 호출이 다시 읽지 않는 몫 **%s 토큰**(대화 사슬로 셈). "
-                  "토큰 셈이며 금액이 아니다." if ko else
-                  "  - OpenAI GPT-5.6+ calls %d (%s prompt tokens): the default implicit mode writes up to the last message "
-                  "(30-minute write 1.25x). Of the %s tokens written that way, **%s tokens** are not read again by a "
-                  "later call within 30 minutes (counted on the conversation chains). Counted, not priced.")
+                  "토큰 셈이며 금액이 아닙니다." if ko else
+                  "  - %d OpenAI GPT-5.6+ calls (%s prompt tokens): the default implicit mode writes up to the end of the "
+                  "last message (a 30-minute write at 1.25x). Of the %s tokens written that way, **%s tokens** are not "
+                  "read by a later call within 30 minutes (counted along conversation chains). Token counts, not dollars.")
                  % (ot["calls"], "{:,}".format(ot["input_tokens"]), "{:,}".format(ot["written_tokens"]),
                     "{:,}".format(ot["unread_tokens"])))
+    if w.get("sparse_no_material"):
+        L.append(("  - 1시간 안에 같은 앞부분을 나눈 입력이 %s 뿐이라(7-8), 캐시가 읽을 재료가 없었습니다. 호출 사이가 캐시 수명보다 길어 "
+                  "생긴 낮은 적중률이라 캐시로 줄일 자리가 없습니다." if ko else
+                  "  - Only %s of input shared a prefix with a call in the past hour (7-8), so there was nothing for a cache "
+                  "to read. The low hit rate comes from calls further apart than any cache life; caching cannot cut it.")
+                 % pct(W["shared_prefix"]["share_3600"]))
+    pw = w.get("usd_waste_parts") or {}
+    if w.get("usd_waste") and w["status"] == "found":
+        L.append(("  - 금액으로: 새는 몫 **%s** — %s(그 호출들의 입력 단가로 환산, 가격표 %s)." if ko else
+                  "  - In dollars: **%s** leaking — %s (at those calls' input price, price list %s).")
+                 % (usd(w["usd_waste"]), " · ".join(
+                     (("아무도 안 읽은 기본 표시 쓰기의 웃돈 %s" if ko else "the premium on implicit writes nobody read, %s") % usd(pw["implicit_unread"])
+                      if k == "implicit_unread" else
+                      ("직접 단 표시의 순 손해 %s" if ko else "the net loss on your own cache marks, %s") % usd(pw["own_mark_loss"])
+                      if k == "own_mark_loss" else
+                      ("캐시 표시를 하나도 안 달아서 놓친 몫 %s(같은 앞부분에 5분 표시를 달았다면)" if ko else
+                       "what no cache mark at all left on the table, %s (with 5-minute marks on the repeated prefix)")
+                      % usd(pw["no_mark_gain"]))
+                     for k in ("implicit_unread", "own_mark_loss", "no_mark_gain") if pw.get(k)),
+                    (res.get("pricing") or {}).get("as_of") or "—"))
+    if w.get("usd_spread") and w["status"] == "found":
+        L.append(("  - 놓친 재료: 같은 앞부분이 5분 안에 다시 왔고 최소 길이도 넘었는데 읽지 못한 입력 %s 토큰 — 캐시가 있는 서버가 "
+                  "아닌 곳으로 갔거나 첫 응답이 시작되기 전에 몰린 몫입니다(GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정한다고 "
+                  "문서에 적혀 있어, 어느 쪽인지는 로그로 가르지 못합니다). 금액으로 **최대 %s**(그 호출들의 "
+                  "입력 단가, 가격표 %s). 엔진이 요청 경로를 바꾸는 칼은 없습니다 — 몰아 보내는 일괄 처리라면 먼저 한 건을 보내고 "
+                  "첫 응답이 온 뒤 나머지를 보내거나, Flex·Batch(7-9)로 보내세요." if ko else
+                  "  - Material missed: %s input tokens came back within 5 minutes on a prefix over the minimum and were "
+                  "not read — they reached a machine without the cached entry or came before the first answer started "
+                  "(for GPT-5.6 and later OpenAI's guide says it routes the cache itself, so a log cannot tell which). In "
+                  "dollars **at most %s** (at those calls' input price, price list %s). "
+                  "No engine knife changes where calls go; for a burst job, send one call first and the rest after its first "
+                  "answer, or send it through Flex / Batch (7-9).")
+                 % ("{:,}".format(w.get("spread_tokens") or 0), usd(w["usd_spread"]),
+                    (res.get("pricing") or {}).get("as_of") or "—"))
+    ks_ = w.get("key_split")
+    if ks_ and w["status"] != "cannot_judge":
+        L.append(("  - **GPT-5.6 이전 OpenAI 모델에서 같은 앞부분이 분당 15건을 넘어 캐시를 못 읽은 호출 %s건**. 이 모델들은 "
+                  "`prompt_cache_key` 하나에 분당 약 15건을 권합니다(OpenAI 프롬프트 캐싱 안내). 넘친 호출은 캐시가 없는 서버로 "
+                  "갈 수 있습니다." if ko else
+                  "  - **%s calls on OpenAI models before GPT-5.6 missed the cache while their prefix came more than 15 "
+                  "times a minute.** For these models OpenAI's prompt-caching guide advises about 15 a minute per "
+                  "`prompt_cache_key`. The overflow can reach a server without the cached entry.")
+                 % "{:,}".format(ks_["spread_misses"]))
+        if w.get("usd_key_split"):
+            L.append(("  - 금액으로: 앞부분마다 키를 붙이고 분당 호출 수만큼 키를 나누면 **최대 %s** 덜 냅니다(새 키의 첫 호출 값을 "
+                      "뺀 금액, 가장 비싼 캐시 읽기 비율, 가격표 %s). 답은 바뀌지 않습니다. 키는 요청의 "
+                      "`prompt_cache_key` 에 넣습니다." if ko else
+                      "  - In dollars: a key per prefix, split by the calls a minute, saves **at most %s** (net of each "
+                      "new key's first call, at the dearest cache-read rate; price list %s). The answer does not change. The "
+                      "key goes in the request's `prompt_cache_key`.")
+                     % (usd(w["usd_key_split"]), (res.get("pricing") or {}).get("as_of") or "—"))
     nj = w["not_judged"]
-    if nj:
-        names = {"unsupported": ("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A", "vendor without prompt caching (CLOVA etc.) %d — N/A"),
+    if nj and w["status"] != "cannot_judge":
+        names = {"unsupported": ("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A", "vendors without prompt caching (CLOVA and others) %d — N/A"),
                  "no_input_tokens": ("input_tokens 없음 %d건", "no input_tokens %d"),
                  "no_cache_read_field": ("캐시 읽기 필드 없음 %d건 — 0 으로 세지 않음", "no cache-read field %d — not counted as 0"),
-                 "cache_read_over_input": ("캐시 읽기가 입력보다 큰 기록 %d건 — 입력에 캐시 몫이 빠진 것으로 보여 뺐다",
-                                           "cache read above input %d — input seems to leave the cached part out, left out")}
-        L.append(("  - 판단 못 한 호출: " if ko else "  - not judged: ") +
+                 "cache_read_over_input": ("캐시 읽기가 입력보다 큰 기록 %d건 — 입력에 캐시 몫이 빠진 것으로 보여 뺐습니다",
+                                           "cache read larger than input %d — input seems to exclude the cached part, left out")}
+        L.append(("  - 판단 못 한 호출: " if ko else "  - not checked: ") +
                  " · ".join(names[k][0 if ko else 1] % v for k, v in sorted(nj.items())))
     w = W["shared_prefix"]
     L.append(head("7-8", "shared_prefix", "호출끼리 같은 앞부분(접두)" if ko else "prefix shared between calls"))
     if w["status"] != "cannot_judge":
         L.append(("  - 입력 토큰 중 앞선 호출(같은 모델)과 같은 접두: 5분 안 **%s** · 1시간 안 %s · 기간 전체 %s "
                   "(호출 %d건, 5분 안에 접두를 나눈 호출 %d건)." if ko else
-                  "  - Prompt tokens in a prefix shared with an earlier call (same model): within 5 minutes **%s** · "
-                  "within 1 hour %s · over the whole log %s (%d calls, %d of them sharing a prefix within 5 minutes).")
+                  "  - Share of prompt tokens in a prefix already sent by an earlier call (same model): within 5 minutes "
+                  "**%s** · within 1 hour %s · across the whole log %s (%d calls, %d of them sharing a prefix within 5 "
+                  "minutes).")
                  % (pct(w["share_300"]), pct(w["share_3600"]), pct(w["share_all"]), w["calls_judged"], w["calls_shared_300"]))
         L.append(("  - 같은 접두가 5분 넘어 다시 와서 캐시 유지 시간에 놓치는 몫: **%s**." if ko else
-                  "  - Shared prefix that came back after more than 5 minutes, past the cache life: **%s**.")
+                  "  - Shared prefixes that came back after more than 5 minutes, once the cache had expired: **%s**.")
                  % pct(w["ttl_missed_share"]))
         if w["judged_min_calls"]:
             L.append(("  - 5분 안에 같은 접두가 있었지만 그 접두가 벤더 캐시 최소 길이(cache_constants.json) 미만이라 캐시가 못 읽는 몫: "
                       "**%s** (호출 %d건 / 판단 %d건)." if ko else
                       "  - Shared within 5 minutes but shorter than the vendor's cache minimum (cache_constants.json), so "
-                      "the cache cannot read it: **%s** (%d of %d calls judged).")
+                      "it cannot be cached: **%s** (%d of %d calls checked).")
                      % (pct(w["below_min_share"]), w["below_min_calls"], w["judged_min_calls"]))
+            # BUNDLE-AMOUNT-78 (10-23): bundling is what lifts this share; its amount is priced once, under the
+            # cache-minimum item (MORE_USD: the same prefix tokens), so it is pointed to here, not added again
+            ub = (W.get("cache_min") or {}).get("usd_bundle")
+            if w["below_min_calls"] and ub:
+                L.append(("  - 이 몫은 묶어 보내면 줄어듭니다. 금액은 '캐시 최소 길이 미달 요청' 항목의 **%s** 입니다. 같은 "
+                          "앞부분이라 여기에 다시 더하지 않습니다." if ko else
+                          "  - Bundling cuts this share. Its amount, **%s**, is under 'prompts shorter than the cache "
+                          "minimum'. It is the same prefix, so it is not counted again here.") % usd(ub))
         tr = w.get("ttl_replay")
         if tr:
             a, b = tr["mark_5m"], tr["auto"]
-            L.append(("  - 1시간 표시를 고르면(엔진 cache_ttl \"auto\" 규칙을 이 로그에 재생, Anthropic 모델 호출 %d건의 도구·시스템 "
+            L.append(("  - 1시간 표시를 고르면(엔진의 1시간 캐시 자동 규칙을 이 로그에 재생, Anthropic 모델 호출 %d건의 도구·시스템 "
                       "고정 접두 %s토큰): 캐시 읽기 %s → **%s** 토큰, 쓰기 5분 %s → %s · 1시간 %s → %s 토큰. 토큰 셈이며 금액이 "
-                      "아니다(1시간 쓰기는 입력 단가의 2배, 5분은 1.25배)." if ko else
-                      "  - With the 1-hour choice (the engine's cache_ttl \"auto\" rule replayed on this log, the tools + "
-                      "system fixed prefix of %d Anthropic-model calls, %s tokens): cache reads %s → **%s** tokens, "
-                      "writes 5-minute %s → %s · 1-hour %s → %s tokens. Counted, not priced (a 1-hour write is 2x the "
-                      "input price, a 5-minute one 1.25x).")
+                      "아닙니다(1시간 쓰기는 입력 단가의 2배, 5분은 1.25배)." if ko else
+                      "  - With 1-hour caching (the engine's automatic 1-hour cache rule replayed on this log, over the fixed "
+                      "tools + system prefix of %d Anthropic-model calls, %s tokens): cache reads %s → **%s** tokens; "
+                      "5-minute writes %s → %s · 1-hour writes %s → %s tokens. Token counts, not dollars (a 1-hour write "
+                      "is 2x the input price, a 5-minute write 1.25x).")
                      % (tr["calls"], "{:,}".format(round(tr["fixed_tokens"])), "{:,}".format(a["read"]),
                         "{:,}".format(b["read"]), "{:,}".format(a["write_5m"]), "{:,}".format(b["write_5m"]),
                         "{:,}".format(a["write_1h"]), "{:,}".format(b["write_1h"])))
+        for m in w.get("model_split") or []:
+            tg = ", ".join("%s %d" % (x[1], x[2]) for x in m["by_target"])
+            L.append(("  - **같은 앞부분을 모델 %d개(벤더 %d곳)에 나눠 보냈습니다: %s.** 캐시는 모델마다 따로라 가장 많이 받은 모델 밖의 "
+                      "호출 %d건(앞부분 %s 토큰)은 다른 쪽이 쌓은 캐시를 못 읽습니다." if ko else
+                      "  - **The same prefix went to %d models (%d vendors): %s.** Each model has its own cache, so the %d "
+                      "calls not sent to the most-used model (%s prefix tokens) cannot read what the others cached.")
+                     % (m["targets"], m["vendors"], tg, m["calls_off_main"], "{:,}".format(m["tokens_off_main"])))
+        if w.get("model_split"):
+            L.append(("  - 고칠 법: 같은 앞부분은 한 모델로 보내세요(대체 모델·부하 분산 규칙을 앞부분 기준으로 고정). 일부러 나눈 "
+                      "것(비교 시험 등)이면 그대로 두세요. 리전 차이는 로그에 리전 필드가 없어 이 검사로 못 봅니다." if ko else
+                      "  - Fix: send each prefix to one model (pin fallback and load-balancing rules by prefix). If the split "
+                      "is on purpose, such as an A/B test, leave it. This check cannot see regions: the log has no region field."))
+        if w.get("usd_ttl") and w["status"] == "found":
+            L.append(("  - 금액으로: 1시간 선택이 5분 표시만 쓸 때보다 **%s** 덜 듭니다(그 호출들의 입력 단가로 환산, 가격표 %s)." if ko else
+                      "  - In dollars: the 1-hour choice costs **%s** less than 5-minute marks alone (at those calls' input price, "
+                      "price list %s).") % (usd(w["usd_ttl"]), (res.get("pricing") or {}).get("as_of") or "—"))
+        hs_ = w.get("history")
+        if hs_:
+            L.append(("  - **대화 기록의 앞쪽을 잘라 보낸 호출 %s건**(그중 캐시가 기록을 읽던 대화의 호출 %s건). 자르는 지점이 "
+                      "매 턴 바뀌면 캐시가 시스템 지시 뒤에서 끊깁니다. 그 뒤 기록은 매번 다시 냅니다." if ko else
+                      "  - **%s calls cut the front of the conversation history** (%s of them in conversations whose "
+                      "history the cache was reading). When the cut point moves every turn, the cache stops right after the "
+                      "system instructions. The history after it is paid again every time.")
+                     % ("{:,}".format(hs_["rewrites"]), "{:,}".format(hs_["counted"])))
+            if w.get("usd_history"):
+                L.append(("  - 금액으로: %d턴에 한 번만 자르면 **%s** 덜 냅니다(남겨 둔 기록을 실어 보내는 값을 뺀 금액, 가격표 "
+                          "%s). 모델이 보는 기록이 늘어 답이 달라질 수 있어 고객이 정할 일입니다. 링클비 엔진은 사용 기록에서 몇 "
+                          "턴마다가 맞는지 다시 고릅니다." if ko else
+                          "  - In dollars: cutting only once every %d turns saves **%s** (net of carrying the history "
+                          "you keep; price list %s). The model sees more history, so the answer can change: your call. The "
+                          "Linklbee engine refits the number of turns from its usage records.")
+                         % (hs_["k"], usd(w["usd_history"]), (res.get("pricing") or {}).get("as_of") or "—"))
         if W["cache_hit"]["status"] != "cannot_judge":
             L.append(("  - 비교: 실제 캐시 읽기(7-7) %s 대 5분 안 같은 접두 %s." if ko else
-                      "  - Compare: actual cache reads (7-7) %s vs prefix shared within 5 minutes %s.")
+                      "  - Compare: actual cache reads (7-7) %s vs prefixes shared within 5 minutes %s.")
                      % (pct(W["cache_hit"]["hit_rate"]), pct(w["share_300"])))
-        L.append(("  - 센 방법: 도구 정의 → 시스템 → 대화 항목 순서로 항목이 통째로 같은 것만 셌다(요청 본문이 없으면 프롬프트를 "
-                  "%d토큰 조각으로). 항목 안 부분 일치는 안 셌다. 벤더가 실제로 캐시하는 자리(`cache_control` 표시·벤더의 "
-                  "단위)는 따로 정해지므로 이 몫은 절감액이 아니라 캐시가 읽을 수 있는 재료의 크기다." if ko else
-                  "  - Method: only whole items, in the order tools → system → conversation items (without a request body, "
-                  "the prompt in %d-token blocks). A partial match inside an item is not counted. Where the vendor "
-                  "actually caches (`cache_control` markers, the vendor's own steps) is set separately, so this share "
-                  "is the size of what a cache could read, not a saving.") % w["block_tokens"])
+        L.append(("  - 센 방법: 도구 정의 → 시스템 → 대화 항목 순서로 항목이 통째로 같은 것만 셌습니다(요청 본문이 없으면 프롬프트를 "
+                  "%d토큰 조각으로). 항목 안 부분 일치는 안 셌습니다. 벤더가 실제로 캐시하는 자리(`cache_control` 표시·벤더의 "
+                  "단위)는 따로 정해지므로 이 몫은 절감액이 아니라 캐시가 읽을 수 있는 재료의 크기입니다." if ko else
+                  "  - Method: only whole items count, in the order tools → system → conversation items (without a request "
+                  "body, the prompt in %d-token blocks). Partial matches inside an item are not counted. Where the vendor "
+                  "actually caches (`cache_control` markers, its own block sizes) is decided separately, so this share is "
+                  "how much a cache could read, not a saving.") % w["block_tokens"])
     w = W.get("flex")
     if w and w["status"] != "cannot_judge":
         L.append(head("7-9", "flex", "OpenAI Flex 로 보낼 수 있었던 호출(스트림 아님)" if ko else
-                      "calls that could have gone at OpenAI Flex (not streamed)"))
-        L.append(("  - Flex 표 모델 호출 %d건 중 스트림 아님 %d건: %s. Flex 는 같은 모델을 표준 단가의 절반(Batch 단가, 가격표 %s)에 "
-                  "답한다 — 다 Flex 였다면 **최대 %s** 덜 든다. 응답이 느려질 수 있어, 기다려도 되는 호출만 해당한다(로그로는 "
-                  "가를 수 없어 상한이다)." if ko else
-                  "  - Of %d calls on Flex-table models, %d were not streamed: %s. Flex answers with the same model at half "
-                  "the standard rate (Batch rates, price table %s) -- all at Flex, **at most %s** less. Answers can be "
-                  "slower, so only calls that can wait count (the log cannot tell which: an upper side).")
-                 % (w["calls_flex_models"], w["nonstream_calls"], _spent(w, ko), w["table_as_of"],
-                    (("금액 미상(가격표에 없는 모델)" if ko else "unknown (model not in the price table)")
-                     if w["saving_upper_usd"] is None else usd(w["saving_upper_usd"]))))
-    L += ["", ("이 절은 \"입력된 로그 범위에서\" 본 것이다. 보증이 아니다." if ko else
-               "This section covers the log given. It is not a guarantee."), ""]
+                      "calls that could have used OpenAI Flex (not streamed)"))
+        if not w["calls_flex_models"]:
+            L.append(("  - Flex 할인이 있는 OpenAI 모델의 호출이 이 로그에 없습니다." if ko else
+                      "  - This log has no calls to the OpenAI models that Flex offers."))
+        elif not w["nonstream_calls"]:
+            L.append(("  - Flex 를 쓸 수 있는 OpenAI 모델 호출 %d건이 모두 스트림이라 Flex 로 옮길 몫이 없습니다." if ko else
+                      "  - All %d calls to models that Flex offers were streamed, so none could move to Flex.")
+                     % w["calls_flex_models"])
+        else:
+            L.append(("  - Flex 를 쓸 수 있는 OpenAI 모델 호출 %d건 중 스트림 아님 %d건: %s. Flex 는 같은 모델을 표준 단가의 절반(Batch 단가, 가격표 %s)에 "
+                      "답합니다 — 다 Flex 였다면 **최대 %s** 덜 듭니다. 응답이 느려질 수 있어, 기다려도 되는 호출만 해당합니다(로그로는 "
+                      "가를 수 없어 상한입니다)." if ko else
+                      "  - %d calls used models that Flex offers, and %d of them were not streamed: %s. Flex runs the same "
+                      "model at half the standard rate (Batch rates, price list %s). Sending all of them at Flex would cost "
+                      "**at most %s** less. Responses can be slower, so only calls that can wait qualify. The log cannot "
+                      "tell which those are, so this is an upper bound.")
+                     % (w["calls_flex_models"], w["nonstream_calls"], _spent(w, ko), w["table_as_of"],
+                        ((("금액 미상(입력 토큰 수가 로그에 없음)" if ko else "unknown (the log has no input token counts)")
+                          if not w.get("input_known", 1) else
+                          ("금액 미상(가격표에 없는 모델)" if ko else "unknown (model not in the price list)"))
+                         if w["saving_upper_usd"] is None else usd(w["saving_upper_usd"]))))
+    # regroup (PM 10-22 19:15): 'leak' items first, then 'more' items, found before none; items with no engine fix
+    # dropped; items that need more data listed once per missing field, together with sections 2-5
+    segs = {}
+    for i, (k, a) in enumerate(marks):
+        segs[k] = L[a:marks[i + 1][1] if i + 1 < len(marks) else len(L)]
+    L = L[:2]
+    groups = (("leak", ("새고 있는 것 — 지금 돈이 나가는 자리", "Leaking now — money going out"),
+               ("입력된 로그 범위에서 찾지 못했습니다.", "None found in this log.")),
+              ("more", ("더 줄일 수 있는 것 — 지금 문제가 없어도 더 싸게 하는 길", "Could cost less — cheaper ways, even with nothing wrong"),
+               ("이 로그에서 더 싸게 할 길을 찾지 못했습니다.", "No cheaper way found in this log.")))
+    for kind, title, empty in groups:
+        ks = [k for k in WKIND if WKIND[k] == kind and k in segs and k not in NO_KNIFE and W[k]["status"] != "cannot_judge"]
+        L += ["### " + title[0 if ko else 1], ""]
+        if not any(W[k]["status"] == "found" for k in ks):
+            L += ["**" + empty[0 if ko else 1] + "**", ""]
+        if kind == "more":
+            listed, small = more_order(res)
+            for k in listed:
+                L += segs.get(k, [])
+            if small:
+                L.append((("- 그 밖에 소액 기회" if listed else "- 소액 기회") + " %d건, 합계 **%s** (청구액의 %s 미만인 항목: %s)" if ko else
+                          ("- Other small opportunities" if listed else "- Small opportunities") +
+                          ": %d items, **%s** in all (each under %s of the bill: %s)")
+                         % (len(small), usd(sum(more_amount(W[k], k) for k in small)), pct(MORE_SMALL_SHARE, 0),
+                            " · ".join(ITEM_NAMES[k][0 if ko else 1] for k in small)))
+            ks = [k for k in ks if W[k]["status"] != "found"]
+        for k in sorted(ks, key=lambda k: W[k]["status"] != "found"):
+            L += segs[k]
+        L.append("")
+    gap = [k for k in WKIND if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge"
+           and W[k]["missing"] == "threshold table"]
+    if gap:  # EMPTY-HAND: Linklbee's table is what is missing, not the customer's field
+        L += ["### " + ("링클비 표에 아직 없는 모델" if ko else "Models not in Linklbee's table yet"), ""]
+        for k in gap:
+            L += segs.get(k, [])
+        L.append("")
+    need = {}
+    for k in WKIND:
+        if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge" and W[k]["missing"] != "threshold table":
+            need.setdefault(W[k]["missing"], []).append(ITEM_NAMES[k][0 if ko else 1])
+    # the other sections' items this log cannot show yet, as the next step (section 8 keeps only the zeros)
+    label = {"switch": ("2~4절 바뀐 부분만 고쳐 쓰기(닮음 × 답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
+             "fact_input": ("3절 사실 입력(요청이 바뀐 내용을 알려 주는가)", "Section 3, facts in the request (does it say what changed)"),
+             "zero_call": ("5절 호출 없이 답하기", "Section 5, answering without a call")}
+    nm_ = [e for e in (res.get("zero_explain") or {}).get("axes") or () if e["state"] == "not_measured" and e["axis"] in label]
+    for e in nm_:
+        need.setdefault(e["missing"], []).append(label[e["axis"]][0 if ko else 1])
+    if need:
+        L += ["### " + ("더 주시면 볼 수 있는 것" if ko else "What more data would show"), "",
+              (("코딩 에이전트 기록에는 아래 필드가 남지 않습니다. 회사 서비스의 호출 로그에 있으면 오른쪽 항목을 봅니다." if ko else
+                "A coding agent's record does not keep the fields on the left. A service's call log that has them gets the items on the right.")
+               if res.get("agent_log_calls") else
+               ("로그에 아래 필드가 더 있으면 오른쪽 항목을 봅니다." if ko else "With the field on the left in the log, the items on the right are checked.")), ""]
+        L += ["- %s: %s" % (MISSING.get(m, (m, m))[0 if ko else 1], " · ".join(v)) for m, v in need.items()]
+    L += ["", ("이 절은 \"입력된 로그 범위에서\" 본 것입니다. 보증이 아닙니다." if ko else
+               "This section reflects the log provided. It is not a guarantee."), ""]
     return L
 
 
 ZTITLE = {"failed": ("7-1 실패 호출 과금", "7-1 billed failed calls"),
-          "resent": ("7-2 짧은 간격 재전송", "7-2 the same request sent again shortly after"),
-          "truncated": ("7-3 길이 상한에서 잘린 답", "7-3 answers cut at the token limit"),
-          "prefix_unstable": ("7-4 요청 접두 직렬화 불안정", "7-4 unstable request prefix serialization"),
-          "cache_min": ("7-5 캐시 최소 길이 미달", "7-5 prompts under the cache minimum"),
+          "resent": ("7-2 짧은 간격 재전송", "7-2 the same request resent shortly after"),
+          "truncated": ("7-3 길이 상한에서 잘린 답", "7-3 answers cut off at the length limit"),
+          "prefix_unstable": ("7-4 요청 접두 직렬화 불안정", "7-4 request prefix serialized inconsistently"),
+          "cache_min": ("7-5 캐시 최소 길이 미달", "7-5 prompts shorter than the cache minimum"),
           "billing": ("7-6 과금 대조", "7-6 billing check"),
           "cache_hit": ("7-7 캐시 적중률", "7-7 prompt cache hit rate"),
           "shared_prefix": ("7-8 호출끼리 같은 접두", "7-8 prefix shared between calls")}
@@ -3789,143 +7212,151 @@ def zero_lines(res, ko):
     if not Z:
         return []
     W, sw = res["waste"], SWITCH
-    nm = (lambda f: "이 로그로는 못 잽니다(필드 %s 없음)" % f) if ko else (lambda f: "cannot be measured on this log (no field %s)" % f)
-    L = ["## " + ("8. 0 이 나온 축 — 이유와 다음에 볼 곳" if ko else "8. Axes that came out 0 — why, and where to look next"), "",
-         ("축마다 한 줄: (가) 이 로그에서 센 이유 · (나) 무엇이 바뀌면 달라지나, 대신 볼 축. 숫자는 이 로그에서 센 값이거나 "
-          "코드의 이름 붙은 상수다(이름을 괄호에 적었다)." if ko else
-          "One line per axis: (a) the reason, counted on this log · (b) what would change it, or which axis to look at "
-          "instead. Every figure is counted on this log or is a named constant in the code (named in brackets)."), ""]
+    nm = (lambda f: "이 로그로는 못 잽니다(필드 %s 없음)" % f) if ko else (lambda f: "cannot be measured on this log (no %s field)" % f)
+    L = ["## " + ("8. 0 이 나온 항목 — 이유와 다음에 볼 곳" if ko else "8. Items that came out 0 — why, and what to look at next"), "",
+         ("항목마다 한 줄: (가) 이 로그에서 센 이유 · (나) 무엇이 바뀌면 달라지나, 대신 볼 항목. 숫자는 이 로그에서 센 값이거나 "
+          "코드의 이름 붙은 상수입니다(이름을 괄호에 적었습니다)." if ko else
+          "One line per item: (a) the reason, counted on this log · (b) what would change it, or what to look at "
+          "instead. Every figure is either counted on this log or a named constant in the code (name in brackets)."), ""]
 
     def cache_pointer(e):
         c = e.get("cache_ref")
         if c:
             return (("7-5 캐시 최소 길이(%s: 입력 중앙값 %s 토큰, 벤더 최소 %s 토큰(cache_constants.json) 미만 %d/%d건)" if ko else
-                     "7-5 cache minimum (%s: median prompt %s tokens; under the vendor minimum of %s tokens "
-                     "(cache_constants.json) %d / %d calls)")
+                     "7-5 cache minimum (%s: median prompt %s tokens; %s-token vendor minimum (cache_constants.json), "
+                     "%d of %d calls under it)")
                     % (c["model"], _n(c["input_median"]), _n(c["min_tokens"]), c["below"], c["calls"]))
+        if W["cache_min"]["missing"] == "threshold table":
+            return ("7-5 캐시 최소 길이(링클비 표에 이 모델의 최소 길이가 아직 없음)" if ko else
+                    "7-5 cache minimum (this model's minimum is not in Linklbee's table yet)")
         return ("7-5 캐시 최소 길이(" if ko else "7-5 cache minimum (") + nm(W["cache_min"]["missing"]) + ")"
 
+    n0 = len(L)
     for e in Z:
         ax, stt = e["axis"], e["state"]
+        if stt == "not_measured" or ax in NO_KNIFE:  # said once in section 7; no-knife items are left out of the report
+            continue
         if ax == "switch":
-            head = "- " + ("축 1·2 차분 스위치(겹침 × 답 길이)" if ko else "Axes 1-2, the diff switch (overlap x answer length)")
+            head = "- " + ("바뀐 부분만 고쳐 쓰기(닮음 × 답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
             if stt == "not_measured" and e["missing"] == "ts":
-                L.append(head + " — " + nm("ts") + (". (나) ts(ISO-8601 또는 epoch 초)를 넣으면 같은 문서의 판을 시간 순서로 짝지어 겹침을 잰다. "
-                                                    "이 로그에서는 대신 %s 를 본다." if ko else
-                                                    ". (b) With ts (ISO-8601 or epoch seconds) the versions of a document are paired in "
-                                                    "time order and overlap is measured. On this log look at %s instead.") % cache_pointer(e))
+                L.append(head + " — " + nm("ts") + (". (나) ts(ISO-8601 또는 epoch 초)를 넣으면 같은 문서의 판을 시간 순서로 이어 닮음을 잽니다. "
+                                                    "이 로그에서는 대신 %s 를 봅니다." if ko else
+                                                    ". (b) With ts (ISO-8601 or epoch seconds), a document's versions are put in "
+                                                    "order and similarity is measured. On this log, look at %s instead.") % cache_pointer(e))
                 continue
             if stt == "not_measured":
-                L.append(head + " — " + nm(e["missing"]) + (". (나) output 또는 output_token_hashes(--hashify)를 넣으면 겹침을 잰다."
-                                                            if ko else ". (b) With output or output_token_hashes (--hashify) overlap is measured."))
+                L.append(head + " — " + nm(e["missing"]) + (". (나) output 또는 output_token_hashes(--hashify)를 넣으면 닮음을 잽니다."
+                                                            if ko else ". (b) With output, or output_token_hashes from --hashify, similarity is measured."))
                 continue
             if res.get("upper_bound_only"):  # no section 5 without a body
-                look = (" 이 로그에서는 대신 %s 를 본다." if ko else " On this log look at %s instead.") % cache_pointer(e)
+                look = (" 이 로그에서는 대신 %s 를 봅니다." if ko else " On this log, look at %s instead.") % cache_pointer(e)
             else:
-                look = (" 이 로그에서는 대신 %s와 5절 호출 0 을 본다." if ko else
-                        " On this log look at %s and section 5 (zero call) instead.") % cache_pointer(e)
+                look = (" 이 로그에서는 대신 %s와 5절 호출 없이 답하기를 봅니다." if ko else
+                        " On this log, look at %s and section 5 (answering without a call) instead.") % cache_pointer(e)
             by = e["blocked_by"]
             if by == "no_pairs":
-                a = (("(가) 짝 0개 — 키 %d개 중 호출이 두 번 이상 온 키가 없다(본문 있는 호출 %d건, 답 길이 중앙값 %s 토큰). "
-                      "(나) 같은 문서·같은 건의 id 를 group_key 로 넣으면 짝이 생긴다." if ko else
-                      "(a) 0 pairs — none of the %d keys got two calls or more (%d calls with a body, median answer %s "
-                      "tokens). (b) A group_key holding the document or case id makes pairs.")
+                a = (("(가) 답 쌍 0개 — 문서 %d개 중 호출이 두 번 이상 온 문서가 없습니다(본문 있는 호출 %d건, 답 길이 중앙값 %s 토큰). "
+                      "(나) 같은 문서·같은 건의 id 를 group_key 로 넣으면 답 쌍이 생깁니다." if ko else
+                      "(a) 0 answer pairs: none of the %d documents got two or more calls (%d calls with a body, median "
+                      "answer %s tokens). (b) Put the document or case id in group_key to form pairs.")
                      % (e["keys"], e["calls_with_body"], _n(e["answer_median"])))
             elif by == "length" and res.get("upper_bound_only"):
                 a = (("(가) 출력 토큰 중앙값 %s(최대 %s, 호출 %d건) — 길이선 %d 토큰(hive/switch.py SWITCH min_answer_tokens) "
-                      "이상 0건. 겹침은 %s. (나) 같은 키로 %d 토큰 이상 답이 되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜진다." if ko else
-                      "(a) median output %s tokens (max %s, %d calls) — 0 at or above the %d-token length line (hive/switch.py "
-                      "SWITCH min_answer_tokens). Overlap: %s. (b) It turns on for traffic that repeats answers of %d tokens "
-                      "or more under one key (documents, reports, amendments).")
+                      "이상 0건. 닮음은 %s. (나) 같은 문서로 %d 토큰 이상 답이 되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜집니다." if ko else
+                      "(a) median output %s tokens (max %s, %d calls); none reach the %d-token length line (hive/switch.py "
+                      "SWITCH min_answer_tokens). Similarity: %s. (b) This applies to traffic that keeps producing answers "
+                      "of %d+ tokens for the same document (documents, reports, amendments).")
                      % (_n(e["answer_median"]), _n(e["answer_max"]), e["answers"], sw["min_answer_tokens"],
                         nm(e["overlap_missing"]), sw["min_answer_tokens"]))
             elif by == "length":
-                a = (("(가) 짝 %d개의 답 길이 중앙값 %s 토큰(최대 %s) — 길이선 %d 토큰(hive/switch.py SWITCH min_answer_tokens) "
-                      "이상 0개. 겹침 %.2f(SWITCH min_overlap) 이상 짝 %d개, 겹침 중앙 %s. (나) 같은 키로 %d 토큰 이상 답이 "
-                      "되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜진다." if ko else
-                      "(a) median answer of the %d pairs %s tokens (max %s) — 0 at or above the %d-token length line "
-                      "(hive/switch.py SWITCH min_answer_tokens). Pairs at overlap %.2f or more (SWITCH min_overlap): %d, "
-                      "median overlap %s. (b) It turns on for traffic that repeats answers of %d tokens or more under one "
-                      "key (documents, reports, amendments).")
+                a = (("(가) 답 쌍 %d개의 답 길이 중앙값 %s 토큰(최대 %s) — 길이선 %d 토큰(hive/switch.py SWITCH min_answer_tokens) "
+                      "이상 0개. 닮음 %.2f(SWITCH min_overlap) 이상 답 쌍 %d개, 닮음 중앙 %s. (나) 같은 문서로 %d 토큰 이상 답이 "
+                      "되풀이되는 트래픽(문서·보고서·개정문 생성)이면 켜집니다." if ko else
+                      "(a) %d answer pairs, median answer %s tokens (max %s); none reach the %d-token length line "
+                      "(hive/switch.py SWITCH min_answer_tokens). Pairs at similarity %.2f+ (SWITCH min_overlap): %d, "
+                      "median similarity %s. (b) This applies to traffic that keeps producing answers of %d+ tokens for "
+                      "the same document (documents, reports, amendments).")
                      % (e["pairs"], _n(e["answer_median"]), _n(e["answer_max"]), sw["min_answer_tokens"], sw["min_overlap"],
                         e["pairs_ge_overlap"], "—" if e["overlap_median"] is None else "%.3f" % e["overlap_median"],
                         sw["min_answer_tokens"]))
             elif by == "overlap":
-                a = (("(가) 짝 %d개 중 겹침 %.2f(hive/switch.py SWITCH min_overlap) 이상 0개, 겹침 중앙 %s. 답 %d 토큰 이상 짝은 "
-                      "%d개. (나) 같은 키의 다음 답이 앞 답을 크게 되풀이하는 트래픽(개정·갱신형 문서)이면 켜진다." if ko else
-                      "(a) 0 of %d pairs at overlap %.2f or more (hive/switch.py SWITCH min_overlap), median overlap %s. "
-                      "Pairs with answers of %d tokens or more: %d. (b) It turns on for traffic whose next answer largely "
-                      "repeats the previous one under the same key (amended or updated documents).")
+                a = (("(가) 답 쌍 %d개 중 닮음 %.2f(hive/switch.py SWITCH min_overlap) 이상 0개, 닮음 중앙 %s. 답 %d 토큰 이상 답 쌍은 "
+                      "%d개. (나) 같은 문서의 다음 답이 앞 답을 크게 되풀이하는 트래픽(개정·갱신형 문서)이면 켜집니다." if ko else
+                      "(a) 0 of %d answer pairs at similarity %.2f+ (hive/switch.py SWITCH min_overlap), median similarity "
+                      "%s. Pairs with answers of %d+ tokens: %d. (b) This applies to traffic where the next answer largely "
+                      "repeats the previous one for the same document (amended or updated documents).")
                      % (e["pairs"], sw["min_overlap"], "—" if e["overlap_median"] is None else "%.3f" % e["overlap_median"],
                         sw["min_answer_tokens"], e["answers_ge_length"]))
             else:
-                a = (("(가) 짝 %d개 중 답 %d 토큰 이상 %d개, 겹침 %.2f 이상 %d개 — 둘 다 넘는 짝 0개(hive/switch.py SWITCH). "
-                      "(나) 긴 답이 앞 답을 되풀이하는 키가 생기면 켜진다." if ko else
-                      "(a) of %d pairs, %d have answers of %d tokens or more and %d overlap %.2f or more — none both "
-                      "(hive/switch.py SWITCH). (b) It turns on once a key's long answers repeat the previous one.")
+                a = (("(가) 답 쌍 %d개 중 답 %d 토큰 이상 %d개, 닮음 %.2f 이상 %d개 — 둘 다 넘는 답 쌍 0개(hive/switch.py SWITCH). "
+                      "(나) 긴 답이 앞 답을 되풀이하는 문서가 생기면 켜집니다." if ko else
+                      "(a) of %d answer pairs, %d have answers of %d+ tokens and %d have similarity %.2f+, but none have "
+                      "both (hive/switch.py SWITCH). (b) This applies once a document's long answers repeat the previous one.")
                      % ((e["pairs"], sw["min_answer_tokens"], e["answers_ge_length"], sw["min_overlap"], e["pairs_ge_overlap"])
                         if ko else (e["pairs"], e["answers_ge_length"], sw["min_answer_tokens"], e["pairs_ge_overlap"],
                                     sw["min_overlap"])))
             L.append(head + " — **0%**. " + a + look)
         elif ax == "replay":
             n, f1 = e["on_pairs"], e["on_pairs_first_of_key"]
-            why = ((("켜짐 짝 %d개 모두 키의 첫 짝(이력 없음)" % n) if f1 == n else
-                    ("켜짐 짝 %d개 중 %d개가 키의 첫 짝(이력 없음), 나머지 %d개는 같은 키의 앞 짝 이력이 선 아래였거나 재전송 창 "
-                     "안이었다" % (n, f1, n - f1))) if ko else
-                   (("all %d switch-on pairs are their key's first pair (no history)" % n) if f1 == n else
-                    ("of %d switch-on pairs, %d are their key's first pair (no history); the other %d had key history "
-                     "under the line or fell in the resend window" % (n, f1, n - f1))))
-            L.append(("- 엔진 재생 — **0%%**. (가) %s. (나) 키마다 짝이 쌓이면(더 긴 기간의 로그) 켜진다." if ko else
-                      "- Engine replay — **0%%**. (a) %s. (b) It turns on as pairs build up per key (a log over a longer "
-                      "period).") % why)
+            why = ((("줄일 수 있는 답 쌍 %d개 모두 그 문서의 첫 답 쌍(이력 없음)" % n) if f1 == n else
+                    ("줄일 수 있는 답 쌍 %d개 중 %d개가 그 문서의 첫 답 쌍(이력 없음), 나머지 %d개는 같은 문서의 앞 답 쌍 이력이 선 아래였거나 재전송 창 "
+                     "안이었습니다" % (n, f1, n - f1))) if ko else
+                   (("all %d reducible answer pairs are their document's first pair (no history)" % n) if f1 == n else
+                    ("of %d reducible answer pairs, %d are their document's first pair (no history); for the other %d, "
+                     "the document's earlier pairs were under the line or fell in the resend window" % (n, f1, n - f1))))
+            L.append(("- 엔진이 판단했다면 — **0%%**. (가) %s. (나) 문서마다 답 쌍이 쌓이면(더 긴 기간의 로그) 켜집니다." if ko else
+                      "- If the engine had decided — **0%%**. (a) %s. (b) This changes as answer pairs build up per "
+                      "document (a log covering a longer period).") % why)
         elif ax == "fact_input":
-            L.append("- " + ("축 3 사실 입력 — " if ko else "Axis 3, fact input — ") + nm(e["missing"]) +
-                     (". (나) 요청 본문(prompt, 또는 --hashify 의 prompt_token_hashes)을 넣으면 잰다." if ko else
-                      ". (b) With the request body (prompt, or --hashify's prompt_token_hashes) it is measured."))
+            L.append("- " + ("사실 입력 — " if ko else "Facts in the request — ") + nm(e["missing"]) +
+                     (". (나) 요청 본문(prompt, 또는 --hashify 의 prompt_token_hashes)을 넣으면 잽니다." if ko else
+                      ". (b) With the request body (prompt, or prompt_token_hashes from --hashify), it is measured."))
         elif ax == "zero_call":
             z = res["zero_call"]
-            ref = (("답을 보고 센 상한(참고): 직전 답과 완전 일치 짝 %d · 숫자만 다름 포함 %d." if ko else
-                    "Upper bound counted with the answer known (reference): pairs identical to the previous answer %d · "
-                    "with digits-only differences %d.") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]))
+            ref = (("답을 보고 센 상한(참고): 직전 답과 완전 일치 답 쌍 %d · 숫자만 다름 포함 %d." if ko else
+                    "For reference, counted with the answer known (an upper bound): pairs identical to the previous "
+                    "answer %d · allowing digit-only differences %d.") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]))
             if stt == "not_measured":
-                L.append("- " + ("5절 호출 0 관문 — " if ko else "Section 5, the zero-call gate — ") + nm(e["missing"]) +
-                         (". (나) prompt 또는 prompt_hash 를 넣으면 돈다. " if ko else ". (b) With prompt or prompt_hash it runs. ")
+                L.append("- " + ("5절 호출 없이 답하기 — " if ko else "Section 5, answering without a call — ") + nm(e["missing"]) +
+                         (". (나) prompt 또는 prompt_hash 를 넣으면 돕니다. " if ko else ". (b) With prompt or prompt_hash, it runs. ")
                          + ref)
             else:
-                L.append((("- 5절 호출 0 관문 — **0%%**. (가) 짝 %d개 중 프롬프트가 있는 짝 %d개, 그중 직전 호출과 숫자만 빼고 같은 프롬프트 0개. %s "
-                           "(나) 같은 요청이 되풀이되는 트래픽(고정 템플릿·FAQ)이면 관문이 고른다.") if ko else
-                          ("- Section 5, the zero-call gate — **0%%**. (a) %d pairs, %d of them with a prompt; 0 equal the previous "
-                           "call's prompt except digits. %s (b) The gate picks traffic that repeats the same request "
-                           "(fixed templates, FAQs).")) % (e["pairs"], e["pairs_with_prompt"], ref))
+                L.append((("- 5절 호출 없이 답하기 — **0%%**. (가) 답 쌍 %d개 중 프롬프트가 있는 답 쌍 %d개, 그중 직전 호출과 숫자만 빼고 같은 프롬프트 0개. %s "
+                           "(나) 같은 요청이 되풀이되는 트래픽(고정 템플릿·FAQ)이면 켜는 조건이 고릅니다.") if ko else
+                          ("- Section 5, answering without a call — **0%%**. (a) %d answer pairs, %d of them with a prompt; "
+                           "none match the previous call's prompt apart from digits. %s (b) The rule picks traffic that "
+                           "repeats the same request (fixed templates, FAQs).")) % (e["pairs"], e["pairs_with_prompt"], ref))
         else:
             w, t = W[ax], ZTITLE[ax][0 if ko else 1]
             if stt == "not_measured":
                 L.append("- %s — %s." % (t, nm(e["missing"])))
                 continue
             why = {
-                "failed": (("상태가 있는 호출 %d건 중 토큰이 청구된 실패 0건", "of %d calls with a status, 0 failed calls were billed"),
+                "failed": (("상태가 있는 호출 %d건 중 토큰이 청구된 실패 0건", "of %d calls with a status, no failed call was billed"),
                            (w.get("calls_with_status"),)),
                 "resent": (("요청을 알 수 있는 호출 %d건 중 %d초(RETRY_WINDOW) 안에 다시 간 것 0건",
-                            "of %d calls whose request is known, 0 sent again within %d s (RETRY_WINDOW)"),
+                            "of %d calls whose request is known, none was resent within %d s (RETRY_WINDOW)"),
                            (w.get("calls_with_request"), w.get("window_s"))),
-                "truncated": (("판단 가능한 호출 %d건 중 잘림 0건", "of %d calls judged, 0 cut"), (w.get("calls_judged"),)),
+                "truncated": (("판단 가능한 호출 %d건 중 잘림 0건", "of %d calls checked, none was cut off"), (w.get("calls_judged"),)),
                 "prefix_unstable": (("접두가 있는 호출 %d건, 블록 %d종 모두 직렬화 한 가지",
-                                     "%d calls with a prefix; all %d blocks serialized one way"),
+                                     "%d calls with a prefix; each of the %d kinds of block serialized one way"),
                                     (w.get("calls_with_prefix"), w.get("blocks_checked"))),
                 "cache_min": (("판단 가능한 호출 %d건 모두 벤더 캐시 최소 길이(cache_constants.json) 이상",
-                               "all %d calls judged are at or above the vendor cache minimum (cache_constants.json)"),
+                               "all %d calls checked are at or above the vendor cache minimum (cache_constants.json)"),
                               (w.get("calls_judged"),)),
-                "billing": (("설명되지 않는 차이 %s — 선 %s(BILL_GAP_MIN) 미만", "unexplained difference %s — under the %s line (BILL_GAP_MIN)"),
+                "billing": (("설명되지 않는 차이 %s — 선 %s(BILL_GAP_MIN) 미만", "unexplained %s, under the %s line (BILL_GAP_MIN)"),
                             (pct(w.get("unexplained_share"), 2), pct(BILL_GAP_MIN, 2))),
                 "cache_hit": (("캐시 최소 길이 이상 호출의 적중률 %s — 선 %s(hive/waste.py CACHE_HIT_LOW) 이상",
-                               "hit rate over the cache minimum %s — at or above the %s line (hive/waste.py CACHE_HIT_LOW)"),
+                               "hit rate above the cache minimum %s, at or above the %s line (hive/waste.py CACHE_HIT_LOW)"),
                               (pct(w.get("over_min_hit_rate")), pct(w.get("line")))),
             }[ax]
-            nxt = (("7-7 캐시 적중률을 본다" if ko else "look at 7-7, the cache hit rate") if ax == "cache_min" else
-                   ("이 로그 범위에서 이 항목으로 줄일 몫이 없다(낭비가 없다는 뜻)" if ko else
-                    "nothing to cut through this item within the log (no waste here)"))
-            L.append(("- %s — 해당 없음. (가) %s. (나) %s." if ko else "- %s — none. (a) %s. (b) %s.")
+            nxt = (("7-7 캐시 적중률을 보세요" if ko else "look at 7-7, the cache hit rate") if ax == "cache_min" else
+                   ("이 로그 범위에서 이 항목으로 줄일 몫이 없습니다(낭비가 없다는 뜻)" if ko else
+                    "nothing to cut here within this log (no waste)"))
+            L.append(("- %s — 없음. (가) %s. (나) %s." if ko else "- %s — none. (a) %s. (b) %s.")
                      % (t, why[0][0 if ko else 1] % why[1], nxt))
+    if len(L) == n0:
+        return []
     L.append("")
     return L
 
@@ -3945,13 +7376,126 @@ LOOKS = {"openai_chat":("OpenAI Chat Completions 로그", "an OpenAI Chat Comple
          "azure_openai": ("Azure OpenAI Chat Completions 로그", "an Azure OpenAI Chat Completions log")}
 
 
+def grade_line(res, ko):
+    """Section 0: the input grade (PM 10-22 16:35) -- A text, B token hashes, C metadata only -- and how many of the
+    section-7 items this log shows."""
+    b, W = res["body"], res.get("waste") or {}
+    g = "A" if b["text"] else "B" if b["token_hashes"] else "C"
+    name = {"A": ("본문 있음", "with answer text"), "B": ("토큰 해시", "token hashes"),
+            "C": ("메타데이터만(본문 없음)", "metadata only (no text)")}[g][0 if ko else 1]
+    W = {k: w for k, w in W.items() if k not in NO_KNIFE}
+    seen = sum(1 for w in W.values() if w["status"] != "cannot_judge")
+    more_ = ((" (나머지는 7절 끝에 무엇이 더 있으면 보이는지 적었습니다)" if ko else " (the end of section 7 says what the rest need)")
+             if seen < len(W) else "")
+    # 1.4.2 (ONE-VOICE 3): section 7 keeps the numbers 7-1 to 7-9, so say which two are not in the count
+    skip = (" 7-1(실패 호출 과금)·7-6(과금 대조)은 엔진이 고치는 항목이 아니어서 리포트에 싣지 않습니다." if ko else
+            " Items 7-1 (billed failed calls) and 7-6 (billing check) are left out: the engine does not fix them.")
+    return [("- 입력 등급 %s — %s. 점검 항목 %d개 중 %d개를 봅니다%s.%s" if ko else "- input grade %s — %s. %d of %d checklist items can be checked%s.%s")
+            % ((g, name, len(W), seen, more_, skip) if ko else (g, name, seen, len(W), more_, skip))] if W else []
+
+
+def billing_line(res, ko):
+    """Section 0: how the log's calls are billed (PM 10-22 19:20) -- the axis next to the input grade."""
+    m = res.get("billing_mode")
+    if not m:
+        return []
+    return [{"api": ("- 과금 방식: API 종량(토큰당 과금) — 금액은 API usage × 가격표입니다. 정액·구독이면 `--flat all`.",
+                     "- Billing: per token on the API — dollars are API usage x the price list. On a flat rate or a plan, add `--flat all`."),
+             "subscription": ("- 과금 방식: 구독·정액 — 토큰을 줄여도 청구액은 그대로입니다. 그래서 금액 대신 한도로 봅니다(1절).",
+                              "- Billing: plan or flat rate — fewer tokens do not change the bill, so section 1 shows the limit instead of dollars."),
+             "unknown": ("- 과금 방식: 알 수 없음 — 코딩 에이전트 기록에는 API 키 과금인지 구독(Pro·Max 등)인지가 없습니다. 구독이면 금액은 "
+                         "의미가 없어 1절에 한도를 먼저 적었습니다. 금액은 같은 토큰을 API 로 불렀을 때의 값입니다. 구독이라고 표시하려면 `--flat all`.",
+                         "- Billing: unknown — a coding agent's record does not say API key or plan (Pro, Max and so on). On a plan "
+                         "dollars mean nothing, so section 1 shows the limit first. Dollars are what the same tokens would cost on "
+                         "the API. To mark a plan, add `--flat all`.")}[m][0 if ko else 1]]
+
+
+def limit_lines(res, ko):
+    """Section 1, the limit view (PM 10-22 19:18): extra work under the same usage limit, from this log's tokens."""
+    lv = res.get("limit")
+    if not lv or not lv["tokens"]:
+        return []
+    name = {"resent": ("7-2 짧은 간격 재전송을 없애면", "Without the 7-2 resends"),
+            "truncated": ("7-3 잘린 첫 시도의 출력을 없애면", "Without the output of the 7-3 cut first attempts"),
+            "redraft": ("7-2 다시 쓴 초안과 그 심사 호출을 없애면", "Without the 7-2 rewritten drafts and their judge calls")}
+    cr = int(lv["cache_read_tokens"] or 0)
+    # PM 10-23 07:32 item 3: a log with nothing to remove and its cache already well used says so first, as a result
+    good = lv.get("already_good") and not lv["items"] and lv.get("nothing_found")
+    top = [("- **결과: 이 기록은 이미 잘 쓰고 있습니다.** 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 몫이 거의 없고, 토큰을 덜어 "
+            "낼 항목도 찾지 못했습니다." if ko else
+            "- **Result: this log is already used well.** Cache reads are **%s** of input. Little is left for caching to "
+            "cut, and no item here removes tokens.") % pct(lv["already_good"]["cache_hit_rate"])] if good else []
+    if cr:
+        L = top + [("- **한도로 보면** — 같은 사용 한도 안에서 더 할 수 있는 일. 이 기록의 토큰 %s(캐시 읽기 %s 포함)으로 셉니다. 벤더가 한도에 "
+              "캐시 읽기를 세는지는 공개돼 있지 않아 뺀 값을 괄호에 같이 적었습니다." if ko else
+              "- **As a usage limit** — how much more work fits in the same limit, counted on this log's %s tokens (%s of "
+              "them cache reads). Vendors do not publish whether a limit counts cache reads, so the value without them is in brackets.")
+             % ("{:,}".format(int(lv["tokens"])), "{:,}".format(cr))]
+    else:  # no cache reads: the bracketed values would only repeat the same numbers
+        L = top + [("- **한도로 보면** — 같은 사용 한도 안에서 더 할 수 있는 일. 이 기록의 토큰 %s 으로 셉니다." if ko else
+              "- **As a usage limit** — how much more work fits in the same limit, counted on this log's %s tokens.")
+             % "{:,}".format(int(lv["tokens"]))]
+    if res.get("billing_mode") == "api":  # site 10-23 08:54 item 4: per-token billing has no plan limit, so say whose limit
+        L[len(top)] = L[len(top)].replace("- **한도로 보면** —", "- 구독이라면, **한도로 보면** —", 1).replace(
+            " 같은 사용 한도 안에서 더 할 수 있는 일.", "", 1).replace(
+            "- **As a usage limit** —", "- On a plan, **as a usage limit** —", 1)
+    for it in lv["items"]:
+        if not cr:
+            L.append(("  - %s: 토큰의 %s → 같은 한도로 약 **%s 더**" if ko else "  - %s: %s of tokens → about **%s more** work in the same limit")
+                     % (name[it["item"]][0 if ko else 1], pct(it["share"]),
+                        pct(it["more_work"]) if it["more_work"] is not None else "—"))
+            continue
+        L.append(("  - %s: 토큰의 %s(캐시 읽기 빼면 %s) → 같은 한도로 약 **%s 더**(캐시 읽기 빼면 %s)" if ko else "  - %s: %s of tokens (%s without cache reads) → about **%s more** work in the same limit (%s without cache reads)")
+                 % (name[it["item"]][0 if ko else 1], pct(it["share"]), pct(it["share_without_cache_reads"]) if it["share_without_cache_reads"] is not None else "—",
+                    pct(it["more_work"]) if it["more_work"] is not None else "—",
+                    pct(it["more_work_without_cache_reads"]) if it["more_work_without_cache_reads"] is not None else "—"))
+    if good:
+        return L + [""]
+    if not lv["items"]:
+        L.append(("  - 이 기록에서 토큰을 덜어 낼 항목을 찾지 못했습니다." if ko else "  - No item in this log removes tokens."))
+    if lv.get("already_good") and lv.get("nothing_found"):
+        L.append(("  - 이미 잘 쓰고 있는 것: 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 몫이 거의 남아 있지 않습니다." if ko else
+                  "  - Already done well: cache reads are **%s** of input. Little is left for caching to cut.")
+                 % pct(lv["already_good"]["cache_hit_rate"]))
+    elif lv.get("already_good"):  # WRONG-SWEEP (10-24, CS): 7-7 is fine but another item of section 7 still saves
+        L.append(("  - 캐시 읽기는 입력의 **%s** 로, 지금 요청 모양에서 읽을 수 있는 만큼 읽고 있습니다. 요청 모양을 바꿔 더 줄이는 길은 7절에 있습니다." if ko else
+                  "  - Cache reads are **%s** of input, as much as the calls' present shape allows. Ways to cut more by "
+                  "changing that shape are in section 7.") % pct(lv["already_good"]["cache_hit_rate"]))
+    return L + [""]
+
+
+FILES_SHOWN = 15  # design value: section 0 lists at most this many files of a folder
+
+
 def sources_line(res, ko):
     """Section 0: which fields were read under another name (v1.0.2) -- the user has to see what was read as what."""
     fs = res.get("field_sources") or {}
     head = [("- 형식: CSV (머리 줄을 필드 이름으로)" if ko else "- format: CSV (header row as field names)")] \
         if res.get("format") == "csv" else \
         [("- 형식: JSON 배열 (원소 하나 = 호출 하나)" if ko else "- format: JSON array (one element per call)")] \
-        if res.get("format") == "json" else []
+        if res.get("format") == "json" else \
+        [("- 형식: 파일마다 다름" if ko else "- format: differs by file")] if res.get("format") == "mixed" else []
+    files = res.get("files") or []
+    shown = sorted(files, key=lambda e: (e["ok"] > 0, -e["ok"]))[:FILES_SHOWN] if len(files) > FILES_SHOWN else files
+    if len(files) > FILES_SHOWN:
+        rest = [e for e in files if e not in shown]
+        head.append(("- 파일 %d개 — 못 읽은 파일과 호출이 많은 파일 %d개만 아래에 적습니다. 나머지 %d개에서 호출 %d건." if ko else
+                     "- %d files — the unread ones and the largest, %d in all, are listed below; the other %d gave %d calls.")
+                    % (len(files), len(shown), len(rest), sum(e["ok"] for e in rest)))
+    for e in shown:
+        if e["ok"]:
+            head.append(("- 파일 %s — %s, 호출 %d건%s" if ko else "- file %s — %s, %d calls%s")
+                        % (e["file"], e["format"], e["ok"], ((" (JSON 아닌 줄 %d)" if ko else " (%d lines not JSON)") % e["bad_json"])
+                           if e["bad_json"] else ""))
+            continue
+        why = (("%s 같습니다" % LOOKS[e["looks_like"]][0]) if ko else ("looks like %s" % LOOKS[e["looks_like"]][1])) \
+            if e.get("looks_like") in LOOKS else \
+            (("JSON 객체 줄이 아닙니다(%d줄)" % e["lines"]) if ko else ("no JSON object lines (%d lines)" % e["lines"])) \
+            if not e.get("keys") else \
+            (("필드 %s 가 있지만 호출 기록으로 읽을 것이 없습니다" % ", ".join(e["keys"])) if ko else
+             ("has fields %s but nothing reads as a call" % ", ".join(e["keys"])))
+        head.append(("- 파일 %s — 못 읽음: %s. `--peek` 로 이 파일을 무엇으로 읽는지 보세요." if ko else
+                     "- file %s — not read: %s. Run `--peek` on it to see what is read as what.") % (e["file"], why))
     if not fs:
         return head
     items = ["%s ← %s (%d%s)" % (f, src, c, "줄" if ko else "")
@@ -3969,7 +7513,7 @@ def hint_lines(res, ko, field):
         out.append(("%s 같습니다 — 이 형식은 별칭으로 읽는데도 %s 를 못 찾았습니다." if ko else
                     "This looks like %s — the scanner reads that shape, yet found no %s.") % (lk[0 if ko else 1], field))
     if c:
-        out.append(("`%s` 에 %s 같은 값이 보입니다. `--map %s=%s` 로 지정하십시오." if ko else
+        out.append(("`%s` 에 %s 같은 값이 보입니다. `--map %s=%s` 로 지정하세요." if ko else
                     "`%s` holds values that look like %s. Point the scanner at it with `--map %s=%s`.")
                    % (c[0], ("시각" if field == "ts" else "답 본문") if ko else ("a time" if field == "ts" else "the answer body"),
                       field, c[0]))
@@ -3980,7 +7524,7 @@ def hint_lines(res, ko, field):
                    % (h.get("records_looked_at", 0),
                       ("시각(ISO-8601 또는 epoch)" if field == "ts" else "답 본문(%d자 이상 문자열)" % CAND_TEXT_MIN) if ko else
                       ("a time (ISO-8601 or epoch)" if field == "ts" else "an answer body (a string of %d+ characters)" % CAND_TEXT_MIN)))
-    out.append(("`--peek` 로 무엇을 무엇으로 읽는지 먼저 보십시오(호출 0, 앞 %d줄)." if ko else
+    out.append(("`--peek` 로 무엇을 무엇으로 읽는지 먼저 보세요(LLM 호출 없이 앞 %d줄만 읽습니다)." if ko else
                 "Run with `--peek` first to see what is read as what (no calls, first %d records).") % PEEK_LINES)
     return out
 
@@ -4049,37 +7593,37 @@ def input_checks(recs, ko=True):
             elif b["t"] < a["end"]:
                 conc += 1
     if conc:
-        L.append(("- 동시 중복: 같은 요청 %d쌍 중 %d쌍은 둘째가 첫째가 끝나기 전에 시작했다. 재전송 낭비(7-2)가 아니라 동시에 두 번 "
-                  "나간 것이다 — 7-2 숫자를 읽을 때 이 쌍을 빼십시오." if ko else
-                  "- Concurrent duplicates: of %d same-request pairs, %d started before the first had ended. That is one "
-                  "request sent twice at once, not a re-send (7-2) -- leave these out when reading 7-2.") % (same, conc))
+        L.append(("- 동시 중복: 같은 요청 %d쌍 중 %d쌍은 둘째가 첫째가 끝나기 전에 시작했습니다. 재전송 낭비(7-2)가 아니라 동시에 두 번 "
+                  "나간 것입니다 — 7-2 숫자를 읽을 때 이 쌍을 빼세요." if ko else
+                  "- Concurrent duplicates: of %d same-request pairs, %d started before the first had finished. That is "
+                  "one request sent twice at once, not a resend, so leave these out when reading 7-2.") % (same, conc))
     elif same and no_end:
         L.append(("- 같은 요청이 %d초 안에 다시 나간 쌍 %d개. 끝 시각(end_time / latency_ms) 필드가 없어 동시 중복인지 재전송인지 "
                   "못 가립니다 — 7-2 는 재전송으로 셉니다." if ko else
-                  "- Same request again within %d s: %d pairs. Without an end time (end_time / latency_ms) a concurrent "
-                  "duplicate cannot be told from a re-send -- 7-2 counts them as re-sends.") % (RESENT_WINDOW, same))
+                  "- The same request sent again within %d s: %d pairs. Without an end time (end_time / latency_ms), a "
+                  "concurrent duplicate looks the same as a resend, so 7-2 counts them as resends.") % (RESENT_WINDOW, same))
     # 2 failed calls logged with zero tokens
     fails = [r for r in rows if r["ex"]["failed"]]
     zero = sum(1 for r in fails if not (r["out_tok"] or 0) and not (r["in_tok"] or 0))
     if fails and zero:
-        L.append(("- 실패 호출 %d건 중 %d건이 토큰 0 으로 남아 있다. 0 이 '청구 0' 인지 '기록 누락' 인지는 로그만으로 모릅니다 — "
-                  "실패 비중을 금액(7-1)으로 읽기 전에 확인하십시오." if ko else
-                  "- %d failed calls, %d of them logged with 0 tokens. Whether 0 means 'billed 0' or 'not recorded' the log "
-                  "cannot say -- check before reading the failure share as money (7-1).") % (len(fails), zero))
+        L.append(("- 실패 호출 %d건 중 %d건이 토큰 0 으로 남아 있습니다. 0 이 '청구 0' 인지 '기록 누락' 인지는 로그만으로 모릅니다 — "
+                  "실패 비중을 금액(7-1)으로 읽기 전에 확인하세요." if ko else
+                  "- %d failed calls, %d of them logged with 0 tokens. The log cannot say whether 0 means 'billed 0' or "
+                  "'not recorded'. Check this before reading the failures as money (7-1).") % (len(fails), zero))
     # 8 pre-filtered logs: no failure at all
     if not fails and any(r["ex"]["failed"] is False for r in rows):
-        L.append(("- 실패 호출이 0건이다. 로그를 만들 때 실패·재시도를 걸러냈다면 7-1·7-2 는 0 에 가깝게 나옵니다 — 로그가 "
-                  "전처리된 것인지 확인하십시오." if ko else
-                  "- No failed call in these records. If failures / retries were filtered out when the log was made, 7-1 "
-                  "and 7-2 come out near 0 -- check whether the log was pre-processed."))
+        L.append(("- 실패 호출이 0건입니다. 로그를 만들 때 실패·재시도를 걸러냈다면 7-1·7-2 는 0 에 가깝게 나옵니다 — 로그가 "
+                  "전처리된 것인지 확인하세요." if ko else
+                  "- No failed calls in these records. If failures and retries were filtered out when the log was made, "
+                  "7-1 and 7-2 will come out near 0. Check whether the log was pre-processed."))
     # 6 completion status unknown
     words = [r["status_word"] for r in rows if r["status_word"]]
     unk = sum(1 for w in words if w not in FAIL_STATUS and w not in OK_STATUS)
     if unk:
-        L.append(("- 상태 값이 있는 %d줄 중 %d줄은 완주했는지 모르는 값(unknown 등)이다. 완주 여부로 비용을 비교하는 판단에서는 이 "
-                  "줄을 빼십시오." if ko else
-                  "- Of %d records with a status word, %d say nothing about completion (unknown and the like). Leave them out "
-                  "of any cost comparison by completion.") % (len(words), unk))
+        L.append(("- 상태 값이 있는 %d줄 중 %d줄은 완주했는지 모르는 값(unknown 등)입니다. 완주 여부로 비용을 비교하는 판단에서는 이 "
+                  "줄을 빼세요." if ko else
+                  "- Of %d records with a status, %d do not say whether the call completed (unknown and similar). Leave "
+                  "them out of any cost comparison based on completion.") % (len(words), unk))
     by_g = collections.defaultdict(list)
     for r in rows:
         if r["g"] is not None:
@@ -4087,10 +7631,10 @@ def input_checks(recs, ko=True):
     # 7 groups that stopped after the first call
     one = sum(1 for rs in by_g.values() if len(rs) == 1)
     if by_g and one:
-        L.append(("- group_key 묶음 %d개 중 %d개는 호출이 1건뿐이다(첫 호출 뒤 끝남). 짝이 없어 판단에 안 들어가고, 접두·세션 "
-                  "판정에서도 따로 세십시오." if ko else
-                  "- %d group_key groups, %d with a single call (ended after the first). They make no pair; count them apart "
-                  "in prefix / session judgements too.") % (len(by_g), one))
+        L.append(("- group_key 묶음 %d개 중 %d개는 호출이 1건뿐입니다(첫 호출 뒤 끝남). 답 쌍이 없어 판단에 안 들어가고, 접두·세션 "
+                  "판정에서도 따로 세세요." if ko else
+                  "- %d group_key groups, %d of them with a single call (ended after the first). They form no answer pair. "
+                  "Count them separately for prefix and session checks too.") % (len(by_g), one))
     # 5 message count shrinking inside a group
     shrink = 0
     for rs in by_g.values():
@@ -4098,24 +7642,24 @@ def input_checks(recs, ko=True):
         ns = [n for n in ns if n is not None]
         shrink += any(b < a for a, b in zip(ns, ns[1:]))
     if shrink:
-        L.append(("- 묶음 %d개에서 요청의 메시지 수가 중간에 줄었다(기억창·요약형 하네스). '한 대화가 자라난다' 는 가정을 쓰는 "
-                  "판단(접두 공유)에서는 이 묶음을 빼십시오." if ko else
-                  "- In %d groups the request's message count drops midway (windowed / summarising harness). Leave them out "
-                  "of judgements that assume one growing conversation (prefix sharing).") % shrink)
+        L.append(("- 묶음 %d개에서 요청의 메시지 수가 중간에 줄었습니다(기억창·요약형 하네스). '한 대화가 자라난다' 는 가정을 쓰는 "
+                  "판단(접두 공유)에서는 이 묶음을 빼세요." if ko else
+                  "- In %d groups the number of messages per request drops partway (a windowed or summarizing harness). "
+                  "Leave them out of checks that assume one growing conversation (prefix sharing).") % shrink)
     # 3 + 4 tool definitions
     reqs = [r["req"] for r in rows if isinstance(r["req"], dict)]
     with_t = sum(1 for q in reqs if q.get("tools") or q.get("toolConfig"))
     if with_t and with_t < len(reqs):
-        L.append(("- 요청 %d건 중 도구 정의가 있는 것 %d건 · 없는 것 %d건이 섞였다. 도구 유무가 다른 요청끼리 접두를 비교하면 가짜 "
-                  "'공유 0' 이 나온다 — 접두(7-4)는 도구 유무가 같은 요청끼리 읽으십시오." if ko else
-                  "- Of %d calls, %d carry tool definitions and %d do not. Comparing prefixes across the two makes a false "
-                  "'nothing shared' -- read the prefix item (7-4) within calls of the same kind.")
+        L.append(("- 요청 %d건 중 도구 정의가 있는 것 %d건 · 없는 것 %d건이 섞였습니다. 도구 유무가 다른 요청끼리 접두를 비교하면 가짜 "
+                  "'공유 0' 이 나옵니다 — 접두(7-4)는 도구 유무가 같은 요청끼리 읽으세요." if ko else
+                  "- Of %d calls, %d carry tool definitions and %d do not. Comparing prefixes across the two gives a false "
+                  "'nothing shared', so read the prefix item (7-4) within calls of the same kind.")
                  % (len(reqs), with_t, len(reqs) - with_t))
     if with_t:
-        L.append(("- 도구 정의가 실제로 보낸 바이트 그대로인지(게이트웨이·프록시 기록), SDK·추적기가 다시 만든 객체인지 확인하십시오. "
+        L.append(("- 도구 정의가 실제로 보낸 바이트 그대로인지(게이트웨이·프록시 기록), SDK·추적기가 다시 만든 객체인지 확인하세요. "
                   "키 순서 판정(7-4)은 보낸 바이트일 때만 맞습니다." if ko else
-                  "- Check whether the tool definitions are the bytes actually sent (gateway / proxy log) or an object an SDK "
-                  "or tracer rebuilt. The key-order judgement (7-4) holds only for the bytes sent."))
+                  "- Check whether the tool definitions are the exact bytes sent (a gateway or proxy log) or an object "
+                  "rebuilt by an SDK or tracer. The key-order check (7-4) is only valid on the bytes sent."))
     return L
 
 
@@ -4125,8 +7669,8 @@ def peek(path, field_map=None, lang="ko"):
     ko = lang == "ko"
     FIELD_MAP.clear()
     FIELD_MAP.update(field_map or {})
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        fmt = open_records(path, fh)[0]
+    with open_text(log_files(path)[0]) as fh:
+        fmt = open_records(log_files(path)[0], fh)[0]
     recs = head_records(path)
     seen = collections.OrderedDict((f, {"n": 0, "src": collections.Counter(), "ex": None, "raw": None}) for f in FIELDS)
     readable = timed = body = 0
@@ -4156,10 +7700,10 @@ def peek(path, field_map=None, lang="ko"):
         if not e["n"]:
             if f in ("ts", "output"):
                 c = cand["ts" if f == "ts" else "output"]
-                L.append("%-*s ← %s" % (w, f, (("못 찾음. 후보: %s → `--map %s=%s`" if ko else "not found. candidates: %s -> `--map %s=%s`")
-                                               % (", ".join(c), f, c[0]) if c else ("못 찾음. 후보 없음" if ko else "not found, no candidate"))))
+                L.append("%-*s ← %s" % (w, f, (("못 찾음. 후보: %s → `--map %s=%s`" if ko else "not found. Candidates: %s -> `--map %s=%s`")
+                                               % (", ".join(c), f, c[0]) if c else ("못 찾음. 후보 없음" if ko else "not found, no candidates"))))
             elif f in NUM_FIELDS and cand["tokens"]:
-                L.append("%-*s ← %s" % (w, f, ("못 찾음. 토큰 수 같은 값: %s" if ko else "not found. token-count-like values: %s")
+                L.append("%-*s ← %s" % (w, f, ("못 찾음. 토큰 수 같은 값: %s" if ko else "not found. Values that look like token counts: %s")
                                         % ", ".join(cand["tokens"])))
             continue
         src = ", ".join("%s%s" % (s_, "" if c_ == e["n"] else " ×%d" % c_) for s_, c_ in e["src"].most_common())
@@ -4188,22 +7732,23 @@ def peek(path, field_map=None, lang="ko"):
         L.append("%-*s ← %-34s %s%s" % (w, f, src, exs, "" if e["n"] == len(recs) else
                                          ("  [%d/%d줄]" if ko else "  [%d/%d records]") % (e["n"], len(recs))))
     L.append("→ %d줄 중 %d줄을 읽을 수 있습니다, 그중 ts 있음 %d줄 · 본문 있음 %d줄." % (len(recs), readable, timed, body) if ko else
-             "-> %d of %d records can be read, %d of them with ts, %d with an answer body." % (readable, len(recs), timed, body))
+             "-> %d of %d records can be read: %d with ts, %d with an answer body." % (readable, len(recs), timed, body))
     chk = input_checks(recs, ko)
     if chk:
         L += ["", "입력 검사 (앞 %d줄):" % len(recs) if ko else "input checks (first %d records):" % len(recs)] + chk + [""]
     if readable and not timed:
-        L.append("ts 를 못 찾았습니다 — 시간 기반 축(2~5절 짝·7-2 간격·7-8 접두 수명)은 못 보고, 나머지는 봅니다. 시각이 있으면 "
-                 "위 후보를 `--map ts=<경로>` 로 지정하십시오." if ko else
-                 "No ts found — the time-based axes (pairs of sections 2-5, 7-2 gaps, 7-8 prefix life) cannot be seen, the "
-                 "rest can. If a time is there, point it at a candidate above with `--map ts=<path>`.")
+        L.append("ts 를 못 찾았습니다 — 시각이 필요한 항목(2~5절 답 쌍·7-2 간격·7-8 접두 수명)은 못 보고, 나머지는 봅니다. 시각이 있으면 "
+                 "위 후보를 `--map ts=<경로>` 로 지정하세요." if ko else
+                 "No ts found. Items that need time (answer pairs in sections 2-5, resend gaps in 7-2, prefix lifetime in "
+                 "7-8) are skipped; the rest still run. If the log does have a time, point to it with `--map ts=<path>`, "
+                 "using a candidate above.")
     if readable:
-        L.append("이대로 돌리려면 --peek 를 빼십시오." if ko else "To run on this, drop --peek.")
+        L.append("이대로 돌리려면 --peek 를 빼세요." if ko else "To run the scan, drop --peek.")
     print("\n".join(L))
     return 0 if readable else 1
 
 
-SHARE_DROP = {"input", "mode_requested", "field_map", "field_sources", "field_hints"}  # path names can be the customer's
+SHARE_DROP = {"input", "mode_requested", "field_map", "field_sources", "field_hints", "files"}  # path names can be the customer's
 
 
 def share_summary(res):
@@ -4211,7 +7756,32 @@ def share_summary(res):
     out = {k: v for k, v in res.items() if k not in SHARE_DROP}
     if "pricing" in out:
         out["pricing"] = {k: v for k, v in out["pricing"].items() if k != "table"}
+    out["share_text"] = {lang: share_text(res, lang) for lang in ("ko", "en")}
     return out
+
+
+def share_text(res, lang="ko"):
+    """A few lines to paste anywhere (PM 10-22 16:45 C-9): counts and shares only -- no text, file or company name,
+    model-free, no keys. The section-4 range is labelled as an estimate, as in the report."""
+    ko = lang == "ko"
+    W = res.get("waste") or {}
+    found = [ITEM_NAMES[k][0 if ko else 1] for k in ITEM_KEYS if (W.get(k) or {}).get("status") == "found"]
+    s = res.get("savings") or {}
+    L = ["링클비 진단 — 호출 %s건" % "{:,}".format(res.get("calls") or 0) if ko else
+         "Linklbee scan — %s calls" % "{:,}".format(res.get("calls") or 0)]
+    if s.get("share_of_bill_low") is not None and s.get("share_of_bill_high"):
+        L.append(("줄일 여지(추정): 청구액의 %s ~ %s" if ko else "room to cut (estimate): %s – %s of the bill")
+                 % (pct(s["share_of_bill_low"]), pct(s["share_of_bill_high"])))
+    if res.get("bill") and res["bill"].get("output_share") is not None:
+        L.append(("청구서에서 출력 몫: %s" if ko else "output's share of the bill: %s") % pct(res["bill"]["output_share"]))
+    if W:
+        L.append(("낭비 점검 %d개 중 발견 %d개%s" if ko else "%d waste checks, %d found%s")
+                 % (len(W), len(found), (": " + ", ".join(found)) if found else ""))
+    if res.get("synthetic_calls"):
+        L.append("[합성] 예시 로그" if ko else "[synthetic] example log")
+    L.append("본문·회사명·키는 들어 있지 않습니다(개수와 비율만, 이 컴퓨터에서 계산)." if ko else
+             "Contains no text, company name or keys (counts and shares only, computed on this machine).")
+    return "\n".join(L)
 
 
 # Terminal banner (graphic from the site's candidate, .remote/scan-banner-candidate, PM 10-21 13:31; the version is
@@ -4239,10 +7809,1247 @@ def _banner():
     sys.stdout.flush()
 
 
+# ------------------------------------------------------------------ usage exports (PM 10-22 16:35 way 3, input grade D)
+# A company that keeps no call log can still download what its vendor counted. Field names come from the official
+# documents only (read 2026-10-22): OpenAI Usage API completions (openai-openapi spec, UsageCompletionsResult),
+# Anthropic Admin API usage_report/messages, AWS CUR 2.0 line_item_* columns with the Bedrock usage-type patterns
+# (Bedrock user guide, "Understanding CUR data"), Azure Cost Management cost details (MeterName / Quantity /
+# UnitOfMeasure / cost columns). None of them has one row per call: the finest grain is a 1-minute bucket, so pairs,
+# resends, cut answers and prefixes cannot be seen from them. Not read yet (strings not in any official page):
+# Google Cloud billing export SKU names, OpenAI Costs API line items. (The consoles' CSV exports are read since BILL-ONLY.)
+USAGE_KINDS = {"openai_usage": ("OpenAI 사용량(Usage API)", "OpenAI Usage API"),
+               "anthropic_usage": ("Anthropic 사용량 보고(Admin API)", "Anthropic usage report (Admin API)"),
+               "aws_cur": ("AWS 비용·사용 보고서(CUR) Bedrock 줄", "AWS Cost and Usage Report, Bedrock lines"),
+               "azure_cost": ("Azure 비용 내역(Azure OpenAI 미터)", "Azure cost details, Azure OpenAI meters"),
+               "openai_costs": ("OpenAI 비용(Costs API)", "OpenAI Costs API"),
+               # BILL-ONLY (PM 10-24 07:45 / 07:50): the console's CSV exports, two files and no install
+               "openai_activity": ("OpenAI 콘솔 사용량 CSV(Activity)", "OpenAI console usage CSV (Activity)"),
+               "openai_cost_csv": ("OpenAI 콘솔 비용 CSV(Cost, 하루 합계)", "OpenAI console cost CSV (Cost, daily totals)"),
+               "anthropic_cost_csv": ("Anthropic 콘솔 비용 CSV", "Anthropic console cost CSV"),
+               # VENDOR-ENTRY (10-24, VENDOR-FORMATS.md 4-5: the vendors' documented column names only)
+               "fireworks_usage": ("Fireworks 사용량(CSV·API)", "Fireworks usage (CSV / API)"),
+               "together_cost": ("Together 비용 CSV", "Together cost CSV")}
+BILL_READ_GRID = (0.05, 0.10, 0.25, 0.50)  # cache-read multiples tried by the price fit (PM 07:45 named 0.10 / 0.25 / 0.50)
+BILL_FIT_MAX_ERR = 0.01  # PM 07:45: a fitted price is used only when every day left out of the fit is within 1%
+BILL_FIT_MIN_DAYS = 3  # two days to solve for two prices, at least one more to check them on
+USAGE_WHOLE_MAX = 64 << 20  # bytes: a usage page saved whole is far smaller; a bigger file is read by records
+AWS_TOKEN = re.compile(r"^(?:[A-Z0-9]+-)?(?P<model>.+?)(?:-mantle)?-(?P<kind>cache-read-input-token-count|"
+                       r"cache-write-input-token-count|input-tokens|output-tokens)(?:-.*)?$")
+
+
+def _usage_docs(path):
+    """Every JSON document / row of the usage files: a whole-file JSON (an API page saved with curl, pretty-printed or
+    not), else the file's records (JSONL pages, CSV rows)."""
+    for p in log_files(path):
+        try:
+            if os.path.getsize(p) > USAGE_WHOLE_MAX:  # a call log, not an API page: read line by line below
+                raise ValueError
+            with open_text(p) as fh:
+                d = json.load(fh)
+            for x in (d if isinstance(d, list) else [d]):
+                yield x
+            continue
+        except (ValueError, UnicodeDecodeError):
+            pass
+        for x in records_of(p):
+            d = load_record(x)
+            if isinstance(d, dict):
+                yield d
+
+
+def usage_kind(d):
+    if not isinstance(d, dict):
+        return None
+    if "line_item_usage_type" in d and "line_item_usage_amount" in d:
+        return "aws_cur"
+    keys = {k.lower() for k in d if isinstance(k, str)}  # csv rows longer than the header carry a None key
+    if "metername" in keys and ("quantity" in keys or "usagequantity" in keys):
+        return "azure_cost"
+    if {"input_tokens", "model"} <= keys and any(k.startswith("num_model_") for k in keys) and "results" not in keys:
+        return "openai_activity"  # the Usage API's completions fields, one CSV row per bucket x model x key
+    if {"amount_value", "amount_currency"} <= keys:
+        return "openai_cost_csv"
+    if {"usage_date_utc", "token_type", "cost_usd"} <= keys:
+        return "anthropic_cost_csv"
+    if ({"base_model_name", "prompt_tokens"} <= keys and ("cached_prompt_tokens" in keys or "uncached_prompt_tokens" in keys)) \
+            or {"prompttokens", "cachedprompttokens"} <= keys:
+        return "fireworks_usage"  # firectl billing export-metrics CSV, or one billingUsage item
+    if any(isinstance(v, list) and v and isinstance(v[0], dict) and {"promptTokens", "cachedPromptTokens"} <= set(v[0])
+           for v in d.values()):
+        return "fireworks_usage"  # a billingUsage reply saved whole
+    if {"line item", "amount (usd)"} <= keys:
+        return "together_cost"
+    data = d.get("data") if isinstance(d.get("data"), list) else [d] if "results" in d else []
+    for b in data:
+        for r in (b.get("results") or []) if isinstance(b, dict) else []:
+            if isinstance(r, dict) and r.get("object") == "organization.usage.completions.result":
+                return "openai_usage"
+            # USAGE-COSTS (10-24, site relay item 7): GET /v1/organization/costs, the openai-openapi CostsResult
+            # (amount.value / currency, line_item "model, kind", quantity / quantity_unit); before, skipped silently
+            if isinstance(r, dict) and r.get("object") == "organization.costs.result":
+                return "openai_costs"
+            if isinstance(r, dict) and "uncached_input_tokens" in r and "output_tokens" in r:
+                return "anthropic_usage"
+    return None
+
+
+def _ci(d, *names):
+    low = {k.lower(): v for k, v in d.items()}
+    for n in names:
+        if n.lower() in low and low[n.lower()] not in (None, ""):
+            return low[n.lower()]
+    return None
+
+
+def _usage_ts(v):
+    if isinstance(v, str) and re.match(r"^\d{2}/\d{2}/\d{4}$", v.strip()):  # Azure cost details: MM/DD/YYYY
+        m, d, y = v.strip().split("/")
+        return datetime.datetime(int(y), int(m), int(d), tzinfo=datetime.timezone.utc)
+    try:
+        return parse_ts(v)
+    except (ValueError, OverflowError, OSError, TypeError):
+        return None
+
+
+def _write_mults(model):
+    """(default write multiple, 1-hour, 12-hour) of the model's vendor from cache_constants."""
+    wm = (CACHE["vendors"].get(cache_min(model, CACHE)[0]) or {}).get("write_multiple") or {}
+    if not isinstance(wm, dict):
+        return 1.0, 1.0, 1.0
+    w5 = wm.get("5m", wm.get("default", 1.0))
+    return w5, wm.get("1h", w5), wm.get("12h", w5)
+
+
+def bill_fit(rows, cost_days):
+    """BILL-ONLY (PM 10-24 07:45): a model's prices from the bill alone. A day whose usage rows are all one model, at
+    the standard tier and not Batch, gives one equation: billed = in x (uncached + c x cached + w x written) + out x
+    output. Two such days solve for the two prices at a cache-read multiple c; every other such day checks them. Each
+    c of BILL_READ_GRID is tried, the one whose worst check is smallest kept, and the prices are used only when that
+    worst check is within BILL_FIT_MAX_ERR -- otherwise the list prices stay. -> {model: fit}"""
+    days = collections.defaultdict(list)
+    for r in rows:
+        if r["kind"] == "openai_activity" and r["start"] and r["model"]:
+            days[r["start"].date().isoformat()].append(r)
+    single = collections.defaultdict(list)
+    for day, rs in days.items():
+        if day not in cost_days or len({r["model"] for r in rs}) != 1:
+            continue
+        if any(r.get("batch") or (r.get("tier") not in (None, "default")) for r in rs):
+            continue  # Batch and Flex run at other rates: not one equation
+        w5, _, w12 = _write_mults(rs[0]["model"])
+        single[rs[0]["model"]].append({"day": day, "unc": sum(r["input"] for r in rs), "cached": sum(r["cached"] for r in rs),
+                                       "wx": sum((r["write"] - r.get("write_12h", 0)) * w5 + r.get("write_12h", 0) * w12 for r in rs),
+                                       "out": sum(r["output"] for r in rs), "usd": cost_days[day]})
+    fits = {}
+    for m, ds in single.items():
+        if len(ds) < BILL_FIT_MIN_DAYS:
+            fits[m] = {"status": "too_few_days", "days": len(ds)}
+            continue
+        best = None
+        for c in BILL_READ_GRID:
+            xs = [(e["unc"] + c * e["cached"] + e["wx"], e["out"], e["usd"], e["day"]) for e in ds]
+            pairs = [(i, j) for i in range(len(xs)) for j in range(i + 1, len(xs))]
+            i, j = max(pairs, key=lambda ij: abs(xs[ij[0]][0] * xs[ij[1]][1] - xs[ij[1]][0] * xs[ij[0]][1]))
+            (x1, o1, y1, _), (x2, o2, y2, _) = xs[i], xs[j]
+            det = x1 * o2 - x2 * o1
+            if not det:
+                continue
+            a, b = (y1 * o2 - y2 * o1) / det, (x1 * y2 - x2 * y1) / det
+            if a <= 0 or b <= 0:
+                continue
+            errs = [abs(a * x + b * o - y) / y for k, (x, o, y, _) in enumerate(xs) if k not in (i, j) and y > 0]
+            if errs and (best is None or max(errs) < best["max_err"]):
+                best = {"read_multiple": c, "input_per_1m": a * 1e6, "output_per_1m": b * 1e6, "max_err": max(errs),
+                        "fit_days": [xs[i][3], xs[j][3]], "check_days": len(errs)}
+        if best is None:
+            fits[m] = {"status": "no_solution", "days": len(ds)}
+        else:
+            best.update(status="used" if best["max_err"] <= BILL_FIT_MAX_ERR else "check_failed", days=len(ds))
+            fits[m] = best
+    return fits
+
+
+def anthropic_cost(acost):
+    """BILL-ONLY 2 (PM 10-24 07:50): the Anthropic console cost export, read as it is -- dollars by model and token
+    type, Batch and long-context dollars apart, and the items that are not tokens. Per model, what the cache did:
+    reads saved (1 / read multiple - 1) x their cost against sending the same input uncached, writes cost
+    (1 - 1 / write multiple) x theirs on top; the difference is the cache's net."""
+    vc = (CACHE["vendors"].get("anthropic") or {})
+    rm = vc.get("read_multiple")
+    rm = (rm[0] if isinstance(rm, list) else rm) or 0.1
+    by = collections.defaultdict(lambda: collections.defaultdict(float))
+    other, batch, longc, total = collections.defaultdict(float), 0.0, 0.0, 0.0
+    for r in acost:
+        total += r["usd"]
+        if r["cost_type"] and r["cost_type"] != "token":
+            other[r["cost_type"]] += r["usd"]
+            continue
+        b = by[r["model"] or "(no model)"]
+        b[r["token_type"] or "?"] += r["usd"]
+        b["total"] += r["usd"]
+        if r["usage_type"] == "batch":
+            batch += r["usd"]
+            b["batch"] += r["usd"]
+        if r["window"] and not r["window"].startswith(("≤", "<=", "0")):
+            longc += r["usd"]
+            b["long_context"] += r["usd"]
+    models = {}
+    for m, b in sorted(by.items(), key=lambda kv: -kv[1]["total"]):
+        key = re.sub(r"[\s.]+", "-", m.strip().lower())
+        w5, w1, _ = _write_mults(key)
+        inp = b["input_no_cache"] + b["input_cache_read"] + b["input_cache_write_5m"] + b["input_cache_write_1h"]
+        saved = b["input_cache_read"] * (1 / rm - 1)
+        extra = b["input_cache_write_5m"] * (1 - 1 / w5) + b["input_cache_write_1h"] * (1 - 1 / w1)
+        models[m] = {"usd_total": b["total"], "usd_input_no_cache": b["input_no_cache"], "usd_cache_read": b["input_cache_read"],
+                     "usd_cache_write_5m": b["input_cache_write_5m"], "usd_cache_write_1h": b["input_cache_write_1h"],
+                     "usd_output": b["output"], "usd_batch": b["batch"], "usd_long_context": b["long_context"],
+                     "cache_read_share_of_input_usd": b["input_cache_read"] / inp if inp else None,
+                     "cache_saved_usd": saved, "cache_write_extra_usd": extra, "cache_net_usd": saved - extra}
+    dates = sorted(r["date"] for r in acost if re.match(r"\d{4}-\d{2}-\d{2}$", r["date"]))
+    return {"usd_total": total, "models": models, "non_token_usd": dict(other), "usd_batch": batch,
+            "period": [dates[0], dates[-1]] if dates else None,
+            "usd_long_context": longc, "read_multiple": rm,
+            "usd_output": sum(v["usd_output"] for v in models.values())}
+
+
+def _key_labels(keys):
+    """{shortened key id: totals}, most calls first. An id is cut to its head and tail ("key_AbC…x9Q"), longer only
+    where two ids would read the same -- two keys never merge into one row."""
+    out = {}
+    for k, v in sorted(keys.items(), key=lambda kv: -kv[1]["n_calls"]):
+        for n in range(3, len(k)):
+            lab = k if len(k) <= 2 * n + 4 else k[:n + 4] + "…" + k[-n:]
+            if lab not in out:
+                break
+        out[lab] = v
+    return out
+
+
+def scan_usage(path, pricing_path=DEFAULT_PRICING):
+    """Input grade D: tokens and money per model (and per hour when the buckets are finer than a day) from a vendor's
+    usage export. Rows: {kind, model, start, end, input (uncached), cached, write, output, n_calls, usd (from the
+    file, when it has cost)}."""
+    t0 = time.time()
+    pricing = load_pricing(pricing_path)
+    rows, kinds, units, syn = [], collections.Counter(), collections.Counter(), 0
+    cost_days = collections.defaultdict(float)  # BILL-ONLY: OpenAI Cost CSV, the day's billed total (no model, no key)
+    acost = []  # BILL-ONLY: Anthropic Cost CSV rows (dollars only -- the export has no token counts)
+    for d in _usage_docs(path):
+        k = usage_kind(d)
+        if k is None:
+            continue
+        kinds[k] += 1
+        syn += d.get("synthetic") in (True, "true")
+        if k == "openai_activity":
+            model = str(_ci(d, "model") or "").strip()
+            cached = _num(_ci(d, "input_cached_tokens")) or 0
+            write = _num(_ci(d, "input_cache_write_tokens")) or 0
+            unc = _num(_ci(d, "input_uncached_tokens"))
+            unc = unc if unc is not None else max((_num(_ci(d, "input_tokens")) or 0) - cached - write, 0)
+            out_ = _num(_ci(d, "output_tokens")) or 0
+            if not model and not (unc or cached or write or out_):
+                continue  # an empty bucket (the export writes one per day with no traffic)
+            b_ = str(_ci(d, "batch") or "").strip().lower()
+            rows.append({"kind": k, "model": model or None, "start": _usage_ts(_ci(d, "start_time_iso", "start_time")),
+                         "end": _usage_ts(_ci(d, "end_time_iso", "end_time")), "input": unc, "cached": cached,
+                         "write": write, "write_1h": 0, "write_12h": _num(_ci(d, "input_cache_write_12h_tokens")) or 0,
+                         "output": out_, "n_calls": _num(next((v for kk, v in d.items() if str(kk).lower().startswith("num_model_")), None)),
+                         "usd": None,
+                         "batch": True if b_ == "true" else False if b_ == "false" else None,
+                         "tier": str(_ci(d, "service_tier") or "").strip().lower() or None,
+                         "key": str(_ci(d, "api_key_id") or "").strip() or None})
+            continue
+        if k == "openai_cost_csv":
+            st = _usage_ts(_ci(d, "start_time_iso", "start_time"))
+            v = _num(_ci(d, "amount_value"))
+            if st and v is not None and str(_ci(d, "amount_currency") or "usd").lower() == "usd":
+                cost_days[st.date().isoformat()] += v
+            continue
+        if k == "fireworks_usage":
+            items = next((v for v in d.values() if isinstance(v, list) and v and isinstance(v[0], dict)
+                          and "promptTokens" in v[0]), None) if "promptTokens" not in d and "prompt_tokens" not in d else [d]
+            for x in items or []:
+                g = x.get("group") if isinstance(x.get("group"), dict) else {}
+                model = str(_ci(x, "base_model_name", "model_name") or g.get("model_name") or "").strip()
+                model = re.sub(r"^accounts/[^/]+/models/", "", model) or None
+                cached = _num(_ci(x, "cached_prompt_tokens", "cachedPromptTokens")) or 0
+                unc = _num(_ci(x, "uncached_prompt_tokens", "uncachedPromptTokens"))
+                unc = unc if unc is not None else max((_num(_ci(x, "prompt_tokens", "promptTokens")) or 0) - cached, 0)
+                out_ = _num(_ci(x, "completion_tokens", "completionTokens")) or 0
+                if not (unc or cached or out_):
+                    continue  # a dedicated-deployment row (accelerator seconds), not tokens
+                nano = _num(_ci(x, "costNanoUsd"))
+                rows.append({"kind": k, "model": model, "start": _usage_ts(_ci(x, "start_time", "startTime")),
+                             "end": _usage_ts(_ci(x, "end_time", "endTime")), "input": unc, "cached": cached, "write": 0,
+                             "write_1h": 0, "output": out_, "n_calls": None, "usd": nano / 1e9 if nano is not None else None,
+                             "key": str(g.get("api_key_id") or "").strip() or None})
+            continue
+        if k == "together_cost":
+            v = _num(_ci(d, "amount (usd)"))
+            rows.append({"kind": k, "model": str(_ci(d, "line item") or "").strip() or None, "start": _usage_ts(_ci(d, "date")),
+                         "end": None, "input": 0, "cached": 0, "write": 0, "write_1h": 0, "output": 0, "n_calls": None,
+                         "usd": v})
+            continue
+        if k == "anthropic_cost_csv":
+            acost.append({"date": str(_ci(d, "usage_date_utc") or "")[:10], "model": str(_ci(d, "model") or "").strip(),
+                          "usage_type": str(_ci(d, "usage_type") or "").strip(), "window": str(_ci(d, "context_window") or "").strip(),
+                          "token_type": str(_ci(d, "token_type") or "").strip(), "cost_type": str(_ci(d, "cost_type") or "").strip(),
+                          "usd": _num(_ci(d, "cost_usd")) or 0.0, "list_usd": _num(_ci(d, "list_price_usd"))})
+            continue
+        if k in ("openai_usage", "anthropic_usage"):
+            for b in (d.get("data") if isinstance(d.get("data"), list) else [d]):
+                st = _usage_ts(b.get("start_time", b.get("starting_at")))
+                en = _usage_ts(b.get("end_time", b.get("ending_at")))
+                for r in b.get("results") or []:
+                    if k == "openai_usage":
+                        cached = _num(r.get("input_cached_tokens")) or 0
+                        write = _num(r.get("input_cache_write_tokens")) or 0
+                        unc = _num(r.get("input_uncached_tokens"))
+                        unc = unc if unc is not None else max((_num(r.get("input_tokens")) or 0) - cached - write, 0)
+                        rows.append({"kind": k, "model": r.get("model"), "start": st, "end": en, "input": unc,
+                                     "cached": cached, "write": write, "write_1h": 0, "output": _num(r.get("output_tokens")) or 0,
+                                     "n_calls": _num(next((v for kk, v in r.items() if kk.startswith("num_model_")), None)),
+                                     "usd": None, "batch": r.get("batch")})  # the call count field (num_model_...), the only num_model_ key
+                    else:
+                        cc = r.get("cache_creation") or {}
+                        w1 = _num(cc.get("ephemeral_1h_input_tokens")) or 0
+                        rows.append({"kind": k, "model": r.get("model"), "start": st, "end": en,
+                                     "input": _num(r.get("uncached_input_tokens")) or 0,
+                                     "cached": _num(r.get("cache_read_input_tokens")) or 0,
+                                     "write": (_num(cc.get("ephemeral_5m_input_tokens")) or 0) + w1, "write_1h": w1,
+                                     "output": _num(r.get("output_tokens")) or 0, "n_calls": None, "usd": None})
+        elif k == "openai_costs":
+            for b in (d.get("data") if isinstance(d.get("data"), list) else [d]):
+                st = _usage_ts(b.get("start_time", b.get("starting_at")))
+                en = _usage_ts(b.get("end_time", b.get("ending_at")))
+                for r in b.get("results") or []:
+                    am = r.get("amount") if isinstance(r.get("amount"), dict) else {}
+                    li = str(r.get("line_item") or "")
+                    model, _, kind = li.partition(",")
+                    kind, unit = kind.strip().lower(), str(r.get("quantity_unit") or "")
+                    q = (_num(r.get("quantity")) or 0) * (1000 if unit == "1000_tokens" else 1) if unit in ("tokens", "1000_tokens") else 0
+                    usd_ = _num(am.get("value")) if str(am.get("currency") or "usd").lower() == "usd" else None
+                    rows.append({"kind": k, "model": model.strip() or None, "start": st, "end": en,
+                                 "input": q if "input" in kind and "cache" not in kind else 0,
+                                 "cached": q if "cache" in kind and "write" not in kind else 0,
+                                 "write": q if "cache" in kind and "write" in kind else 0, "write_1h": 0,
+                                 "output": q if "output" in kind else 0, "n_calls": None, "usd": usd_})
+        elif k == "aws_cur":
+            m = AWS_TOKEN.match(str(d.get("line_item_usage_type") or ""))
+            if not m:
+                continue
+            q, kind = _num(d.get("line_item_usage_amount")) or 0, m.group("kind")
+            units[str(d.get("pricing_unit") or d.get("product_pricing_unit") or "?")] += 1
+            rows.append({"kind": k, "model": m.group("model"), "start": _usage_ts(d.get("line_item_usage_start_date")),
+                         "end": _usage_ts(d.get("line_item_usage_end_date")),
+                         "input": q if kind == "input-tokens" else 0, "cached": q if kind.startswith("cache-read") else 0,
+                         "write": q if kind.startswith("cache-write") else 0, "write_1h": 0,
+                         "output": q if kind == "output-tokens" else 0, "n_calls": None,
+                         "usd": _num(d.get("line_item_unblended_cost"))})
+        else:
+            name = str(_ci(d, "MeterName") or "")
+            if "token" not in name.lower():
+                continue
+            low = name.lower()
+            unit = str(_ci(d, "UnitOfMeasure", "Unit") or "")
+            mult = 1e6 if "1m" in unit.lower() else 1000 if ("1k" in unit.lower() or "1000" in unit) else 1
+            q = (_num(_ci(d, "Quantity", "UsageQuantity", "ConsumedQuantity")) or 0) * mult
+            out = bool(re.search(r"\boutp?u?t?\b|\boutp\b|\boutput\b", low))
+            cached = bool(re.search(r"\bcach|\bcchd\b|\bcched\b", low))
+            model = re.split(r"\b(?:input|inp|inpt|output|outp|cached|cchd|cched|batch)\b", name, flags=re.I)[0].strip()
+            rows.append({"kind": k, "model": model or name, "start": _usage_ts(_ci(d, "Date", "UsageDateTime", "UsageDate")),
+                         "end": None, "input": 0 if (out or cached) else q, "cached": q if cached and not out else 0,
+                         "write": 0, "write_1h": 0, "output": q if out else 0, "n_calls": None,
+                         "usd": _num(_ci(d, "CostInBillingCurrency", "Cost", "PreTaxCost", "CostInUsd"))})
+    if kinds.get("openai_costs") and kinds.get("openai_usage"):  # the Usage API counts the tokens: Costs adds dollars only
+        for r in rows:
+            if r["kind"] == "openai_costs":
+                r.update(input=0, cached=0, write=0, output=0)
+    res = {"version": VERSION, "input": os.path.basename(os.path.normpath(path)), "usage_export": True,
+           "kinds": dict(kinds), "rows": len(rows) + len(acost) + len(cost_days), "units": dict(units), "synthetic_docs": syn}
+    if cost_days:
+        res["bill_days"] = {"days": len(cost_days), "usd_total": sum(cost_days.values()),
+                            "period": [min(cost_days), max(cost_days)]}
+    if acost:
+        res["anthropic_cost"] = anthropic_cost(acost)
+    if not rows:
+        if not (acost or cost_days):
+            res["error"] = "no usage rows"
+        res["seconds"] = time.time() - t0
+        return res
+    vc = CACHE["vendors"]
+    by = collections.defaultdict(lambda: {"input": 0, "cached": 0, "write": 0, "output": 0, "n_calls": 0,
+                                          "usd_file": 0.0, "usd_file_rows": 0, "usd_table": None})
+    for r in rows:
+        b = by[r["model"] or "(no model)"]
+        for f in ("input", "cached", "write", "output"):
+            b[f] += r[f]
+        b["n_calls"] += r["n_calls"] or 0
+        if r["usd"] is not None:
+            b["usd_file"] += r["usd"]
+            b["usd_file_rows"] += 1
+    fits = bill_fit(rows, cost_days) if cost_days else {}
+
+    def row_usd(m, r):
+        """(output usd, total usd) of one usage row at the model's prices: the customer's bill-fitted prices when the
+        fit was used, else the price list; None without a price. Batch / Flex rows at FLEX_RATE (bill-fitted only:
+        the list path keeps its old rule)."""
+        f_ = fits.get(m) or {}
+        if f_.get("status") == "used":
+            w5, _, w12 = _write_mults(m)
+            k_ = FLEX_RATE if r.get("batch") or (r.get("tier") or "default") != "default" else 1.0
+            w12t = r.get("write_12h", 0)
+            o_ = k_ * r["output"] * f_["output_per_1m"] / 1e6
+            return o_, o_ + k_ * (r["input"] + f_["read_multiple"] * r["cached"] + (r["write"] - w12t) * w5
+                                  + w12t * w12) * f_["input_per_1m"] / 1e6
+        p = (pricing or {}).get("models", {}).get(m)
+        if not p or "output_per_1m_usd" not in p:
+            return None
+        inp, cin = p.get("input_per_1m_usd", 0), p.get("cached_input_per_1m_usd", p.get("input_per_1m_usd", 0))
+        ven = cache_min(m, CACHE)[0]
+        wm = (vc.get(ven) or {}).get("write_multiple") or {}
+        w5 = wm.get("5m", wm.get("default", 1.0)) if isinstance(wm, dict) else 1.0
+        w1 = wm.get("1h", w5) if isinstance(wm, dict) else 1.0
+        o_ = r["output"] * p["output_per_1m_usd"] / 1e6
+        return o_, o_ + (r["input"] * inp + r["cached"] * cin + (r["write"] - r["write_1h"]) * inp * w5
+                         + r["write_1h"] * inp * w1) / 1e6
+
+    alias = {}  # BILL-ALIAS: a dated snapshot name priced at its base row -- kept only if the customer's bill agrees
+    if cost_days and pricing:
+        for m in by:
+            base = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", m)
+            if base != m and m not in pricing["models"] and base in pricing["models"]:
+                alias[m] = base
+                pricing["models"][m] = pricing["models"][base]
+    money = {}  # model -> (output usd, total usd, source)
+    for m, b in by.items():
+        if b["usd_file_rows"]:
+            o = sum(r["usd"] or 0 for r in rows if (r["model"] or "(no model)") == m and r["output"])
+            money[m] = (o, b["usd_file"], "file")
+            continue
+        if (fits.get(m) or {}).get("status") == "used":
+            got = [row_usd(m, r) for r in rows if r["model"] == m]
+            money[m] = (sum(g[0] for g in got), sum(g[1] for g in got), "bill")
+        elif pricing and m in pricing["models"] and "output_per_1m_usd" in pricing["models"][m]:
+            p = pricing["models"][m]
+            inp, cin = p.get("input_per_1m_usd", 0), p.get("cached_input_per_1m_usd", p.get("input_per_1m_usd", 0))
+            ven = cache_min(m, CACHE)[0]
+            wm = (vc.get(ven) or {}).get("write_multiple") or {}
+            w5 = wm.get("5m", wm.get("default", 1.0)) if isinstance(wm, dict) else 1.0
+            w1 = wm.get("1h", w5) if isinstance(wm, dict) else 1.0
+            w1t = sum(r["write_1h"] for r in rows if (r["model"] or "(no model)") == m)
+            tot = (b["input"] * inp + b["cached"] * cin + (b["write"] - w1t) * inp * w5 + w1t * inp * w1
+                   + b["output"] * p["output_per_1m_usd"]) / 1e6
+            money[m] = (b["output"] * p["output_per_1m_usd"] / 1e6, tot, "table")
+    tot_usd = sum(v[1] for v in money.values())
+    out_usd = sum(v[0] for v in money.values())
+    # BILL-ONLY: the bill against the priced usage, day by day, on days where every model has a price (7-6 from the bill)
+    def reconcile():
+        """BILL-ONLY: the bill against the priced usage, day by day, on days where every row has a price (7-6 from the
+        bill) -> (summary, {day: (computed, billed, models)})."""
+        dd = collections.defaultdict(list)
+        for r in rows:
+            if r["kind"] == "openai_activity" and r["start"]:
+                dd[r["start"].date().isoformat()].append(r)
+        per, skipped = {}, 0
+        for day, rs in dd.items():
+            if day not in cost_days:
+                continue
+            got = [row_usd(r["model"], r) if r["model"] in money else None for r in rs]
+            if any(g is None for g in got):
+                skipped += 1
+                continue
+            per[day] = (sum(g[1] for g in got), cost_days[day], {r["model"] for r in rs})
+        comp, billed = sum(v[0] for v in per.values()), sum(v[1] for v in per.values())
+        return {"days": len(per), "days_unpriced": skipped, "computed_usd": comp, "billed_usd": billed,
+                "diff": (comp - billed) / billed if billed else None}, per
+
+    recon, alias_res = None, {}
+    if cost_days:
+        recon, per = reconcile()
+        drop = []
+        for a, base in alias.items():
+            gaps = [abs(c - b) / b for c, b, ms in per.values() if a in ms and b > 0]
+            ok = bool(gaps) and max(gaps) <= BILL_FIT_MAX_ERR
+            alias_res[a] = {"base": base, "days_checked": len(gaps), "max_gap": max(gaps) if gaps else None, "used": ok}
+            if not ok:
+                drop.append(a)
+        for a in drop:  # not confirmed by this bill: back to no price
+            pricing["models"].pop(a, None)
+            money.pop(a, None)
+        if drop:
+            recon, per = reconcile()
+        tot_usd = sum(v[1] for v in money.values())
+        out_usd = sum(v[0] for v in money.values())
+    keys = collections.defaultdict(lambda: {"n_calls": 0, "input": 0, "cached": 0, "write": 0})
+    for r in rows:
+        if r.get("key"):
+            kb = keys[r["key"]]
+            kb["n_calls"] += r["n_calls"] or 0
+            for f in ("input", "cached", "write"):
+                kb[f] += r[f]
+    # hour of day (UTC) when the buckets are finer than a day
+    hourly = [r for r in rows if r["start"] and r["end"] and (r["end"] - r["start"]).total_seconds() <= 3600]
+    hours = collections.Counter()
+    for r in hourly:
+        hours[r["start"].astimezone(datetime.timezone.utc).hour] += r["output"]
+    ho = sum(hours.values())
+    starts = [r["start"] for r in rows if r["start"]]
+    # 7-9 on a usage file (PM 10-22 19:15 item 2, the least a grade-D file can give): tokens on Flex-table models that
+    # were not marked as Batch, priced from the table -- an upper bound, the file cannot tell what could wait
+    fr = [r for r in rows if flex_ok(r["model"]) and r.get("batch") is not True]
+    fusd, fpm = 0.0, set()
+    for r in fr:
+        p = (pricing or {}).get("models", {}).get(r["model"])
+        if p and "output_per_1m_usd" in p:
+            fusd += (r["input"] * p.get("input_per_1m_usd", 0) + r["cached"] * p.get("cached_input_per_1m_usd", p.get("input_per_1m_usd", 0))
+                     + r["output"] * p["output_per_1m_usd"]) / 1e6
+            fpm.add(r["model"])
+    flex = {"status": "found" if fr and fpm else "none", "kind": "more", "rows": len(fr),
+            "rows_batch_unknown": sum(1 for r in fr if r.get("batch") is None),
+            "input_tokens": sum(r["input"] + r["cached"] for r in fr), "output_tokens": sum(r["output"] for r in fr),
+            "usd": fusd if fpm else None, "saving_upper_usd": fusd * (1 - FLEX_RATE) if fpm else None,
+            "models": sorted(fpm), "table_as_of": FLEX_AS_OF}
+    # D-GRADE (PM 10-23 07:34, docs/D-GRADE-SQUEEZE-1023.md): what totals can still say about the cache.
+    # 7-7 written but not read, a lower bound per model over the whole file: one write can be read many times, but the
+    # distinct written tokens read cannot outnumber the read tokens, so at least writes - reads were never read. Its
+    # extra over not caching is (write multiple - 1) x the input price. Bucket by bucket would be wrong: a bucket's
+    # reads can be of an earlier bucket's writes
+    unread, uusd, upriced = {}, 0.0, False
+    for m, b in by.items():
+        lo = b["write"] - b["cached"]
+        if b["write"] <= 0 or lo <= 0:
+            continue
+        ven = cache_min(m, CACHE)[0]
+        wm = (vc.get(ven) or {}).get("write_multiple") or {}
+        w5 = wm.get("5m", wm.get("default", 1.0)) if isinstance(wm, dict) else 1.0
+        w1 = wm.get("1h", w5) if isinstance(wm, dict) else 1.0
+        w1t = sum(r["write_1h"] for r in rows if (r["model"] or "(no model)") == m)
+        wx = ((b["write"] - w1t) * w5 + w1t * w1) / b["write"]
+        p = (pricing or {}).get("models", {}).get(m) or {}
+        u = lo * (wx - 1) * p["input_per_1m_usd"] / 1e6 if "input_per_1m_usd" in p else None
+        unread[m] = {"write": b["write"], "read": b["cached"], "unread_lower": lo, "write_multiple": round(wx, 3), "usd_lower": u}
+        if u is not None:
+            uusd += u
+            upriced = True
+    cache_unread = {"status": "found" if unread else "none", "kind": "leak", "models": unread,
+                    "unread_lower_tokens": sum(v["unread_lower"] for v in unread.values()),
+                    "usd_lower": uusd if upriced else None,
+                    "models_with_writes": sum(1 for b in by.values() if b["write"] > 0)}
+    # 7-5 as a signal (rows with a request count, OpenAI's num_model_ field): a row whose mean prompt (input with cache
+    # read and write, over its calls) is under the model's cache minimum holds at least one request under it. How
+    # many is not in a mean
+    sig = [r for r in rows if r.get("n_calls")]
+    below = []
+    for r in sig:
+        ven, mn, st = cache_min(r["model"], CACHE)
+        if st == "known" and (r["input"] + r["cached"] + r["write"]) / r["n_calls"] < mn:
+            below.append(r)
+    cache_min_signal = {"rows_with_count": len(sig), "rows_mean_below": len(below),
+                        "calls_in_those_rows": sum(r["n_calls"] for r in below),
+                        "calls_with_count": sum(r["n_calls"] for r in sig),
+                        "status": "found" if below else "none" if sig else "cannot_judge"}
+    res.update({
+        "period": [min(starts).isoformat(), max(starts).isoformat()] if starts else None,
+        "models": {m: dict(b, usd_table=None) for m, b in sorted(by.items(), key=lambda kv: -kv[1]["output"])},
+        "money": {m: {"output_usd": v[0], "total_usd": v[1], "source": v[2]} for m, v in money.items()},
+        "bill": {"usd_total": tot_usd, "usd_output": out_usd, "output_share": out_usd / tot_usd if tot_usd else None,
+                 "priced_models": len(money), "models": len(by),
+                 "as_of": pricing["as_of"] if pricing else None} if money else None,
+        "tokens": {f: sum(b[f] for b in by.values()) for f in ("input", "cached", "write", "output")},
+        "flex": flex, "cache_unread": cache_unread, "cache_min_signal": cache_min_signal,
+        "bill_fit": fits or None, "bill_recon": recon, "bill_alias": alias_res or None,
+        "keys": _key_labels(keys) if len(keys) >= 2 else None,
+        "n_calls": sum(r["n_calls"] or 0 for r in rows) if any(r.get("n_calls") for r in rows) else None,
+        "hours": {"rows": len(hourly), "peak_hour": max(hours, key=hours.get) if hours else None,
+                  "peak_share": max(hours.values()) / ho if ho else None,
+                  "top6_share": sum(sorted(hours.values(), reverse=True)[:6]) / ho if ho else None},
+        "seconds": time.time() - t0})
+    return res
+
+
+def _hit_range(models):
+    """(lowest, highest) cache-read share over the models with input, or None with fewer than two."""
+    hs = [x["cached"] / (x["input"] + x["cached"] + x["write"]) for x in models.values()
+          if (x["input"] + x["cached"] + x["write"]) > 0]
+    return (min(hs), max(hs)) if len(hs) >= 2 else None
+
+
+def _report_anthropic_cost(a, ko):
+    """BILL-ONLY 2: the Anthropic console cost export, in dollars (it has no token counts)."""
+    L = []
+    ms = a["models"]
+    inp = sum(v["usd_input_no_cache"] + v["usd_cache_read"] + v["usd_cache_write_5m"] + v["usd_cache_write_1h"]
+              for v in ms.values())
+    L += [("- 청구 합계 %s · 그중 출력 %s = **%s**. 금액은 파일에 적힌 그대로입니다." if ko else
+           "- billed %s in all · output %s of it = **%s**. Dollars are the file's own.")
+          % (usd(a["usd_total"]), usd(a["usd_output"]), pct(a["usd_output"] / a["usd_total"]) if a["usd_total"] else "—"), "",
+          "| %s | %s | %s | %s | %s | %s | %s | %s |" % (("모델", "미캐시 입력", "캐시 읽기", "캐시 쓰기 5분", "캐시 쓰기 1시간", "출력",
+                                                       "합계", "입력 쪽 중 캐시 읽기") if ko else
+                                                      ("model", "uncached input", "cache read", "cache write 5m",
+                                                       "cache write 1h", "output", "total", "cache read of input $")),
+          "|---|---|---|---|---|---|---|---|"]
+    for m, v in ms.items():
+        s = v["cache_read_share_of_input_usd"]
+        L.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (m, usd(v["usd_input_no_cache"]), usd(v["usd_cache_read"]),
+                                                             usd(v["usd_cache_write_5m"]), usd(v["usd_cache_write_1h"]),
+                                                             usd(v["usd_output"]), usd(v["usd_total"]), pct(s) if s is not None else "—"))
+    L.append("")
+    if a["usd_batch"] or a["usd_long_context"]:
+        L.append(("- 배치로 낸 금액 %s · 20만 토큰이 넘는 긴 입력 요금으로 낸 금액 %s." if ko else
+                  "- %s billed through Batch · %s billed at the long-context rate (over 200k tokens).")
+                 % (usd(a["usd_batch"]), usd(a["usd_long_context"])))
+    nt = a["non_token_usd"]
+    if nt:
+        names = {"code_execution": ("코드 실행", "code execution"), "session_runtime": ("세션 실행", "session runtime"),
+                 "web_search": ("웹 검색", "web search")}
+        L.append(("- 토큰 말고 따로 매겨지는 항목: %s. 이 진단은 토큰 금액만 봅니다." if ko else
+                  "- Items billed apart from tokens: %s. This check looks at token dollars only.")
+                 % " · ".join("%s %s" % (names.get(k, (k, k))[0 if ko else 1], usd(v)) for k, v in sorted(nt.items())))
+    L += ["", "### " + ("캐시가 한 일 — 모델별 (7-7)" if ko else "What the cache did — by model (7-7)"), ""]
+    for m, v in ms.items():
+        if v["usd_cache_read"] or v["usd_cache_write_5m"] or v["usd_cache_write_1h"]:
+            L.append(("- %s: 캐시 읽기로 아낀 금액 %s(같은 입력을 캐시 없이 보냈다면) · 쓰기 웃돈 %s → 순 **%s%s**%s" if ko else
+                      "- %s: the cache reads saved %s (against the same input sent uncached) · the writes cost %s extra → "
+                      "net **%s%s**%s")
+                     % (m, usd(v["cache_saved_usd"]), usd(v["cache_write_extra_usd"]), "+" if v["cache_net_usd"] >= 0 else "−",
+                        usd(abs(v["cache_net_usd"])),
+                        ((" — 써 놓고 읽지 못했습니다." if ko else " — written and never read.") if not v["usd_cache_read"] else "")))
+        elif v["usd_input_no_cache"]:
+            L.append(("- %s: 캐시를 쓰지 않았습니다. 입력 %s 전부가 미캐시 요금입니다." if ko else
+                      "- %s: no cache use. All %s of input was billed at the uncached rate.") % (m, usd(v["usd_input_no_cache"])))
+    L.append(("- 아낀 금액은 캐시 읽기 금액 × (1 ÷ 읽기 배수 %.2f − 1), 웃돈은 쓰기 금액 × (1 − 1 ÷ 쓰기 배수) 로 셉니다." if ko else
+              "- Saved = cache-read dollars x (1 / read multiple %.2f - 1); extra = write dollars x (1 - 1 / write multiple).")
+             % a["read_multiple"])
+    return L, (min(v["cache_read_share_of_input_usd"] for v in ms.values() if v["cache_read_share_of_input_usd"] is not None),
+               max(v["cache_read_share_of_input_usd"] for v in ms.values() if v["cache_read_share_of_input_usd"] is not None)) \
+        if sum(1 for v in ms.values() if v["cache_read_share_of_input_usd"] is not None) >= 2 else None, inp
+
+
+def _report_bill_fit(res, ko):
+    """BILL-ONLY: prices fitted from the bill, and the bill against the priced usage (7-6 from the bill)."""
+    L = []
+    fits = res.get("bill_fit") or {}
+    for m, f in sorted(fits.items()):
+        if f["status"] == "used":
+            L.append(("- %s: 청구서만으로 단가를 냈습니다 — 입력 %s · 출력 %s / 100만 토큰, 캐시 읽기 %.2f배. 모델 하나만 쓴 날 %d일 중 "
+                      "%s·%s 로 풀고 나머지 %d일로 맞춰 봤습니다(가장 큰 차이 %s)." if ko else
+                      "- %s: prices from the bill alone -- input %s, output %s per 1M tokens, cache read %.2fx. Of %d "
+                      "days on this model only, %s and %s solved them and the other %d checked them (largest gap %s).")
+                     % (m, usd(f["input_per_1m"]), usd(f["output_per_1m"]), f["read_multiple"], f["days"], f["fit_days"][0],
+                        f["fit_days"][1], f["check_days"], pct(f["max_err"])))
+        elif f["status"] == "check_failed":
+            L.append(("- %s: 청구서로 푼 단가가 맞춰 본 날과 %s 어긋나 쓰지 않았습니다. 가격표 단가를 씁니다." if ko else
+                      "- %s: the prices solved from the bill missed a check day by %s, so they are not used; list prices are.")
+                     % (m, pct(f["max_err"])))
+    few = sorted(m for m, f in fits.items() if f["status"] in ("too_few_days", "no_solution"))
+    if few:
+        L.append(("- 단가를 역산하지 못한 모델 %d개: 그 모델 하나만 쓴 날이 %d일보다 적습니다." if ko else
+                  "- Not priced from the bill: %d model(s), each used alone on fewer than %d days.")
+                 % (len(few), BILL_FIT_MIN_DAYS))
+    al = res.get("bill_alias") or {}
+    used = sorted(a for a, v in al.items() if v["used"])
+    if used:
+        L.append(("- 날짜 붙은 이름 %d개(%s)는 기본 이름의 가격표 단가로 셌습니다. 그 이름이 든 날을 청구서와 맞춰 보니 모두 %s 안이었습니다(가장 큰 차이 %s)." if ko else
+                  "- %d dated model names (%s) are priced at their base name's list price: on every day they appear, the "
+                  "bill agreed within %s (largest gap %s).")
+                 % (len(used), ", ".join(used), pct(BILL_FIT_MAX_ERR), pct(max(al[a]["max_gap"] for a in used))))
+    left = sorted(a for a, v in al.items() if not v["used"])
+    if left:
+        L.append(("- 날짜 붙은 이름 %d개(%s)는 청구서로 확인되지 않아 금액에서 뺐습니다." if ko else
+                  "- %d dated model names (%s) were not confirmed by the bill and are left out of the dollars.")
+                 % (len(left), ", ".join(left)))
+    r = res.get("bill_recon")
+    if r and r["days"]:
+        L.append(("- 청구서 대조(7-6): 모든 모델에 단가가 있는 %d일 — 계산 %s · 청구 %s · 차이 %s.%s" if ko else
+                  "- bill check (7-6): on the %d days where every model has a price -- computed %s, billed %s, gap %s.%s")
+                 % (r["days"], usd(r["computed_usd"]), usd(r["billed_usd"]), pct(r["diff"]),
+                    ((" 나머지 %d일은 단가 없는 모델이 섞여 대조하지 못했습니다." if ko else
+                      " The other %d days include a model without a price.") % r["days_unpriced"] if r["days_unpriced"] else "")))
+    un = [m for m in (res.get("models") or {}) if m not in (res.get("money") or {})]
+    if un and res.get("kinds", {}).get("openai_activity") and not res.get("bill_days"):
+        L.append(("- 같은 기간의 비용 CSV(Cost)를 같은 폴더에 두고 폴더를 주시면, 청구서로 단가를 역산하고 청구서와 대조합니다." if ko else
+                  "- Put the cost CSV (Cost) for the same period in the same folder and pass the folder: prices are then "
+                  "fitted from the bill and checked against it."))
+    if un and fits:
+        L.append(("- 단가가 없어 금액에서 빠진 모델: %s" if ko else "- Models left out of the dollars (no price): %s") % ", ".join(un))
+    return L
+
+
+def report_usage(res, lang="ko"):
+    ko = lang == "ko"
+    t = T[lang]
+    L = ["# " + t["title"], "", "scanner %s · %s" % (res["version"], res["input"]), ""]
+    tk0 = res.get("tokens") or {}
+    ti0 = sum(tk0.get(f) or 0 for f in ("input", "cached", "write"))
+    if ti0 and not res.get("error"):  # CACHE-HEAD: the same "cache read / input" as below, first
+        hr = _hit_range(res.get("models") or {})
+        L += [("**캐시 적중률 %s** — 입력 토큰 중 캐시에서 읽힌 몫입니다(공급사 사용량 집계 기준). 자세한 것은 2절." if ko else
+               "**Cache hit rate %s** — the share of input tokens read from the cache (the vendor's usage totals). "
+               "Details in section 2.") % pct(tk0["cached"] / ti0)
+              + ((" 모델별로는 %s ~ %s 입니다." if ko else " By model it runs from %s to %s.") % (pct(hr[0]), pct(hr[1]))
+                 if hr and res.get("kinds", {}).get("openai_activity") else ""), ""]
+    ac = res.get("anthropic_cost")
+    if ac and not ti0:
+        a_lines, a_range, a_inp = _report_anthropic_cost(ac, ko)
+        if a_inp:
+            L += [("**캐시 읽기 금액 비중 %s** — 입력 쪽 금액 중 캐시 읽기로 낸 몫입니다(이 파일에는 토큰 수가 없습니다)." if ko else
+                   "**Cache-read share %s** — of the input-side dollars, the part paid as cache reads (this file has no "
+                   "token counts).") % pct(sum(v["usd_cache_read"] for v in ac["models"].values()) / a_inp)
+                  + ((" 모델별로는 %s ~ %s 입니다." if ko else " By model it runs from %s to %s.") % (pct(a_range[0]), pct(a_range[1]))
+                     if a_range else ""), ""]
+    L += ["## " + ("0. 읽은 것 — 입력 등급 D(공급사 사용량 집계)" if ko else "0. What was read — input grade D (vendor usage file)"), ""]
+    L += [("- 형식: %s · 집계 줄 %d" if ko else "- format: %s · %d summary rows")
+          % (" + ".join(USAGE_KINDS[k][0 if ko else 1] for k in res["kinds"]), res["rows"])]
+    if res.get("error"):
+        L += ["", "**" + ("사용량 줄을 찾지 못했습니다." if ko else "No usage rows found.") + "**", ""]
+        return "\n".join(L)
+    if "period" not in res:  # BILL-ONLY: dollars without token rows (an Anthropic cost CSV, or a cost CSV alone)
+        bd = res.get("bill_days")
+        if bd:
+            L += [("- 청구 금액(비용 CSV): %s, %d일 (%s ~ %s). 모델·키별로 나뉘지 않은 하루 합계입니다. 같은 기간의 사용량 CSV(Activity)를 "
+                   "같은 폴더에 두고 폴더를 주시면 모델별 금액과 단가 역산이 나옵니다." if ko else
+                   "- billed (cost CSV): %s over %d days (%s to %s), daily totals not split by model or key. Put the usage "
+                   "CSV (Activity) for the same period in the same folder and pass the folder for dollars by model and "
+                   "prices fitted from the bill.") % (usd(bd["usd_total"]), bd["days"], bd["period"][0], bd["period"][1])]
+        if ac:
+            ds = ac.get("period")
+            if ds:
+                L.append(("- 기간 %s ~ %s · 모델 %d개" if ko else "- %s to %s · %d models") % (ds[0], ds[1], len(ac["models"])))
+            L += [("- 공급사가 모델·토큰 종류별로 매긴 금액입니다. 본문·요청은 없습니다." if ko else
+                   "- Dollars the vendor billed by model and token type. No text, no prompts."),
+                  ("- 이 스크립트는 네트워크 코드가 0줄입니다." if ko else "- The scanner has no network code.")]
+            L += ["", "## " + t["s1"], ""] + a_lines
+        L += ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        return "\n".join(L)
+    per = res["period"] or ["—", "—"]
+    if res.get("n_calls") and res.get("kinds", {}).get("openai_activity"):
+        L.append(("- 요청 %s건 (공급사가 센 수, num_model_…)" if ko else "- %s calls (the vendor's own count, num_model_…)")
+                 % "{:,}".format(int(res["n_calls"])))
+    bd = res.get("bill_days")
+    if bd:
+        L.append(("- 청구 금액(비용 CSV): %s, %d일 (%s ~ %s). 모델·키별로 나뉘지 않은 하루 합계입니다." if ko else
+                  "- billed (cost CSV): %s over %d days (%s to %s), daily totals not split by model or key.")
+                 % (usd(bd["usd_total"]), bd["days"], bd["period"][0], bd["period"][1]))
+    L += [("- 기간 %s ~ %s · 모델 %d개" if ko else "- %s to %s · %d models") % (per[0][:10], per[1][:10], len(res["models"])),
+          ("- 호출 하나하나가 아니라 공급사가 묶어 센 값입니다(가장 촘촘한 것이 1분 묶음). 본문·요청은 없습니다." if ko else
+           "- These are totals counted by the vendor (1-minute buckets at the finest), not one row per call. No text, no prompts."),
+          ("- 이 스크립트는 네트워크 코드가 0줄입니다." if ko else "- The scanner has no network code."),
+          ("- **이 파일로 볼 수 있는 것**: 출력이 청구서에서 차지하는 몫 · 모델별 토큰과 금액 · 캐시 읽기 비율 · 시간대 몰림 · "
+           "써 놓고 못 읽은 캐시의 하한 · 캐시 최소 길이 미달 신호(요청 수가 있는 파일) · OpenAI Flex 로 보낼 수 있는 몫의 상한(3절)." if ko else
+           "- **What this file shows**: output's share of the bill · tokens and dollars by model · the cache-read share · "
+           "busy hours · the least cache written and never read · a cache-minimum signal (files with request counts) · "
+           "the most that could go to OpenAI Flex (section 3)."),
+          ("- **호출 로그를 주시면 볼 수 있는 것**: 새고 있는 것(재전송·잘린 답·접두 흔들림·캐시 적중)과 더 줄일 수 있는 것(캐시 최소 "
+           "미달·호출끼리 같은 앞부분·바뀐 부분만 고쳐 쓰기·호출 없이 답하기). 공급사 집계에는 호출 하나하나가 없습니다. 호출 로그를 "
+           "남기려면 README 의 \"이 파일이 아직 없다면\" 을 보세요." if ko else
+           "- **What a call log would add**: what is leaking (resends, cut-off answers, unstable prefixes, cache hits) and "
+           "what could cost less (prompts under the cache minimum, shared prefixes, rewriting only the changed parts, "
+           "answering without a call). Vendor totals have no single calls. To start keeping a call log, see \"No log "
+           "file yet?\" in the README."), ""]
+    if res.get("synthetic_docs"):
+        L.insert(next(i for i, x in enumerate(L) if x.startswith(("- 형식", "- format"))) + 1, ("- **[합성] 예시 파일입니다.** 지어낸 숫자라 실제 회사의 값이 아닙니다." if ko else
+                                   "- **[synthetic] This is an example file.** The numbers are made up, not a real company's."))
+    if "aws_cur" in res["kinds"] and res.get("units"):
+        L.insert(-1, ("- AWS 단위 열(pricing_unit) 그대로: %s. 사용량 값이 토큰 하나 단위인지 공식 문서에 없어, line_item_usage_amount 를 그대로 토큰 수로 적었습니다. 금액은 파일의 비용 열입니다." if ko else
+                      "- AWS unit column (pricing_unit), as given: %s. AWS documents do not say whether the usage amount is one token per unit, so line_item_usage_amount is shown as tokens. Dollars come from the file's cost column.")
+                 % ", ".join("%s %d" % kv for kv in res["units"].items()))
+    if "azure_cost" in res["kinds"]:
+        L.insert(-1, ("- Azure 는 하루 단위이고, 모델과 입력·출력·캐시는 미터 이름(MeterName)에서 읽었습니다. 단위 열(1K 등)로 토큰 수를 환산했습니다." if ko else
+                      "- Azure rows are daily. Model, input, output and cache are read from MeterName, and tokens are scaled by the unit column (1K and so on)."))
+    L += ["## " + t["s1"], ""]
+    b = res.get("bill")
+    if b and set(res.get("kinds") or {}) == {"together_cost"}:  # VENDOR-ENTRY: one amount a line, no input / output split
+        L += [("- 청구 합계 %s (파일의 금액 열). 이 형식에는 입력·출력 토큰을 따로 적는 칸이 없어 출력이 몇 %%인지는 알 수 없습니다." if ko else
+               "- billed %s in all (the file's amount column). This format has no input or output token column, so "
+               "output's share cannot be read.") % usd(b["usd_total"]), ""]
+    elif b:
+        src = {v["source"] for v in res["money"].values()}
+        L += [("- 출력 금액 %s / 전체 %s = **%s** (모델 %d개 중 %d개, %s)" if ko else
+               "- output %s of %s total = **%s** (%d of %d models, %s)")
+              % (((usd(b["usd_output"]), usd(b["usd_total"]), pct(b["output_share"]), b["models"], b["priced_models"])
+                  if ko else (usd(b["usd_output"]), usd(b["usd_total"]), pct(b["output_share"]), b["priced_models"], b["models"]))
+                 + ((("파일의 비용 열" if ko else "the file's cost column") if src == {"file"} else
+                  (("가격표 %s 기준" if ko else "prices as of %s") % b["as_of"]) if src == {"table"} else
+                  ("청구서로 역산한 단가" if ko else "prices fitted from the bill") if src == {"bill"} else
+                  (("청구서로 역산한 단가와 가격표 %s" if ko else "prices fitted from the bill and the price list as of %s")
+                   % b["as_of"]) if src == {"bill", "table"} else
+                  ("파일 비용 열과 가격표" if ko else "the file's cost column and the price list")),)), ""]
+        if bd and b["priced_models"] < b["models"]:
+            L.insert(-1, ("- 청구서 합계는 %s 입니다. 위 전체는 단가를 아는 모델 %d개 몫입니다." if ko else
+                      "- The bill says %s in all. The total above covers the %d models with a price.")
+                     % (usd(bd["usd_total"]), b["priced_models"]))
+    else:
+        L += [("- 금액 환산 불가: 가격표에 있는 모델이 없고 파일에 비용 열도 없습니다." if ko else
+               "- No dollar figure: no model is in the price list and the file has no cost column."), ""]
+    bf = _report_bill_fit(res, ko)
+    if bf:
+        L = (L[:-1] if L[-1] == "" else L) + bf + [""]
+    tk = res["tokens"]
+    ti = tk["input"] + tk["cached"] + tk["write"]
+    if not (ti or tk["output"]) and res.get("kinds", {}).get("together_cost"):  # VENDOR-ENTRY: dollars only
+        L += ["## " + ("2. 줄별 금액" if ko else "2. Dollars by line item"), "",
+              ("- 이 파일에는 토큰 수와 캐시가 없습니다. Together 비용 CSV 는 줄마다 수량·단가·금액만 줍니다." if ko else
+               "- This file has no token counts and no cache figures: the Together cost CSV gives quantity, unit price "
+               "and amount a line."), ""]
+        for m, mo in sorted(res["money"].items(), key=lambda kv: -kv[1]["total_usd"]):
+            L.append("- %s: %s" % (m, usd(mo["total_usd"])))
+        L += ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], ""]
+        return "\n".join(L)
+    act = bool(res.get("kinds", {}).get("openai_activity")) or bool(res.get("kinds", {}).get("fireworks_usage"))
+    L += ["## " + ("2. 모델별 토큰" if ko else "2. Tokens by model"), "",
+          "| %s | %s | %s | %s | %s | %s |" % (("모델", "입력", "캐시 읽기", "캐시 쓰기", "출력", "금액") if ko else
+                                           ("model", "input", "cache read", "cache write", "output", "usd"))
+          + (" %s | %s |" % (("요청", "적중률") if ko else ("calls", "hit rate")) if act else ""),
+          "|---|---|---|---|---|---|" + ("---|---|" if act else "")]
+    for m, x in res["models"].items():
+        mo = res["money"].get(m)
+        ti_ = x["input"] + x["cached"] + x["write"]
+        L.append("| %s | %s | %s | %s | %s | %s |" % (m, "{:,}".format(int(x["input"])), "{:,}".format(int(x["cached"])),
+                                                    "{:,}".format(int(x["write"])), "{:,}".format(int(x["output"])),
+                                                    usd(mo["total_usd"]) if mo else "—")
+                 + (" %s | %s |" % ("{:,}".format(int(x["n_calls"])) if x["n_calls"] else "—", pct(x["cached"] / ti_) if ti_ else "—")
+                    if act else ""))
+    if res.get("keys"):
+        L += ["", "| %s | %s | %s | %s |" % (("API 키", "요청", "요청당 입력", "적중률") if ko else
+                                            ("API key", "calls", "input a call", "hit rate")), "|---|---|---|---|"]
+        for k_, v in res["keys"].items():
+            ti_ = v["input"] + v["cached"] + v["write"]
+            L.append("| %s | %s | %s | %s |" % (k_, "{:,}".format(int(v["n_calls"])),
+                                                "{:,}".format(int(ti_ / v["n_calls"])) if v["n_calls"] else "—",
+                                                pct(v["cached"] / ti_) if ti_ else "—"))
+        L.append(("- 키마다 적중률이 다릅니다. 전체 한 숫자는 어느 키에도 맞지 않을 수 있습니다." if ko else
+                  "- The hit rate differs by key. One overall number may fit no single key."))
+    L += ["", ("- 입력 대비 출력: 입력(캐시 포함) %s : 출력 %s 토큰." if ko else "- input vs output: %s input tokens (cache included) to %s output tokens.")
+          % ("{:,}".format(int(ti)), "{:,}".format(int(tk["output"])))]
+    if ti:
+        L.append(("- 캐시 읽기 ÷ 입력 = **%s**. 호출 하나하나의 길이를 몰라 캐시 최소 길이 미달 여부는 가르지 못합니다." if ko else
+                  "- cache read / input = **%s**. Single call lengths are unknown, so this file cannot show calls under the cache minimum.")
+                 % pct(tk["cached"] / ti))
+    if len(res["models"]) >= 2:
+        top = max(res["models"].values(), key=lambda x: x["output"])
+        L.append(("- 모델 %d개. 출력이 가장 많은 모델이 출력의 %s." if ko else "- %d models. The one with the most output has %s of it.")
+                 % (len(res["models"]), pct(top["output"] / tk["output"]) if tk["output"] else "—"))
+    h = res["hours"]
+    if h["peak_hour"] is not None:
+        L.append(("- 시간대(UTC): 출력이 가장 많은 시각 %02d시 = 출력의 %s, 상위 6시간 = %s (1시간 이하 묶음 %d줄로 셈)." if ko else
+                  "- hour of day (UTC): the busiest hour, %02d:00, has %s of output; the top 6 hours have %s (from %d rows of 1-hour buckets or finer).")
+                 % (h["peak_hour"], pct(h["peak_share"]), pct(h["top6_share"]), h["rows"]))
+    L += ["", "## " + ("3. 새고 있는 것 · 더 줄일 수 있는 것" if ko else "3. What is leaking, what could cost less"), ""]
+    cu, cs = res.get("cache_unread") or {}, res.get("cache_min_signal") or {}
+    if cu.get("status") == "found":
+        L += ["### " + ("새고 있는 것" if ko else "Leaking now"), "",
+              ("- 7-7 써 놓고 못 읽은 캐시 — **발견(하한)**" if ko else "- 7-7 cache written and never read — **found (lower bound)**")]
+        for m, v in sorted(cu["models"].items(), key=lambda kv: -kv[1]["unread_lower"]):
+            L.append(("  - %s: 캐시 쓰기 %s · 읽기 %s 토큰 → 읽히지 않은 쓰기가 **적어도 %s 토큰**%s." if ko else
+                      "  - %s: %s tokens written to the cache, %s read → **at least %s** written tokens were never read%s.")
+                     % (m, "{:,}".format(int(v["write"])), "{:,}".format(int(v["read"])), "{:,}".format(int(v["unread_lower"])),
+                        ((", 쓰기 웃돈(쓰기 배수 %.2f) 적어도 %s" if ko else ", an extra of at least %s at the %.2f write multiple")
+                         % ((v["write_multiple"], usd(v["usd_lower"])) if ko else (usd(v["usd_lower"]), v["write_multiple"])))
+                        if v["usd_lower"] is not None else ""))
+        L.append(("  - 하한입니다. 한 번 쓴 캐시를 여러 번 읽을 수는 있어도, 읽힌 쓰기 토큰은 읽기 토큰 수를 넘지 못합니다. 그래서 쓰기에서 읽기를 뺀 만큼은 "
+                  "확실히 안 읽혔습니다. 어느 요청의 쓰기인지는 호출 로그가 있어야 압니다." if ko else
+                  "  - A lower bound. A cache write can be read many times, but the written tokens that were read cannot "
+                  "outnumber the read tokens, so at least writes minus reads were never read. Which calls wrote them "
+                  "takes a call log."))
+        L.append("")
+    elif cu.get("models_with_writes"):
+        L += ["### " + ("새고 있는 것" if ko else "Leaking now"), "",
+              ("- 7-7 써 놓고 못 읽은 캐시 — **없음** (모델마다 캐시 읽기가 쓰기 이상입니다)" if ko else
+               "- 7-7 cache written and never read — **none** (each model read at least as much as it wrote)"), ""]
+    L += ["### " + ("더 줄일 수 있는 것" if ko else "Could cost less"), ""]
+    if cs.get("status") == "found":
+        L += [("- 7-5 캐시 최소 길이 미달 — **신호**" if ko else "- 7-5 prompts under the cache minimum — **signal**"),
+              ("  - 요청 수가 있는 집계 줄 %d 중 %d 줄은 평균 입력이 그 모델의 캐시 최소 길이보다 짧습니다(그 줄의 요청 %s건 / 요청 수가 있는 %s건). "
+               "그 줄마다 최소 길이 미달 요청이 적어도 하나 있습니다. 몇 건인지는 평균으로 알 수 없습니다.")
+              % (cs["rows_with_count"], cs["rows_mean_below"], "{:,}".format(int(cs["calls_in_those_rows"])),
+                 "{:,}".format(int(cs["calls_with_count"]))) if ko else
+              ("  - In %d of %d summary rows with a request count, the mean prompt is shorter than the model's cache "
+               "minimum (%s calls in those rows, of %s with a count). Each of those rows holds at least one call "
+               "under the minimum. A mean cannot say how many.")
+              % (cs["rows_mean_below"], cs["rows_with_count"], "{:,}".format(int(cs["calls_in_those_rows"])),
+                 "{:,}".format(int(cs["calls_with_count"])))]
+    f = res.get("flex") or {}
+    if f.get("status") == "found":
+        L += [("- 7-9 OpenAI Flex 로 보낼 수 있는 몫 — **발견(상한)**" if ko else "- 7-9 what could go to OpenAI Flex — **found (upper bound)**"),
+              ("  - Flex 를 쓸 수 있는 모델(%s) 집계 줄 %d: 입력(캐시 포함) %s · 출력 %s 토큰, 금액 %s(가격표). Flex 는 같은 모델을 표준 단가의 "
+               "절반(Batch 단가, 가격표 %s)에 답합니다 — 다 Flex 였다면 **최대 %s** 덜 듭니다." if ko else
+               "  - %d summary rows on Flex-table models (%s): %s input tokens (cache included) and %s output tokens, %s at "
+               "list prices. Flex runs the same model at half the standard rate (Batch rates, price list %s). Sending all "
+               "of it at Flex would cost **at most %s** less.")
+              % (((", ".join(f["models"]), f["rows"]) if ko else (f["rows"], ", ".join(f["models"])))
+                 + ("{:,}".format(int(f["input_tokens"])), "{:,}".format(int(f["output_tokens"])), usd(f["usd"]),
+                    f["table_as_of"], usd(f["saving_upper_usd"]))),
+              ("  - 상한입니다. 이 파일은 어느 호출이 기다려도 되는지 모릅니다.%s 호출 로그가 있으면 스트림 아닌 호출만 따로 셉니다." if ko else
+               "  - An upper bound. This file cannot tell which calls can wait%s. A call log narrows it to calls that were not streamed.")
+              % ((" 이미 Batch 로 보낸 것인지도 이 파일에는 비어 있습니다(batch 필드가 빈 줄 %d)." if ko else ", nor whether they already went through Batch (batch field empty on %d rows)")
+                 % f["rows_batch_unknown"] if f["rows_batch_unknown"] else "")]
+    else:
+        L += [("- 7-9 OpenAI Flex — 해당 없음 (Flex 할인이 있는 모델의 토큰이 이 파일에 없습니다). 나머지 항목은 0절 마지막 줄처럼 호출 로그가 있어야 봅니다." if ko else
+               "- 7-9 OpenAI Flex — does not apply (no tokens here are on models that Flex offers). The rest need a call log, as the last line of section 0 says.")]
+    # the bridge to the collector (PM 10-23 07:34 item 1): what a few minutes of call log would add, from COLLECT_WAKE
+    cw = COLLECT_WAKE
+    L += ["", "## " + ("4. 호출 기록을 켜면" if ko else "4. With a call log"), "",
+          ("- 기록 도구(코드 두 줄, 본문은 남기지 않음)를 켜면 새고 있는 것·더 줄일 수 있는 것을 호출 단위로 봅니다. 답·요청 해시까지 "
+           "켜면 바뀐 부분만 고쳐 쓰기와 호출 없이 답하기도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 몫:" if ko else
+           "- The recording tool (two lines of code, no text kept) checks what is leaking and what could cost less, call by "
+           "call. With answer and request hashes on, it also checks rewriting only the changed parts and answering without "
+           "a call. Of what a full day would find to fix, the share seen after:"),
+          "  - " + " · ".join((("%s %d%%" % (("%d분" % m) if m < 60 else ("%d시간" % (m // 60)) if m < 1440 else "하루", round(100 * a / b)))
+                      if ko else ("%s %d%%" % (("%d min" % m) if m < 60 else ("%d h" % (m // 60)) if m < 1440 else "1 day", round(100 * a / b))))
+                     for m, _, a, b in cw["rows"]),
+          (("  - [합성] 매트릭스 칸에서 잰 값입니다(%s). 트래픽이 적으면 더 오래 걸립니다." if ko else
+            "  - Measured on [synthetic] matrix cells (%s). Less traffic takes longer.") % cw["basis"][0 if ko else 1])]
+    L += ["", ("소요 %.1f초" if ko else "took %.1fs") % res["seconds"], "", CONTACT[0 if ko else 1]]
+    return "\n".join(L)
+
+
+# ------------------------------------------------------------------ HTML report (PM 10-22 15:50)
+# One self-contained page from the same report text: the Markdown report is rendered as it is (so every number is the
+# Markdown's, checked by html_numbers_match), with a summary, item cards, a colored two-axis table and a range bar on
+# top. Standard library only, inline CSS, system fonts, inline SVG, no external reference of any kind.
+REPORT_CSS = """
+:root{--bg:#fff;--fg:#111;--mut:#5b5f66;--line:#e6e7ea;--acc:37,99,235;--found:#b42318;--none:#2f6f3e;--more:#6b5b00}
+@media (prefers-color-scheme:dark){:root{--bg:#121316;--fg:#ececee;--mut:#a3a7ae;--line:#2a2c31;--acc:96,145,255;
+--found:#ff8a80;--none:#7fd18b;--more:#e3c75a}}
+*{box-sizing:border-box}html{background:var(--bg)}
+body{margin:0 auto;max-width:880px;padding:32px 16px 64px;background:var(--bg);color:var(--fg);
+font:16px/1.7 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
+word-break:keep-all;overflow-wrap:anywhere}
+h1{font-size:15px;font-weight:600;color:var(--mut);margin:0 0 4px}
+h2{font-size:20px;margin:48px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+.meta{color:var(--mut);font-size:14px}
+.hero{margin:20px 0 8px}.hero .lab{font-size:15px;color:var(--mut)}
+.hero .big{font-size:46px;font-weight:700;letter-spacing:-.02em;line-height:1.2;color:rgb(var(--acc))}
+.hero .note{font-size:14px;color:var(--mut)}
+.syn{display:inline-block;font-size:13px;font-weight:600;border:1px solid var(--fg);padding:0 8px;border-radius:4px;margin-left:6px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}
+.card{border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.card .n{font-size:30px;font-weight:700;line-height:1.2}.card .t{font-size:14px;color:var(--mut)}
+.card ul{margin:8px 0 0;padding-left:18px;font-size:14px;line-height:1.6}
+.card.found .n{color:var(--found)}.card.none .n{color:var(--none)}.card.more .n{color:var(--more)}
+.bar{margin:8px 0 0;color:var(--fg)}.bar svg{width:100%;height:auto;display:block}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}
+td.heat{text-align:center}
+ul{padding-left:22px}li{margin:4px 0}li li{font-size:15px;color:var(--fg)}
+code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(var(--acc),.08);padding:1px 4px;border-radius:3px}
+.badge{display:inline-block;font-size:12px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid currentColor;
+margin-left:4px;vertical-align:1px}
+.badge.found{color:var(--found)}.badge.none{color:var(--none)}.badge.more{color:var(--more)}
+.wrap{overflow-x:auto;max-width:100%}.card,section,header{min-width:0}code{word-break:break-all}
+footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13px}
+@media (max-width:640px){.cards{grid-template-columns:1fr}.hero .big{font-size:36px}body{font-size:15px}}
+@media print{body{max-width:none;padding:0;font-size:11pt}h2{break-after:avoid}.card,table,li{break-inside:avoid}
+:root{--bg:#fff;--fg:#000;--mut:#444;--line:#ccc}.hero .big{color:#000}}
+"""
+ITEM_KEYS = ("failed", "resent", "truncated", "prefix_unstable", "cache_min", "billing", "cache_hit", "shared_prefix", "flex")
+ITEM_NAMES = dict(ZTITLE, flex=("7-9 OpenAI Flex 후보", "7-9 calls that could use OpenAI Flex"))
+
+
+BADGE = {"발견": "found", "found": "found", "없음": "none", "none": "none"}
+
+
+def _inline(t):
+    import html
+    t = html.escape(t, quote=False)
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    m = re.search(r"\*\*(발견|없음|found|none)\*\*$", t.rstrip())  # an item's status at the end of its line
+    if m:
+        t = t.rstrip()[:m.start()] + '<span class="badge %s">%s</span>' % (BADGE[m.group(1)], m.group(1))
+    t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
+    for pre, tag in (("로그에 이것이 있으면 봅니다:", "더 보려면"), ("Seen when the log has", "to see more")):
+        t = t.replace(pre, '<span class="badge more">%s</span> %s' % (tag, pre), 1)
+    return t
+
+
+def _md_html(md):
+    """The report's own Markdown subset (headings, bullets two deep, pipe tables, bold, code) to HTML. The two-axis
+    table's cells get a background whose strength follows the cell's share of output."""
+    out, i, lines, in_sec = [], 0, md.split("\n"), False
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith("# ") or (not in_sec and ln.startswith("scanner ")):  # title and version: in the page header
+            i += 1
+            continue
+        if ln.startswith("## "):
+            out.append(("</section>" if in_sec else "") + "<section><h2>%s</h2>" % _inline(ln[3:]))
+            in_sec = True
+        elif ln.startswith("|"):
+            rows = []
+            while i < len(lines) and lines[i].startswith("|"):
+                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                i += 1
+            heat = rows[0][0].startswith(("닮음", "overlap"))
+            h = ['<div class="wrap"><table><thead><tr>' + "".join("<th>%s</th>" % _inline(c) for c in rows[0]) + "</tr></thead><tbody>"]
+            for r in rows[2:]:
+                cells = []
+                for j, c in enumerate(r):
+                    m = re.search(r"([\d.]+)%", c) if heat and j else None
+                    if m:
+                        a = min(1.0, float(m.group(1)) / 60) * 0.85 + 0.06
+                        cells.append('<td class="heat" style="background:rgba(var(--acc),%.2f)">%s</td>' % (a, _inline(c)))
+                    else:
+                        cells.append(("<th>%s</th>" if heat and not j else "<td>%s</td>") % _inline(c))
+                h.append("<tr>" + "".join(cells) + "</tr>")
+            out.append("".join(h) + "</tbody></table></div>")
+            continue
+        elif ln.startswith("- "):
+            items = []
+            while i < len(lines) and (lines[i].startswith("- ") or lines[i].startswith("  - ") or lines[i].startswith("  ")):
+                l2 = lines[i]
+                if l2.startswith("- "):
+                    items.append([_inline(l2[2:]), []])
+                elif l2.strip().startswith("- ") and items:
+                    items[-1][1].append(_inline(l2.strip()[2:]))
+                elif items:
+                    items[-1][0] += " " + _inline(l2.strip())
+                i += 1
+            out.append("<ul>" + "".join("<li>%s%s</li>" % (t, ("<ul>" + "".join("<li>%s</li>" % x for x in sub) + "</ul>") if sub else "")
+                                        for t, sub in items) + "</ul>")
+            continue
+        elif ln.strip():
+            out.append("<p>%s</p>" % _inline(ln))
+        i += 1
+    return "\n".join(out) + ("</section>" if in_sec else "")
+
+
+def _range_svg(lo, hi, label_lo, label_hi):
+    x0, w = 20, 560
+    a, b = x0 + w * max(0.0, min(1.0, lo)), x0 + w * max(0.0, min(1.0, hi))
+    return ('<div class="bar"><svg viewBox="0 0 600 64" role="img" aria-label="%s ~ %s">'
+            '<rect x="%d" y="22" width="%d" height="10" rx="5" fill="currentColor" opacity=".12"/>'
+            '<rect x="%.1f" y="18" width="%.1f" height="18" rx="9" fill="rgb(var(--acc))"/>'
+            '<text x="%.1f" y="56" font-size="13" text-anchor="middle" fill="currentColor">%s</text>'
+            '<text x="%.1f" y="56" font-size="13" text-anchor="middle" fill="currentColor">%s</text>'
+            '<text x="%d" y="12" font-size="11" fill="currentColor" opacity=".6">0%%</text>'
+            '<text x="%d" y="12" font-size="11" text-anchor="end" fill="currentColor" opacity=".6">100%%</text></svg></div>'
+            % (label_lo, label_hi, x0, w, a, max(b - a, 4), a, label_lo, b, label_hi, x0, x0 + w))
+
+
+def report_html(res, lang="ko"):
+    import html
+    ko, md = lang == "ko", report(res, lang, cache_line=False)
+    t = T[lang]
+    head = ['<header><h1>%s</h1><div class="meta">scanner %s · %s%s</div>' % (
+        html.escape(t["title"]), html.escape(res["version"]), html.escape(res["input"]),
+        ('<span class="syn">%s</span>' % ("[합성] 예시 로그" if ko else "[synthetic] example log")) if res.get("synthetic_calls") else "")]
+    s = res.get("savings") or {}
+    if not res.get("error") and s.get("share_of_bill_low") is not None and s.get("share_of_bill_high"):
+        lo, hi, what = s["share_of_bill_low"], s["share_of_bill_high"], ("청구서" if ko else "of the bill")
+    elif not res.get("error") and s.get("share_of_all_output_high"):
+        lo, hi, what = s["share_of_all_output_low"], s["share_of_all_output_high"], ("출력 토큰" if ko else "of output tokens")
+    else:
+        lo = hi = None
+    lv = res.get("limit") or {}
+    ch = cache_head(res, ko)
+    good = (lo is None or not hi) and lv.get("already_good") and not lv.get("items") and lv.get("nothing_found")
+    if ch and not good:  # CACHE-HEAD: the first tile on page 1 (an already-good log's own tile is the same number)
+        head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
+                    % (html.escape(ch[0]), html.escape(ch[1] or "—"), _inline(ch[2])))
+    mh = marked_head(res, ko)
+    if mh:  # CACHE-HEAD 18:20: next to the hit rate
+        head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
+                    % (html.escape(mh[0]), html.escape(mh[1]), _inline(mh[2])))
+    if (lo is None or not hi) and lv.get("already_good") and not lv.get("items") and lv.get("nothing_found"):  # PM 07:32 ③
+        head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
+                    % (("이미 잘 쓰고 있는 것 — 캐시 읽기 ÷ 입력" if ko else "Already used well — cache reads / input"),
+                       pct(lv["already_good"]["cache_hit_rate"]),
+                       ("1절 — 이 기록에서 캐시로 더 줄일 몫이 거의 없습니다." if ko else "Section 1 — little is left for caching to cut in this log.")
+                       + ((" " + _inline(ch[2])) if ch else "")))
+    elif lo is not None:
+        head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s ~ %s</div><div class="note">%s</div></div>'
+                    % (("이 로그에서 줄일 수 있는 것 — %s의" if ko else "What this log could save — %s") % what, pct(lo), pct(hi),
+                       ("4절 — 링클비가 다른 공개 문서로 잰 범위를 이 로그의 해당 구간에 대입한 추정입니다. 이 로그로 잰 절감이 아닙니다."
+                        if ko else "Section 4 — ranges Linklbee measured on other public documents, applied to this log's "
+                                   "reducible calls. Not a saving measured on this log.")))
+        head.append(_range_svg(lo, hi, pct(lo), pct(hi)))
+    elif not res.get("error") and (res.get("bill") or {}).get("output_share") is not None:
+        # no section-4 range (no answer text, or nothing in the diff cells): the bill's output share is the headline
+        head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
+                    % (("청구서에서 출력이 차지하는 몫" if ko else "Output's share of the bill"), pct(res["bill"]["output_share"]),
+                       ("1절 — 링클비가 줄이는 것이 이 출력입니다." if ko else "Section 1 — this output is what Linklbee shortens.")))
+    W = res.get("waste") or {}
+    if W:
+        # the same groups as section 7 (PM 10-22 19:15): found leaks, found cheaper ways, needs more data
+        groups = {"found": [], "more_found": [], "cannot_judge": []}
+        listed, small = more_order(res)
+        for k in [k for k in ITEM_KEYS if WKIND[k] != "more"] + listed + small + \
+                [k for k in ITEM_KEYS if WKIND[k] == "more" and k not in listed + small]:
+            if k in W and k not in NO_KNIFE and W[k]["status"] != "none":
+                g = "cannot_judge" if W[k]["status"] == "cannot_judge" else "found" if WKIND[k] == "leak" else "more_found"
+                groups[g].append(html.escape(ITEM_NAMES[k][0 if ko else 1]))
+        names = {"found": ("새고 있는 것", "leaking now"), "more_found": ("더 줄일 수 있는 것", "could cost less"),
+                 "cannot_judge": ("더 주시면 볼 수 있는 것", "more data would show")}
+        head.append('<div class="cards">' + "".join(
+            '<div class="card %s"><div class="n">%d</div><div class="t">%s</div>%s</div>'
+            % ({"cannot_judge": "more", "more_found": "none"}.get(g, g), len(v), names[g][0 if ko else 1],
+               ("<ul>" + "".join("<li>%s</li>" % x for x in v) + "</ul>") if v else "")
+            for g, v in groups.items()) + "</div>")
+    head.append("</header>")
+    try:
+        me = hashlib.sha256(open(os.path.abspath(__file__), "rb").read()).hexdigest()[:12]
+    except OSError:
+        me = "—"
+    foot = ('<footer>%s · scanner %s · sha256 %s · %s</footer>'
+            % (("네트워크 코드 0줄, AI 호출 0, 본문·키 없음(개수와 비율만)" if ko else
+                "no network code, no AI calls, no text or keys (counts and shares only)"),
+               html.escape(res["version"]), me,
+               (("소요 %.1f초" if ko else "took %.1fs") % res["seconds"]) if res.get("seconds") is not None else ""))
+    return ('<!DOCTYPE html>\n<html lang="%s"><head><meta charset="utf-8"><meta name="viewport" '
+            'content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body>%s\n%s\n%s</body></html>\n'
+            % (lang, html.escape(t["title"]), REPORT_CSS, "\n".join(head), _md_html(md), foot))
+
+
+def html_numbers_match(md, page):
+    """Every number of the Markdown report is in the HTML page as often (the page adds the summary and footer only)."""
+    import html
+    num = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
+    text = html.unescape(re.sub(r"<style>.*?</style>|<svg.*?</svg>|<[^>]+>", " ", page, flags=re.S))
+    a, b = collections.Counter(num.findall(md)), collections.Counter(num.findall(text))
+    return not (a - b)
+
+
+def demo_log():
+    """The bundled [synthetic] demo log: examples/calls.sample.jsonl next to this file, or under the current folder."""
+    for d in (HERE, os.getcwd()):
+        p = os.path.join(d, "examples", "calls.sample.jsonl")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def find_inputs(folder):
+    """AUTO-BRANCH (PM 10-23 07:38 item 3): what the scanner can read in `folder` without being told -- its own files
+    only (not subfolders), each sorted by its first record into a call log or a vendor usage file. The bundled
+    [synthetic] example is left out. -> (call log files, usage files)."""
+    calls, usage = [], []
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return calls, usage
+    demo = demo_log()
+    for f in names:
+        p = os.path.join(folder, f)
+        base = f[:-3] if f.lower().endswith(".gz") else f
+        if f.startswith(".") or not os.path.isfile(p) or os.path.splitext(base)[1].lower() not in READ_EXT:
+            continue
+        if demo and os.path.abspath(p) == os.path.abspath(demo):
+            continue
+        try:
+            first = next(iter(_usage_docs(p)), None)
+        except Exception:  # noqa: BLE001 -- unreadable: not an input
+            continue
+        if usage_kind(first):
+            usage.append(p)
+        elif isinstance(first, dict):
+            d, _ = resolve(first)
+            if any(k in d for k in ("output", "output_tokens", "input_tokens", "output_token_hashes")) or \
+                    isinstance(first.get("linklbee_req"), dict):
+                calls.append(p)
+    return calls, usage
+
+
+def collect_first(lang="ko"):
+    """No log and no usage file found: the collector first, with what an hour of it shows."""
+    ko = lang == "ko"
+    wake = globals().get("COLLECT_WAKE") or {}  # N-MIN's table (0c session); without it the hour line is left out
+    hour = next((r for r in wake.get("rows") or () if r[0] == 60), None)
+    L = ["", ("이 폴더에서 호출 기록도, 공급사 사용량 파일도 찾지 못했습니다. 기록부터 남기세요." if ko else
+              "No call log and no vendor usage file in this folder. Start by keeping a record."), ""]
+    if os.path.exists(os.path.join(HERE, "linklbee_collect.py")):
+        L += [("  앱에서 클라이언트를 만드는 곳에 두 줄을 넣으세요(본문은 기록하지 않습니다):" if ko else
+               "  Add two lines where your app makes its client (no text is written):"),
+              "     import linklbee_collect", "     linklbee_collect.attach(client)"]
+    else:
+        L += [("  호출 직후 한 줄씩 남기는 코드가 README 의 \"이 파일이 아직 없다면\" 에 있습니다." if ko else
+               "  The README section \"No log file yet?\" has the few lines that log each call.")]
+    if hour:
+        b = wake.get("basis") or ("", "")
+        L += ["", ("  1시간만 모아도 하루치에서 나올 고칠 것 %d개 중 %d개가 보입니다(%s [합성])." if ko else
+                   "  One hour of records already shows %d of the %d fixes a full day finds (%s [synthetic]).")
+              % (((hour[3], hour[2]) if ko else (hour[2], hour[3])) + (b[0 if ko else 1] if isinstance(b, (tuple, list)) else b,))]
+    L += ["", ("  모은 뒤 이 폴더에서 다시 python3 linklbee_scan.py 를 치세요." if ko else
+           "  Then run python3 linklbee_scan.py again in this folder."), "",
+          ("  바로 보시려면: 공급사 콘솔의 사용량 파일(OpenAI Usage API·Costs API · OpenAI 콘솔 사용량·비용 CSV · Anthropic Admin API · "
+           "Anthropic 콘솔 비용 CSV · AWS CUR · Azure 비용 내역 · Fireworks · Together)을 이 폴더에 두고 다시 치세요. 지금 바로 일부 항목을 봅니다." if ko else
+           "  To see something now: put the vendor's usage file (OpenAI Usage or Costs API, OpenAI console usage or cost "
+           "CSV, Anthropic Admin API, Anthropic console cost CSV, AWS CUR, Azure cost details, Fireworks, Together) in this folder and run it again. "
+           "Some items show at once.")]
+    if demo_log():
+        L += ["", ("  리포트 모양부터 보시려면:  python3 linklbee_scan.py --demo" if ko else
+                   "  To see a report first:  python3 linklbee_scan.py --demo")]
+    print("\n".join(L) + "\n")
+
+
+def unread_lines(path, ko, blank=None):
+    """UNKNOWN-SHAPE (PM 10-24 08:25 ending C): a file that gave no call is never a dead end -- say whether it is empty,
+    which shapes were tried, how to point the reader at its fields now, and to show its first line for the next version."""
+    try:
+        if blank is None and path and os.path.isfile(path):
+            with open_text(path) as fh:
+                blank = not fh.read(1 << 16).strip()
+    except OSError:
+        pass
+    if blank is True:
+        return [("  파일이 비어 있습니다. 기록이 들어간 파일을 넣어 주세요." if ko else
+                 "  The file is empty. Point it at the file the records went to."), ""]
+    return [("  읽으려 한 모양: 한 줄에 JSON 하나(앞에 시각·글이 붙은 줄, 한 줄에 여럿 포함) · JSON 배열 · {\"data\": [...]} 같은 "
+             "감싼 JSON · CSV · 공급사 응답 원형 · Langfuse·LangSmith·Helicone·LiteLLM·Bedrock·Vertex·Gemini·Azure 내보내기." if ko else
+             "  Shapes tried: one JSON object a line (also with text before it, or several on a line), JSON arrays, wrapped "
+             "JSON such as {\"data\": [...]}, CSV, raw vendor responses, and Langfuse, LangSmith, Helicone, LiteLLM, Bedrock, Vertex, Gemini and Azure exports."),
+            ("  지금 읽게 하려면: %s --peek <파일> 로 칸 이름을 본 뒤 --map model=<칸> ts=<칸> output=<칸> 처럼 알려 주세요." if ko else
+             "  To read it now: %s --peek <file> shows its field names; then pass --map model=<field> ts=<field> "
+             "output=<field>.") % "python3 linklbee_scan.py",
+            ("  이 파일의 첫 줄(본문은 지워도 됩니다)을 보여 주시면 다음 판에서 읽습니다." if ko else
+             "  Show us its first line (blank out the text if you like) and the next version reads it."), ""]
+
+
+def guide(lang="ko", empty=None):
+    """What to do with no log: the ways in that this package has. Printed instead of an error."""
+    ko = lang == "ko"
+    me = "python3 linklbee_scan.py"
+    L = [""]
+    if empty:
+        L += [("%s 에서 읽을 호출 기록을 찾지 못했습니다." if ko else "No call records found in %s.") % empty]
+        L += unread_lines(empty, ko)
+    L += [("아래에서 고르세요." if ko else "Pick the one that fits."), "",
+          ("  1  이미 로그가 있다" if ko else "  1  I already have a log"),
+          "     %s --logs <%s>" % (me, "파일 또는 폴더" if ko else "file or folder"),
+          ("     읽는 형식: JSONL · JSON 배열 · CSV · .log(한 줄 JSON) · .gz, OpenAI·Anthropic 응답 원형, Langfuse · "
+           "LangSmith · Helicone · LiteLLM · Bedrock · Vertex · Gemini · Azure OpenAI 내보내기. 폴더면 안의 파일을 전부 읽습니다."
+           if ko else
+           "     No conversion needed: JSONL, JSON arrays, CSV, .log (one JSON per line), .gz; raw OpenAI and Anthropic "
+           "responses; Langfuse, LangSmith, Helicone, LiteLLM, Bedrock, Vertex, Gemini and Azure OpenAI exports. A folder "
+           "is read file by file."), "",
+          ("  2  공급사 콘솔·청구 파일은 받을 수 있다" if ko else "  2  I can download a usage or cost file from the vendor"),
+          "     %s <%s>" % (me, "받은 파일" if ko else "downloaded file"),
+          ("     OpenAI 사용량(Usage API)·비용(Costs API) · OpenAI 콘솔 사용량·비용 CSV · Anthropic 사용량 보고(Admin API) · "
+           "Anthropic 콘솔 비용 CSV · AWS 비용·사용 보고서(CUR) · Azure 비용 내역 · Fireworks 사용량 · Together 비용 CSV 를 그대로 넣으세요. 모델별 지출·입출력 비중·캐시 읽기·시간대가 나옵니다."
+           if ko else
+           "     Use the OpenAI Usage or Costs API, an OpenAI console usage or cost CSV, the Anthropic usage report (Admin "
+           "API), an Anthropic console cost CSV, the AWS Cost and Usage Report, Azure cost details, Fireworks usage or "
+           "the Together cost CSV as downloaded. You get spend "
+           "by model, input vs output, cache reads and busy hours."), "",
+          ("  3  아직 로그가 없다 — 지금부터 남긴다" if ko else "  3  No log yet — start keeping one"),
+          ("     호출 직후 한 줄씩 남기는 코드(파이썬·TypeScript 몇 줄)가 README 의 \"이 파일이 아직 없다면\" 에 있습니다."
+           if ko else "     The README section \"No log file yet?\" has a few lines of Python or TypeScript that log each call.")]
+    if os.path.exists(os.path.join(HERE, "linklbee_collect.py")):
+        L += ["", ("  4  앱에 한 줄 붙여 모은다 (본문은 적지 않습니다)" if ko else "  4  Collect with one line in your app (no text is written)"),
+              "     import linklbee_collect; linklbee_collect.attach(client)"]
+    if demo_log():
+        L += ["", ("  리포트 모양부터 보시려면:  %s --demo" if ko else "  To see a report first:  %s --demo") % me]
+    print("\n".join(L) + "\n")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Linklbee scanner v1 — output-token diagnosis (no network)")
-    ap.add_argument("--logs", help="generic JSONL call log (group_key = one document / one case across its versions, "
-                                   "not the kind of call)")
+    ap.add_argument("logs_arg", nargs="?", metavar="LOGS", help="the same as --logs")
+    ap.add_argument("--logs", help="call log: a file (JSONL, JSON array, CSV, .log, .gz) or a folder of them "
+                                   "(group_key = one document / one case across its versions, not the kind of call)")
+    ap.add_argument("--demo", action="store_true", help="run on the bundled [synthetic] example log")
+    ap.add_argument("--claude-code", action="store_true",
+                    help="read this machine's Claude Code records (~/.claude/projects): a trial on a log you already have")
     ap.add_argument("--out", help="report path (or hashed JSONL with --hashify)")
     ap.add_argument("--json", help="also write stats JSON")
     ap.add_argument("--lang", choices=("ko", "en"), default="ko")
@@ -4259,8 +9066,18 @@ def main(argv=None):
     ap.add_argument("--map", nargs="+", action="extend", default=[], metavar="FIELD=PATH",
                     help="read FIELD from PATH (dotted, list items by number: choices.0.message.content; a CSV column "
                          "name as is). FIELD is one of: " + ", ".join(FIELDS))
+    ap.add_argument("--flat", nargs="+", action="extend", default=[], metavar="MODEL",
+                    help="flat-rate or committed-capacity (PTU) traffic: these models' calls get no dollar figure "
+                         "(cutting tokens does not change that bill); 'all' marks every call")
     ap.add_argument("--quiet", action="store_true", help="no banner")
     a = ap.parse_args(argv)
+    a.logs = a.logs or a.logs_arg
+    if a.claude_code:
+        a.logs = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    if a.demo:
+        a.logs = demo_log()
+        if not a.logs:
+            ap.error("--demo needs examples/calls.sample.jsonl next to linklbee_scan.py (it comes in the package)")
     if not a.quiet and sys.stdout.isatty():
         _banner()
     fmap = {}
@@ -4269,6 +9086,8 @@ def main(argv=None):
         if not eq or f not in FIELDS + EXTRA_FIELDS or not path:
             ap.error("--map takes FIELD=PATH with FIELD one of %s (got %r)" % (", ".join(FIELDS + EXTRA_FIELDS), m))
         fmap[f] = path
+    if a.logs and not os.path.exists(a.logs):
+        ap.error("no such file or folder: %s" % a.logs)
     if a.peek:
         if not a.logs:
             ap.error("--peek needs --logs")
@@ -4281,18 +9100,71 @@ def main(argv=None):
         c, n, bad = pairs_to_calls(a.from_pairs, a.out or a.from_pairs + ".calls.jsonl")
         print("pairs %d (rejected %d: no doc_id, unreadable or unordered from/to, or no gold) -> calls %d" % (n, bad, c))
         return 0
-    if not a.logs:
-        ap.error("--logs is required")
-    res = scan(a.logs, a.pricing, a.mode, a.workers, fmap)
+    if not a.logs:  # AUTO-BRANCH: never ask which case the user is in -- look, then pick
+        calls, usage = find_inputs(os.getcwd())
+        pick = calls[0] if len(calls) == 1 else os.getcwd() if calls and log_files(os.getcwd()) == calls else \
+            max(calls, key=os.path.getsize) if calls else usage[0] if usage else None
+        if pick is None:
+            collect_first(a.lang)
+            return 0
+        a.logs = pick
+        what = ("호출 기록" if a.lang == "ko" else "call log") if calls else ("사용량 파일" if a.lang == "ko" else "usage file")
+        left = len(calls) - 1 if pick != os.getcwd() and len(calls) > 1 else 0
+        print((("이 폴더에서 %s을 찾아 읽습니다: %s (다른 파일은 --logs <경로>)" if a.lang == "ko" else
+                "Found a %s here and reading it: %s (another file: --logs <path>)")
+               % (what, os.path.relpath(pick) if pick != os.getcwd() else ".")) +
+              ((" — 호출 기록 파일이 %d개 더 있습니다. 전부 읽으려면 한 폴더에 모아 --logs <폴더>" if a.lang == "ko" else
+                " -- %d more call log files here; to read them all, put them in one folder and use --logs <folder>")
+               % left if left else ""), file=sys.stderr)
+    if os.path.isdir(a.logs) and not log_files(a.logs):
+        guide(a.lang, a.logs)
+        return 0
+    first = next(iter(_usage_docs(a.logs)), None) if not fmap else None
+    if usage_kind(first):
+        res = scan_usage(a.logs, a.pricing)
+        md = report_usage(res, a.lang)
+        if a.out and a.out.lower().endswith((".html", ".htm")):
+            import html as _h
+            open(a.out, "w", encoding="utf-8").write(
+                '<!DOCTYPE html>\n<html lang="%s"><head><meta charset="utf-8"><meta name="viewport" '
+                'content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body><header><h1>%s'
+                '</h1><div class="meta">scanner %s · %s</div></header>\n%s</body></html>\n'
+                % (a.lang, _h.escape(T[a.lang]["title"]), REPORT_CSS, _h.escape(T[a.lang]["title"]), res["version"],
+                   _h.escape(res["input"]), _md_html(md)))
+            print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
+        elif a.out:
+            open(a.out, "w", encoding="utf-8").write(md)
+            print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
+        else:
+            print(md)
+        if a.json:
+            json.dump(res, open(a.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
+        return 1 if res.get("error") else 0
+    res = scan(a.logs, a.pricing, a.mode, a.workers, fmap, a.flat)
     md = report(res, a.lang)
-    if a.out:
+    if a.out and a.out.lower().endswith((".html", ".htm")):
+        page = report_html(res, a.lang)
+        if not html_numbers_match(md, page):
+            raise SystemExit("HTML report numbers differ from the Markdown report -- not written")
+        open(a.out, "w", encoding="utf-8").write(page)
+    elif a.out:
         open(a.out, "w", encoding="utf-8").write(md)
     else:
         print(md)
+    if a.out and a.out != os.devnull:
+        print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
+    if a.demo:
+        print("[합성] 예시 로그로 돌린 리포트입니다. 자기 로그는 python3 linklbee_scan.py --logs <파일 또는 폴더>" if a.lang == "ko" else
+              "[synthetic] This report used the example log. To scan your own: python3 linklbee_scan.py --logs <file or folder>")
+    if res.get("error") or not res.get("calls"):
+        guide(a.lang, a.logs)
     if a.json:
         json.dump(res, open(a.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     if a.share:
-        json.dump(share_summary(res), open(a.share, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        sh = share_summary(res)
+        json.dump(sh, open(a.share, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        print(("\n공유용 요약(그대로 복사해서 붙이세요):\n" if a.lang == "ko" else "\nTo share (copy as is):\n")
+              + sh["share_text"][a.lang] + "\n")
     return 1 if res.get("error") else 0
 
 

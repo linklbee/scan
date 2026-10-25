@@ -1,0 +1,43 @@
+Date,MeterCategory,MeterName,Quantity,UnitOfMeasure,CostInBillingCurrency,synthetic
+10/01/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,5851.146,1K,14.6279,true
+10/01/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,2730.535,1K,27.3054,true
+10/01/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,1625.318,1K,2.0316,true
+10/02/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,8552.57,1K,21.3814,true
+10/02/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,3991.199,1K,39.912,true
+10/02/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,2375.714,1K,2.9696,true
+10/03/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,11655.083,1K,29.1377,true
+10/03/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,5439.039,1K,54.3904,true
+10/03/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,3237.523,1K,4.0469,true
+10/04/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,11371.808,1K,28.4295,true
+10/04/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,5306.844,1K,53.0684,true
+10/04/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,3158.835,1K,3.9485,true
+10/05/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,8684.717,1K,21.7118,true
+10/05/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,4052.868,1K,40.5287,true
+10/05/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,2412.421,1K,3.0155,true
+10/06/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,11330.563,1K,28.3264,true
+10/06/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,5287.596,1K,52.876,true
+10/06/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,3147.378,1K,3.9342,true
+10/07/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,11829.033,1K,29.5726,true
+10/07/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,5520.215,1K,55.2022,true
+10/07/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,3285.842,1K,4.1073,true
+10/08/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,5732.255,1K,14.3306,true
+10/08/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,2675.052,1K,26.7505,true
+10/08/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,1592.293,1K,1.9904,true
+10/09/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,10865.543,1K,27.1639,true
+10/09/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,5070.587,1K,50.7059,true
+10/09/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,3018.206,1K,3.7728,true
+10/10/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,7898.285,1K,19.7457,true
+10/10/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,3685.866,1K,36.8587,true
+10/10/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,2193.968,1K,2.7425,true
+10/11/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,7296.331,1K,18.2408,true
+10/11/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,3404.954,1K,34.0495,true
+10/11/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,2026.759,1K,2.5334,true
+10/12/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,12415.253,1K,31.0381,true
+10/12/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,5793.785,1K,57.9378,true
+10/12/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,3448.681,1K,4.3109,true
+10/13/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,8188.561,1K,20.4714,true
+10/13/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,3821.329,1K,38.2133,true
+10/13/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,2274.6,1K,2.8432,true
+10/14/2026,Cognitive Services,gpt 4o 0513 Input global Tokens,5914.257,1K,14.7856,true
+10/14/2026,Cognitive Services,gpt 4o 0513 Output global Tokens,2759.987,1K,27.5999,true
+10/14/2026,Cognitive Services,gpt 4o 0806 cached Inp glbl Tokens,1642.849,1K,2.0536,true

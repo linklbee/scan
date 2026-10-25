@@ -1,0 +1,12 @@
+start_time,end_time,start_time_iso,end_time_iso,project_id,num_model_requests,user_id,api_key_id,model,batch,service_tier,input_tokens,output_tokens,input_cached_tokens,input_cache_write_tokens,input_cache_write_30m_tokens,input_cache_write_12h_tokens,input_uncached_tokens
+,,2026-10-01T00:00:00+00:00,2026-10-02T00:00:00+00:00,,119.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,1346305.0,29730.0,861331.0,0.0,0.0,0.0,484974.0
+,,2026-10-01T00:00:00+00:00,2026-10-02T00:00:00+00:00,,37.0,,key_SYNTHBBBBBBBB,gpt-5.6-luna,False,default,255295.0,6309.0,200373.0,0.0,0.0,0.0,54922.0
+,,2026-10-02T00:00:00+00:00,2026-10-03T00:00:00+00:00,,123.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,1242879.0,31390.0,878343.0,0.0,0.0,0.0,364536.0
+,,2026-10-03T00:00:00+00:00,2026-10-04T00:00:00+00:00,,158.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,1620057.0,85951.0,782908.0,0.0,0.0,0.0,837149.0
+,,2026-10-03T00:00:00+00:00,2026-10-04T00:00:00+00:00,,15.0,,key_SYNTHBBBBBBBB,gpt-5.6-luna,False,default,449849.0,6118.0,308903.0,0.0,0.0,0.0,140946.0
+,,2026-10-04T00:00:00+00:00,2026-10-05T00:00:00+00:00,,142.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,1078496.0,76984.0,595796.0,0.0,0.0,0.0,482700.0
+,,2026-10-05T00:00:00+00:00,2026-10-06T00:00:00+00:00,,122.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,946579.0,68381.0,366421.0,0.0,0.0,0.0,580158.0
+,,2026-10-05T00:00:00+00:00,2026-10-06T00:00:00+00:00,,11.0,,key_SYNTHBBBBBBBB,gpt-5.6-luna,False,default,265027.0,8820.0,140188.0,0.0,0.0,0.0,124839.0
+,,2026-10-06T00:00:00+00:00,2026-10-07T00:00:00+00:00,,119.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,903253.0,38441.0,163465.0,0.0,0.0,0.0,739788.0
+,,2026-10-07T00:00:00+00:00,2026-10-08T00:00:00+00:00,,114.0,,key_SYNTHAAAAAAAA,gpt-synth-mini,False,default,1096961.0,37426.0,270098.0,0.0,0.0,0.0,826863.0
+,,2026-10-07T00:00:00+00:00,2026-10-08T00:00:00+00:00,,31.0,,key_SYNTHBBBBBBBB,gpt-5.6-luna,False,default,365827.0,3966.0,292941.0,0.0,0.0,0.0,72886.0

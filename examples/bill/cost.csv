@@ -1,0 +1,8 @@
+start_time,end_time,start_time_iso,end_time_iso,amount_value,amount_currency,quantity,quantity_unit,line_item,user_id,api_key_id,project_id,organization_id,project_name,organization_name,user_email,api_source
+,,2026-10-01T00:00:00,,0.340195500000,usd,,,,,,,,,,,
+,,2026-10-02T00:00:00,,0.275118120000,usd,,,,,,,,,,,
+,,2026-10-03T00:00:00,,0.665737780000,usd,,,,,,,,,,,
+,,2026-10-04T00:00:00,,0.447863840000,usd,,,,,,,,,,,
+,,2026-10-05T00:00:00,,0.490218600000,usd,,,,,,,,,,,
+,,2026-10-06T00:00:00,,0.417776800000,usd,,,,,,,,,,,
+,,2026-10-07T00:00:00,,0.479022340000,usd,,,,,,,,,,,

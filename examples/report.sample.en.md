@@ -1,111 +1,153 @@
-# Linklbee diagnostic report — output tokens
+# Linklbee diagnostic report
 
-scanner 1.1.1 · calls.sample.jsonl
+scanner 1.4.2 · calls.sample.jsonl
+
+**Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
 ## 0. What was read
 
-- 248 calls (248 lines, 0 bad JSON, 0 rejected for missing ts) · period 2026-09-01 – 2026-10-08
-- models: claude-sonnet-5-5 168, gpt-5.6-luna 80
-- body: text 248 · token hashes 0 · none 0
-- This script has zero lines of network code. Check: `grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py` -> 0. Answer text is read in memory only; this report and the JSON hold no text and no keys (counts and shares only).
+- **[synthetic] This is the example log.** 322 of 322 calls are made up, so these are not a real company's figures. To scan your own log: `python3 linklbee_scan.py --logs <file>`.
+- 322 calls (322 lines, 0 not JSON, 0 rejected for missing ts) · 2026-09-01 to 2026-10-09
+- models: claude-sonnet-5-5 168, gpt-5.6-luna 154
+- body: text 308 · token hashes 0 · none 14
+- input grade A — with answer text. 7 of 7 checklist items can be checked. Items 7-1 (billed failed calls) and 7-6 (billing check) are left out: the engine does not fix them.
+- Billing: per token on the API — dollars are API usage x the price list. On a flat rate or a plan, add `--flat all`.
+- The scanner has no network code. To check: `grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py` -> 0. Answer text stays in memory. This report and the JSON hold counts and shares only — no text, no document ids.
 
-## 1. Output share of the bill
+## 1. How much of the bill is output
 
-- output $0.88 / total $1.20 = **73.1%** (248 priced calls, price table as of 2026-10-18)
+- output $0.88 of $1.06 total = **82.8%** (322 priced calls, prices as of 2026-10-18)
+- Dollars assume per-token billing. If some traffic is flat-rate or committed capacity (PTU), mark it with `--flat <model name>`, or `--flat all` for everything. Marked traffic gets no dollar figure.
 
-## 2. Two-axis table (overlap x answer length)
+- On a plan, **as a usage limit** — how much more work fits in the same limit, counted on this log's 205,562 tokens.
+  - Without the 7-2 resends: 1.3% of tokens → about **1.3% more** work in the same limit
+  - Without the output of the 7-3 cut first attempts: 0.1% of tokens → about **0.1% more** work in the same limit
 
-138 pairs (110 keys; customer-key calls 248 · auto-found calls 0, auto pairs 0 · skipped for equal ts 0). Each pair = the latest earlier answer of the same key -> this answer. Overlap here is measured knowing the answer.
+## 2. Answer pairs by similarity and length
 
-| overlap \ length | <200 | 200-500 | 500-2000 | 2000+ |
+138 answer pairs from 170 documents. Each pair compares an answer with the previous answer for the same document. Similarity here is measured with the answer known. How documents were found: 308 calls by the document key in the log · 0 calls grouped by the scanner (0 pairs) · 0 skipped for an identical timestamp.
+
+| similarity \ length | <200 | 200-500 | 500-2000 | 2000+ |
 |---|---|---|---|---|
-| >=0.95 | — | — | **100 · 63.4%** | — |
-| 0.78-0.95 | — | — | **20 · 13.3%** | — |
-| 0.60-0.78 | — | — | — | — |
-| <0.60 | — | 18 · 5.7% | — | — |
+| >=0.95 | — | — | **100 · 62.4%** | — |
+| 0.78-0.95 | — | — | **20 · 13.1%** | — |
+| 0.60-0.78 | — | 2 · 0.7% | — | — |
+| <0.60 | — | 16 · 5.0% | — | — |
 
-cell = pairs · share of all output tokens. Bold = switch on (overlap >= 0.78 and answer >= 200 tokens). Pair overlap token-weighted 0.933, median 0.975.
+Each cell: answer pairs · share of all output tokens. Bold = reducible (similarity 0.78+ and answer 200+ tokens). Pair similarity, token-weighted 0.934, median 0.975.
 
-## 3. Qualified share — the conclusion
+## 3. Reducible share — the conclusion
 
-- **Caution — on this material the LLM call itself may be the loss.** 23.4% of paired output is at overlap >= 0.99 (the draft already is the next answer). On such material calling, diff or full, scored below the draft as is (admin rules, 277 real calls: draft 0.9635 > diff 0.9611 > full 0.9545). What should shrink here is the call itself, and that is not Linklbee's product -- Linklbee does not turn on removing the call (zero-call) by default. The figures below are 'if you call'. The line (20.0% of output at >= 0.99) was set on three other materials (two that passed, 8-16%; one that lost, 27-28%), not on this log.
+- **Reducible calls produce 75.6% of all output tokens** (120 answer pairs), and 93.0% of paired output.
+- If the Linklbee engine had decided each call as it came (before the answer, from that document's history only): 61.6% of all output (96 answer pairs). A document's first pair has no history, so it is not reduced.
+- Of these, 0 answer pairs resent the same prompt (out of 120 reducible pairs with a prompt), 0.0% of all output. The user may have wanted a different answer. 0 of them came within 600 s. The Linklbee engine treats those as a regenerate and rewrites from scratch, so they are left out of the 'if the engine had decided' and 'without a call' figures. This log has 0 same-prompt resends (200 are needed to fit a window), so the default 600 s window is used.
+- Facts in the request: 119 reducible answer pairs have a request body (out of 120). Share of an answer's new tokens that the request gave in advance: token-weighted 97.6% · median 100.0% (p10 96.2%, p90 100.0%) · pairs at 0.5+ 100.0% · control with a different request 18.2% -> **unique share +0.79**. **[no line yet]** No line decides yet whether this value makes a request reducible. For reference (Linklbee's measurements on other materials, not this log — fc3_1018, four real-call materials, token-weighted — pass: drug-label revisions 45 · statute revisions 317; miss: patent notices 60 · product bullets 322; four materials are not a line): materials that passed on quality 74.1% – 75.3% · materials that did not 4.9% – 16.3%.
+  - Only pairs with 50+ new tokens (18; a one- or two-token fix scores 100% for free): token-weighted 96.0% · median 96.2% · control 19.5% -> unique share +0.77.
 
-Span (how many versions back the draft is) — share of paired output at >= 0.99 / < 0.78 / 0.85-0.99:
+- **Calling at every version wastes many calls (23.4% of output at similarity 0.99+). Calling once every few versions makes them reducible.** With a span of 2 for every document (one call per that many versions): 0.99+ 4.7% · under 0.78, where rewriting the changed parts costs more, 5.8% · 0.85-0.99, where it saves money, 89.5%. The span was fitted on this log (table below).
 
-This table is measured after folding answers equal to the previous answer (repeats: 0 pairs, 0.0% of span-1 paired output) and leaving out answers that went back to an earlier version (reverts: 0 pairs, 0.0%). Neither needs a call at any span, so neither counts as an effect of the span.
+Span (how many versions back the previous answer is taken from) — share of paired output at 0.99+ / under 0.78 / 0.85-0.99:
 
-| span | pairs | >=0.99 | <0.78 | 0.85-0.99 |
+Before measuring, answers identical to the previous one were folded (repeats: 0 pairs, 0.0% of span-1 paired output), and answers that went back to an earlier version were left out (reverts: 0 pairs, 0.0%). Neither needs a call at any span, so neither counts toward the span's effect.
+
+| span | answer pairs | >=0.99 | <0.78 | 0.85-0.99 |
 |---|---|---|---|---|
-| 1 | 138 | 23.4% | 6.9% | 69.7% |
-| 2 | 108 | 4.7% | 5.7% | 89.6% |
+| 1 | 138 | 23.4% | 7.0% | 69.6% |
+| 2 | 108 | 4.7% | 5.8% | 89.5% |
 | 3 | 78 | 0.0% | 3.9% | 96.1% |
 | 4 | 48 | 0.0% | 0.0% | 97.8% |
 | 6 | 0 | — | — | — |
 | 8 | 0 | — | — | — |
 
-Span picked per length tier (answer-token edges [532.0, 558.0], this log's tertiles): 1*, 1*, 1*. A tier with under 100 pairs keeps span 1. A span of 2 or more is picked only where it beats span 1 on the same answers (also at the 2.5th percentile of a document resample).
+Span chosen per length tier (answer-token edges [532.0, 558.0], this log's tertiles): 1*, 1*, 1*. A tier with fewer than 100 answer pairs keeps span 1. A span of 2 or more is chosen only where it beats span 1 on the same answers, including at the 2.5th percentile of a per-document resample.
 
-With 248 calls (under 600) the span is not fitted to this log (span 1 for every tier; the table above is for reference). A span picked on a small log rests on chance.
+## 4. Estimated savings (expected range)
 
-- **Output tokens in switch-on cells = 76.7% of all output** (120 pairs). Of paired output: 93.1%.
-- Engine replay (switch decides before the answer, from the key's earlier pairs only): 62.6% of all output (96 pairs). A key's first pair has no history and stays off.
-- Fact input (axis 3) **not checked**: switch-on pairs carry no request body (prompt). The 76.7% above comes from two axes only — if a request does not say what changed, the real saving can be lower.
+This section covers only calls that can be answered by rewriting the changed parts. On a log whose documents do not resemble each other, 0 is the expected result; see section 7.
 
-## 4. Savings estimate (band)
+**This is not a saving measured on this log.** The ranges Linklbee measured on other public documents (below) are applied to this log's reducible calls. Everything else counts as 0.
 
-This section looks at the document-diff cells only. On a log whose documents do not resemble each other 0 is the normal result; see section 7.
+- output tokens: 32.7% – 61.1% of all output (ranges applied)
+- if the engine had decided: 29.4% – 55.1%
+  - Counted again with the engine's own rules. On public material (laws, eCFR; logs without a document key) it came to 0.92~1.12 times what the engine actually turned on. Judgments only the engine makes (such as a request with two equally likely previous answers) are not replayed.
+- dollars (cost ranges measured without a prompt cache): $0.18 – $0.54 = 17.2% – 50.9% of the bill · prices as of 2026-10-18 · reducible pairs without a price: 0
+  - Linklbee sends 10.0% of the reducible pairs in full as its comparison group. The range above is what the rest saves.
 
-**Not a saving measured on this log.** Each switch-on cell gets the range we measured (below) as a band; outside the switch it is 0.
+Ranges Linklbee measured (three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10):
+- similarity >=0.95 · answer 200+ tokens: output 55% – 95%, cost 30% – 75%
+- similarity 0.78-0.95 · answer 200+ tokens: output 15% – 65%, cost -5% – 50%
 
-- output tokens: 36.9% – 68.9% of all output (bands applied)
-- with the engine replay switch: 29.8% – 56.0%
-- dollars (cost-saving bands, measured without prompt cache): $0.22 – $0.65 = 18.4% – 54.5% of the bill · prices as of 2026-10-18 · switch-on pairs without a price 0
+## 5. Answering without a call
 
-Ranges we measured (three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10):
-- overlap >=0.95 · answer >= 200 tokens: output 55% – 95%, cost 30% – 75%
-- overlap 0.78-0.95 · answer >= 200 tokens: output 15% – 65%, cost -5% – 50%
+- The rule (a prompt equal to the previous call's except for digits gets no call) picked 0 answer pairs, 0.0% of all output. Of those, the answer really matched the previous one in: exactly — · allowing digit-only differences —. **The rule looked only at prompts, never at answers.**
+- For reference, counted with the answer known (an upper bound): pairs identical to the previous answer 0 · allowing digit-only differences 16
 
-## 5. Zero-call candidates
+## 6. Notes
 
-- No prompt (or prompt_hash), so the gate could not run.
-- Reference (counted with the answer known, an upper bound): pairs identical to the previous answer 0 · including digits-only differences 16
+- 14 calls have no body, so they are not in the answer pairs or similarity
+- The saving ranges in section 4 were measured on other materials (the public documents named at the end of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison
 
-## 6. What could not be judged
+took 2.3s
 
-- 248 calls without output_tokens — counted from the body with o200k (approximate for non-OpenAI models)
-- Saving ranges were measured on other materials (two public document sets). This customer's own value comes from a holdout pilot
+## 7. Checklist — what is leaking, what could cost less
 
-took 1.2s
+### Leaking now — money going out
 
-## 7. Waste checklist — items read without the answer body
+- 7-2 the same request sent again shortly after — **found**
+  - Fix: when an identical request (same full body) comes back within a set time, the engine can return the stored answer without calling the vendor. Streams and irreversible actions are excluded. A regenerate would also get the stored answer, so the engine proposes this with the amount first, and you decide whether to turn it on.
+  - Calls paid for and not used, two kinds (told apart in the same log): **discarded output** $0.00 (14 failed calls still billed + 0 OK answers the same request replaced — a quality check, a broken format or a user's regenerate cannot be told apart here) · **retries** $0.00 (14 repeats after a failed or timed-out call — the service's retry setting). Repeats after a cut answer are counted in 7-3.
+  - Within 60 s, 14 calls repeated the request just sent (within the same document when the log has document ids; out of 322 calls whose request is known). The earlier call had: failed 14 · been cut 0 · succeeded 0 · unknown 0. Median gap 30.5 s. input 2,379 · output 306 tokens, $0.00 (14 priced calls, API usage x price list). A repeat after a successful answer may be a user regenerating on purpose.
+  - Split by the earlier call: after a successful answer none — the engine's stored answer can fix this · after a failure $0.00 — fixed by the service's retry settings · after a cut none — fixed by 7-3's larger cap.
+  - The Linklbee engine does not reduce the share after a failure; it only shows the retry chains. Changing the retry settings in your service code (interval, maximum retries) is what lowers it.
+  - Engine: the Linklbee server records each response's status and request signature. The engine's usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff interval, maximum retries, switching route after repeated failures).
+- 7-3 answers cut off at the length limit — **found**
+  - Fix: if the same request is often cut and then resent with a higher cap, the engine can send it with that cap from the start, so you stop paying for the cut first attempt. Answers may get longer, so the engine proposes this with the amount first, and you decide whether to turn it on.
+  - Of 322 calls that can be checked, 1 were cut off (0.3%). Their output was 300 tokens, 0.3% of all output, and they cost $0.00. max_tokens of the cut calls: 300×1.
+  - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. The engine's usage view shows the cut share per limit, with a suggested limit.
+- 7-4 request prefix serialized inconsistently (tool definitions, system instructions) — **found**
+  - Fix: the engine sends tool definitions and system blocks in one key order. It can turn this on when usage records show a gain, and turns it off when they show a loss (judged on Anthropic and OpenAI GPT-5.6+ records). Changing parts such as times and ids are not handled yet.
+  - 322 calls have a prefix. 3 kinds of block were compared by their as-sent hash and key-sorted hash.
+  - **Block `tools`: 2 serializations with the same content in a different key order, so the vendor caches it as 2 separate entries.** Of 154 calls with this block, 29 were not in the most common form. The forms first differ at character 4 (the block is 409 characters, 87 o200k tokens).
+  - Source (vendor documents): Anthropic's prompt caching guide says "some languages (for example, Swift, Go) randomize key order during JSON conversion, breaking caches". OpenAI's guide, in its table of settings that affect the cached prefix, says of tools: "Changes tool names, descriptions, schemas, ordering, or tool-specific instructions."
+  - Engine: the Linklbee engine sends tool definitions and system blocks with sorted keys. List order and strings stay the same, so the model reads the same content (a structured-output schema keeps its field order; only its other keys are sorted). It can turn this on when usage records show a gain, and turns it off when they show a loss. Set `"prefix_normalize": false` in the engine settings file `waste.json` to keep it off.
+- 7-7 prompt cache hit rate — **none**
+  - Cache-read tokens / prompt tokens = **0.0%** (322 calls). For calls above the cache minimum only (the 120 that pass 7-5): **0.0%**. Below 0.0% is reported as found (a design value).
+  - That line is half of what this log could read: of the input of the calls above the minimum, **0.0%** is a prefix shared with an earlier call of the same model within 5 minutes (the 7-8 replay, a perfect cache's ceiling) x 0.5. A log with little shared prefix is not held to another log's line.
+  - claude-sonnet-5-5 (anthropic): 0.0%; above the minimum 0.0% (120 calls); 168 calls with no cache read.
+  - gpt-5.6-luna (openai): 0.0%; above the minimum — (0 calls); 154 calls with no cache read.
+  - Why calls above the minimum still miss: caching was not turned on (the Anthropic API caches only with `cache_control` in the request; Bedrock tries without it, best effort, with no hit guaranteed), the prefix is not byte-identical (7-4), the cache expired, or the vendor sent the request to another server (OpenAI's guide says traffic over about 15 a minute on one key can overflow on models before GPT-5.6; from GPT-5.6 on OpenAI routes the cache itself).
+  - Engine: the engine's usage view reports the same rate from your usage records. Below the line it suggests `cache_control` markers (Anthropic, Bedrock), prefix normalization (`"prefix_normalize": true`), putting fixed parts first, and OpenAI `prompt_cache_key`.
 
-- 7-1 billed failed calls — **[cannot judge: input missing]** needs: status
-- 7-2 the same request sent again shortly after — **[cannot judge: input missing]** needs: request (or prompt / prompt_hash)
-- 7-3 answers cut at the token limit — **[cannot judge: input missing]** needs: finish_reason (or max_tokens + output_tokens)
-- 7-4 unstable serialization of the request prefix (tool definitions, system instructions) — **[cannot judge: input missing]** needs: request (tools / system)
-- 7-5 prompts under the cache minimum — **found**
-  - Fix: the engine counts each request's tokens short of the minimum but does not fix it yet; for now fixing it is in-house work.
-  - claude-sonnet-5-5 (anthropic): under 512 tokens 0 / 168 calls (0.0%), 0 of them with no cache read.
-  - gpt-5.6-luna (openai): under 1,024 tokens 80 / 80 calls (100.0%), 80 of them with no cache read.
-  - by threshold (248 calls judged): 64 -> 0.0% under · 512 -> 32.3% under · 1,024 -> 85.9% under · 2,048 -> 100.0% under · 4,096 -> 100.0% under
-  - Engine: `/admin/usage` `waste.cache_min` reports the tenant ledger's share under the same constants, with a correction for those calls (merge the prefix past the threshold, or drop the cache marker).
-  - Constants as of 2026-10-20 (vendor documents). Gemini prices change on 2026-12-01.
-- 7-6 billing check — billed output tokens vs the answer body — **[cannot judge: input missing]** needs: answer body (output) + the vendor's output_tokens
-- 7-7 prompt cache hit rate — **[cannot judge: input missing]** needs: input_tokens + the vendor's cache-read field (cached_tokens / cache_read_input_tokens / cachedContentTokenCount)
-  - not judged: no cache-read field 248 — not counted as 0
-- 7-8 prefix shared between calls — **[cannot judge: input missing]** needs: request body (messages / system / tools) or prompt, + input_tokens + ts
+### Could cost less — cheaper ways, even with nothing wrong
 
-This section covers the log given. It is not a guarantee.
+- 7-9 calls that could have used OpenAI Flex (not streamed) — **found**
+  - Fix: the engine works out which calls could have used Flex and how much that saves, and proposes it first. Once on, it sends the chosen traffic at Flex. If Flex has no capacity, it retries once at standard (the refusal is not billed). Flex answers come later than standard ones, so leave it off for calls a person is waiting on.
+  - 154 calls used models that Flex offers, and 91 of them were not streamed: input 15,476 · output 1,799 tokens, $0.01 (91 priced calls, API usage x price list). Flex runs the same model at half the standard rate (Batch rates, price list 2026-10-21). Sending all of them at Flex would cost **at most $0.00** less. Responses can be slower, so only calls that can wait qualify. The log cannot tell which those are, so this is an upper bound.
+- 7-5 prompts shorter than the cache minimum — **found**
+  - Fix: the engine counts how many tokens each request is short of the minimum. It can pad a short fixed prefix up to the minimum, but only with text you provide. It can also send short calls that share a prefix as one call (OpenAI and Anthropic, single calls without tools). The answers can change, so the engine never turns this on itself; you decide.
+  - claude-sonnet-5-5 (anthropic): 48 of 168 calls under 512 tokens (28.6%), 48 of them with no cache read.
+  - gpt-5.6-luna (openai): 154 of 154 calls under 1,024 tokens (100.0%), 154 of them with no cache read.
+  - by threshold (322 calls checked): 64 -> 0.0% under · 512 -> 62.7% under · 1,024 -> 100.0% under · 2,048 -> 100.0% under · 4,096 -> 100.0% under
+  - Anthropic runs a prompt under the minimum without caching and without an error, so nothing in the log shows it.
+  - Engine: the engine's usage view reports the same share from your usage records, using the same constants, with a suggested fix for those calls (grow the prefix past the threshold, or drop the cache marker).
+  - Thresholds as of 2026-10-20 (vendor documents). Gemini prices change on 2026-12-01.
+- 7-8 prefix shared between calls — **found**
+  - Fix: the engine counts the same numbers. When a prefix keeps coming back 5-60 minutes apart, it adds a 1-hour cache marker (Claude 4+ on the Anthropic API, Bedrock and Vertex; the engine can turn it on when usage records show a gain). A shared prefix shorter than the cache minimum cannot be cached; those calls can be sent as one bundled call instead. The answers can change, so you decide whether to turn it on.
+  - Share of prompt tokens in a prefix already sent by an earlier call (same model): within 5 minutes **3.2%** · within 1 hour 17.7% · across the whole log 30.1% (322 calls, 22 of them sharing a prefix within 5 minutes).
+  - Shared prefixes that came back after more than 5 minutes, once the cache had expired: **26.9%**.
+  - Shared within 5 minutes but shorter than the vendor's cache minimum (cache_constants.json), so it cannot be cached: **3.2%** (22 of 22 calls checked).
+  - Compare: actual cache reads (7-7) 0.0% vs prefixes shared within 5 minutes 3.2%.
+  - Method: only whole items count, in the order tools → system → conversation items (without a request body, the prompt in 64-token blocks). Partial matches inside an item are not counted. Where the vendor actually caches (`cache_control` markers, its own block sizes) is decided separately, so this share is how much a cache could read, not a saving.
 
-## 8. Axes that came out 0 — why, and where to look next
 
-One line per axis: (a) the reason, counted on this log · (b) what would change it, or which axis to look at instead. Every figure is counted on this log or is a named constant in the code (named in brackets).
+This section reflects the log provided. It is not a guarantee.
 
-- Axis 3, fact input — cannot be measured on this log (no field prompt). (b) With the request body (prompt, or --hashify's prompt_token_hashes) it is measured.
-- Section 5, the zero-call gate — cannot be measured on this log (no field prompt). (b) With prompt or prompt_hash it runs. Upper bound counted with the answer known (reference): pairs identical to the previous answer 0 · with digits-only differences 16.
-- 7-1 billed failed calls — cannot be measured on this log (no field status).
-- 7-2 the same request sent again shortly after — cannot be measured on this log (no field request (or prompt / prompt_hash)).
-- 7-3 answers cut at the token limit — cannot be measured on this log (no field finish_reason (or max_tokens + output_tokens)).
-- 7-4 unstable request prefix serialization — cannot be measured on this log (no field request (tools / system)).
-- 7-6 billing check — cannot be measured on this log (no field answer body (output) + the vendor's output_tokens).
-- 7-7 prompt cache hit rate — cannot be measured on this log (no field input_tokens + the vendor's cache-read field (cached_tokens / cache_read_input_tokens / cachedContentTokenCount)).
+## 8. Items that came out 0 — why, and what to look at next
+
+One line per item: (a) the reason, counted on this log · (b) what would change it, or what to look at instead. Every figure is either counted on this log or a named constant in the code (name in brackets).
+
+- Section 5, answering without a call — **0%**. (a) 138 answer pairs, 138 of them with a prompt; none match the previous call's prompt apart from digits. For reference, counted with the answer known (an upper bound): pairs identical to the previous answer 0 · allowing digit-only differences 16. (b) The rule picks traffic that repeats the same request (fixed templates, FAQs).
+- 7-7 prompt cache hit rate — none. (a) hit rate above the cache minimum 0.0%, at or above the 0.0% line (hive/waste.py CACHE_HIT_LOW). (b) nothing to cut here within this log (no waste).
+
+
+Talk to us about this result: bee@linklbee.com · linklbee.com (no need to send the log)
