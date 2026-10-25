@@ -1,6 +1,6 @@
 # Linklbee diagnostic report
 
-scanner 1.4.2 · bill
+scanner 1.4.3 · 2 files
 
 **Cache hit rate 50.8%** — the share of input tokens read from the cache (the vendor's usage totals). Details in section 2. By model it runs from 47.6% to 70.5%.
 
@@ -17,7 +17,7 @@ scanner 1.4.2 · bill
 
 ## 1. How much of the bill is output
 
-- output $1.14 of $3.12 total = **36.4%** (2 of 2 models, prices fitted from the bill and the price list as of 2026-10-18)
+- output $1.14 of $3.12 total = **36.4%** (2 of 2 models, prices fitted from the bill and the price list as of 2026-10-25)
 - gpt-synth-mini: prices from the bill alone -- input $0.40, output $3.00 per 1M tokens, cache read 0.10x. Of 3 days on this model only, 2026-10-04 and 2026-10-06 solved them and the other 1 checked them (largest gap 0.0%).
 - bill check (7-6): on the 7 days where every model has a price -- computed $3.12, billed $3.12, gap 0.0%.
 
@@ -54,4 +54,5 @@ scanner 1.4.2 · bill
 
 took 0.0s
 
-Talk to us about this result: bee@linklbee.com · linklbee.com (no need to send the log)
+Send this report to bee@linklbee.com and we will look deeper, free of charge.
+The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.

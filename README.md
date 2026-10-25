@@ -163,23 +163,26 @@ python3 linklbee_scan.py --logs hashed.jsonl --out report.md
 
 ## 리포트에는 숫자만 들어갑니다
 
-본문은 메모리에서만 읽습니다. 리포트(`--out`), 통계 JSON(`--json`), 요약 파일(`--share`)에는 **본문도, 묶음 키도, 프롬프트도 들어가지 않고** 개수·비율·금액만 들어갑니다. 리포트 머리에는 입력 파일 이름과 모델 이름이 찍힙니다.
+본문은 메모리에서만 읽습니다. 리포트(`--out`), 통계 JSON(`--json`), 요약 파일(`--share`)에는 **본문도, 묶음 키도, 프롬프트도 들어가지 않고** 개수·비율·금액만 들어갑니다. 리포트 머리에는 읽은 파일 수와 모델 이름이 찍힙니다(파일·폴더·필드 이름은 찍지 않습니다).
 
-확인한 방법: 예시 로그의 모든 답·키·프롬프트에 표지 문자열을 심어 돌린 뒤 네 산출물(한국어·영어 리포트, JSON, 요약)에서 그 문자열과 키·문서 제목을 찾았고, 0건이었습니다(2026-10-18).
+확인한 방법: 예시 로그의 모든 답·키·프롬프트에 표지 문자열을 심어 돌린 뒤 네 산출물(한국어·영어 리포트, JSON, 요약)에서 그 문자열과 키·문서 제목을 찾았고, 0건이었습니다(2026-10-18). 2026-10-25 에는 시스템 지시·도구 이름·도구 설명·필드 이름·사용자 ID·파일 이름까지 표지를 넓혀 다시 찾았고, 0건이었습니다.
 
 `--share summary.json` 을 붙이면 화면에 공유용 요약 몇 줄도 나옵니다(호출 수 · 줄일 여지 추정 · 출력 몫 · 발견한 낭비 항목). 본문·파일 이름·회사명·키는 들어 있지 않으니 그대로 복사해서 붙이면 됩니다.
 
+링클비에 무엇을 보낼지는 직접 정하시고, 보내실 때도 직접 보내세요 — 진단기는 아무것도 보내지 않습니다. 리포트는 위와 같이 프롬프트·답 원문이 없어 그대로 보내셔도 되고, 가장 작게 보내려면 `--share summary.json` 이 쓴 통계 파일만 보내셔도 됩니다.
+
 리포트를 링클비에 보낼지는 직접 정하시면 됩니다. 보내고 싶으시면 `--share summary.json` 으로 떨어지는 통계 파일만 직접 골라 보내시면 됩니다.
 
-## 리포트가 보는 것 — 절마다 한 줄
+## 리포트가 보는 것 — 실린 순서대로 한 줄씩
 
-- 0절 읽은 것 — 호출 수·기간·모델, 어느 필드를 어디서 읽었는지
-- 1절 청구서에서 출력이 차지하는 몫 — 본문 없이 `model`·토큰 수만으로
-- 문서 닮음 × 답 길이 — 이전 답을 고쳐 써서 줄일 수 있는 출력이 몇 %인가
-- 4절 예상 절감 범위 — 링클비가 잰 범위를 이 로그의 해당 구간에 대입한 값(이 로그에서 잰 절감이 아님)
-- 5절 호출 없이 답하기 후보 — 직전 호출과 프롬프트가 숫자만 빼고 같은 자리
-- 6절 읽을 때 참고할 것 — 본문 없는 호출처럼 숫자에서 빠진 몫
+- 요약 — 새고 있는 돈과 더 줄일 수 있는 돈의 합(7절 금액, 범위는 아래쪽 값). 최소 기준이라는 한 줄
+- 0절 읽은 것 — 호출 수·기간·모델, 어느 필드를 어디서 읽었는지, 본문 없는 호출처럼 숫자에서 빠진 몫
 - 7절 낭비 점검서 — 7-1 실패 호출 과금 · 7-2 짧은 간격 재전송 · 7-3 길이 상한에서 잘린 답 · 7-4 요청 접두 직렬화 불안정 · 7-5 캐시 최소 길이 미달 · 7-6 과금 대조 · 7-7 캐시 적중률 · 7-8 호출끼리 같은 접두 · 7-9 OpenAI Flex 로 보낼 수 있었던 호출. 항목마다 발견 / 없음 / 더 보려면(로그에 있으면 보는 필드)
+- 3절 줄일 수 있는 요청의 비중 — 이전 답을 고쳐 써서 줄일 수 있는 출력이 몇 %인가
+- 4절 예상 절감 범위 — 링클비가 잰 범위를 이 로그의 해당 구간에 대입한 값(이 로그에서 잰 절감이 아님)
+- 2절 답 쌍 분포 — 3절의 근거 표(문서 닮음 × 답 길이)
+- 5절 호출 없이 답하기 후보 — 직전 호출과 프롬프트가 숫자만 빼고 같은 자리
+- 1절 청구서에서 출력이 차지하는 몫 — 본문 없이 `model`·토큰 수만으로
 - 8절 0이 나온 항목 — 왜 0인지, 무엇이 바뀌면 달라지는지(0이 나온 항목이 있을 때만)
 
 ## 리포트를 읽는 법
@@ -368,13 +371,13 @@ python3 linklbee_scan.py --logs hashed.jsonl --lang en --out report.md
 
 ### The report holds numbers only
 
-Answer text is read in memory only. The report (`--out`), the stats JSON (`--json`) and the summary file (`--share`) hold **no answer text, no document keys and no prompts** — only counts, shares and dollars. The report header shows the input file name and model names.
+Answer text is read in memory only. The report (`--out`), the stats JSON (`--json`) and the summary file (`--share`) hold **no answer text, no document keys and no prompts** — only counts, shares and dollars. The report header shows how many files were read and the model names (no file, folder or field names).
 
-How this was checked: marker strings were planted in every answer, key and prompt of the example log, and the four outputs (Korean and English reports, JSON, summary) were searched for them and for the keys and document titles. 0 hits (2026-10-18).
+How this was checked: marker strings were planted in every answer, key and prompt of the example log, and the four outputs (Korean and English reports, JSON, summary) were searched for them and for the keys and document titles. 0 hits (2026-10-18). On 2026-10-25 the markers were widened to system instructions, tool names, tool descriptions, field names, user IDs and the file name, and searched again: 0 hits.
 
 With `--share summary.json`, the scanner also prints a few lines to share: call count, estimated room to cut, output's share of the bill, waste items found. No text, file name, company name or keys, so they can be pasted as they are.
 
-Whether to send a report to Linklbee is up to you. To send one, pick the statistics file that `--share summary.json` writes and send just that.
+Whether to send anything to Linklbee is up to you, and you send it by hand — the scanner sends nothing. The report itself can be sent as it is (it holds no prompt or answer text, as above); the statistics file that `--share summary.json` writes is the smallest choice.
 
 ### What the report covers — one line per section
 
