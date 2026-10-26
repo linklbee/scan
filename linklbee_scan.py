@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.4 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.5 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -16,7 +16,7 @@ import types
 # savings bands shown in the report (public ranges only) and the dated price table
 BANDS_JSON = r"""{
   "about": "Public savings bands for the scanner report: per switch-on overlap row, a range only. Each band covers every measured cell of its row (failed-edit re-call cost included where call records exist), rounded outward to 5 points (rounding step is a design value).",
-  "measured": {"ko": "공개 문서 3종(상품 설명·의약품 허가사항 개정·법령 조문 개정), 실호출, 실패한 고쳐 쓰기를 처음부터 다시 쓴 비용 포함(상품 설명은 호출 기록이 없어 미포함), 2026-10",
+  "measured": {"ko": "공개 문서 3종(상품 설명·의약품 허가사항 개정·법령 조문 개정), 실호출, 실패한 변경 부분만 생성를 처음부터 다시 쓴 비용 포함(상품 설명은 호출 기록이 없어 미포함), 2026-10",
                "en": "three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10"},
   "switch": {"min_overlap": 0.78, "min_answer_tokens": 200},
   "overlap_bands": [["<0.60", 0.0, 0.60], ["0.60-0.78", 0.60, 0.78], ["0.78-0.95", 0.78, 0.95], [">=0.95", 0.95, 1.01]],
@@ -39,7 +39,7 @@ BANDS_JSON = r"""{
 
 CACHE_JSON = r"""{
  "as_of": "2026-10-20",
- "source": "vendor prompt-caching documents, read 2026-10-20 (PM .remote/PM-20261020-축추가.md section 3); the full JSON of the project document linklbee-벤더캐시상수-20261020.md was not on this machine, so only the values in that table are here",
+ "source": "vendor prompt-caching documents, read 2026-10-20 (PM .remote/PM-20261020-축추가.md section 3); the full JSON of the project document linklbee-AI 제공사캐시상수-20261020.md was not on this machine, so only the values in that table are here",
  "note": "min_tokens = the shortest prompt the vendor caches. A model that is not listed is not guessed: the report says it cannot judge (Anthropic alone spans 512 to 4,096, 8x).",
  "vendors": {
   "anthropic": {
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.4"
+VERSION = "1.4.5"
 
 
 def _default_lang():
@@ -2742,7 +2742,7 @@ BUNDLE_LIVE_WAIT = 2.0  # s, bundler.BUNDLE_LIVE_WAIT: how long a live bundle wa
 # PM 10-25 09:32 / 18:05 2: the report's last lines, the way to us. The customer sends it by hand if at all -- nothing
 # here sends anything. The second line holds because the report carries no prompt / answer text, document key, file
 # or field name (REPLY-LINE check: planted markers in every text field, 0 in report and JSON); model names do appear
-CONTACT = ("리포트를 **bee@linklbee.com** 으로 보내주시면 진단 결과와 개선 방법을 무료로 안내해 드립니다. "
+CONTACT = ("진단 결과 검토가 필요하면 요약을 **bee@linklbee.com**으로 보내 주세요. 개선 항목과 우선순위를 무료로 검토합니다. "
            "리포트에는 요청·응답 원문이 포함되지 않으며, 분석 수치와 패턴 정보만 포함됩니다.",
            "Send this report to bee@linklbee.com and we will look deeper, free of charge. "
            "The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.")
@@ -5945,14 +5945,14 @@ def usd(x):
 
 T = {
     "ko": {
-        "title": "링클비 진단 리포트", "s0": "0. 분석 대상", "s1": "1. 입력·출력 비용 구성",
+        "title": "링클비 LLM API 비용 진단 리포트", "s0": "0. 분석 대상", "s1": "1. 입력·출력 비용 구성",
         "s2": "2. 응답 유사도·길이별 분포", "s3": "3. 최적화 후보 분포", "s4": "4. 예상 절감 범위",
         "s5": "5. 기존 응답 재사용 후보", "s6": "6. 읽을 때 참고할 것",
         "net": "로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다. 확인: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` → 0. "
                "응답 본문은 메모리에서만 읽고, 이 리포트와 JSON 에는 본문과 문서 id 가 들어가지 않습니다(개수와 비율만).",
     },
     "en": {
-        "title": "Linklbee diagnostic report", "s0": "0. What was read", "s1": "1. How much of the bill is output",
+        "title": "LinklBee LLM API Cost Diagnostic Report", "s0": "0. What was read", "s1": "1. How much of the bill is output",
         "s2": "2. Answer pairs by similarity and length", "s3": "3. Reducible share — the conclusion",
         "s4": "4. Estimated savings (expected range)", "s5": "5. Answering without a call", "s6": "6. Notes",
         "net": "The scanner has no network code. To check: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` -> 0. "
@@ -5972,11 +5972,11 @@ def _gaps_common(res, ko):
                      "%d calls had neither output_tokens nor a body. They are not in the output total") % res["output_tokens_missing"])
     unpriced = [m for m in res["pricing"]["unpriced_models"] if m != "(none)"]
     for m, (base, why) in sorted((res["pricing"].get("read_as") or {}).items()):
-        gaps.append(("`%s` 는 가격표의 `%s` 단가로 셌습니다(%s)." if ko else "`%s` was priced at the table's `%s` rate (%s).")
-                    % (m, base, ("OpenRouter 같은 중계는 공급사 단가를 그대로 받습니다. 크레딧 구매 수수료는 빠져 있습니다"
+        gaps.append(("`%s` 는 단가표의 `%s` 단가로 셌습니다(%s)." if ko else "`%s` was priced at the table's `%s` rate (%s).")
+                    % (m, base, ("OpenRouter 같은 중계는 AI 제공사 단가를 그대로 받습니다. 크레딧 구매 수수료는 빠져 있습니다"
                                  if ko else "a router such as OpenRouter bills the provider's rate; its credit-purchase "
                                  "fee is not included") if why == "router_prefix" else
-                       ("Bedrock 모델 id — Bedrock 온디맨드 단가가 공급사 정가와 같은 모델입니다" if ko else
+                       ("Bedrock 모델 id — Bedrock 온디맨드 단가가 AI 제공사 정가와 같은 모델입니다" if ko else
                         "Bedrock model id -- Bedrock's on-demand rate for this model is the vendor's list rate")))
     no_model = res["models"].get("(none)", 0)
     if no_model:
@@ -5999,7 +5999,7 @@ def _gaps_common(res, ko):
                      "Fields that hold token-like counts: %s -- point at them with `--map input_tokens=<field> "
                      "output_tokens=<field>`.") % ", ".join("`%s`" % x for x in tc))
     if unpriced:
-        gaps.append(("가격표에 없는 모델: %s — 금액에서 빠짐" if ko else "Not in the price table, so not in dollars: %s")
+        gaps.append(("단가표에 없는 모델: %s — 금액에서 빠짐" if ko else "Not in the price table, so not in dollars: %s")
                     % ", ".join(unpriced))
     return gaps
 
@@ -6021,13 +6021,13 @@ def cache_head(res, ko):
         return None
     if h["hit_rate"] is None:
         return (("캐시 적중률" if ko else "Cache hit rate"), None,
-                ("이 로그로는 못 냅니다. 입력 토큰과 벤더의 캐시 읽기 값(`cached_tokens` / `cache_read_input_tokens` / "
+                ("이 로그로는 못 냅니다. 입력 토큰과 AI 제공사의 캐시 읽기 값(`cached_tokens` / `cache_read_input_tokens` / "
                  "`cachedContentTokenCount`)이 있어야 합니다." if ko else
                  "Not in this log. It needs input tokens and the vendor's cache-read value (`cached_tokens` / "
                  "`cache_read_input_tokens` / `cachedContentTokenCount`)."))
     om = h.get("over_min_hit_rate")
     return (("캐시 적중률" if ko else "Cache hit rate"), pct(h["hit_rate"]),
-            ("입력 토큰 중 캐시에서 읽힌 비중입니다(호출 %s건, 벤더 usage 기준)%s. 자세한 것은 7-7." if ko else
+            ("입력 토큰 중 캐시에서 읽힌 비중입니다(호출 %s건, AI 제공사 usage 기준)%s. 자세한 것은 7-7." if ko else
              "The share of input tokens read from the cache (%s calls, the vendor's usage)%s. Details in 7-7.")
             % ("{:,}".format(h["calls_judged"]),
                ((" · 최소 길이 이상인 호출만 보면 %s" if ko else " · %s on calls over the minimum") % pct(om))
@@ -6042,7 +6042,7 @@ def marked_head(res, ko):
         return None
     return (("캐시를 신청했는데 못 받은 호출" if ko else "Calls that asked for the cache and got nothing"),
             ("%s건" if ko else "%s") % "{:,}".format(ms["calls"]),
-            ("캐시 표시를 붙인 호출 %s건 중입니다. 쓰기와 읽기가 둘 다 0 이고, 벤더는 오류를 내지 않습니다(그중 최소 길이 미달 %s건). "
+            ("캐시 표시를 붙인 호출 %s건 중입니다. 쓰기와 읽기가 둘 다 0 이고, AI 제공사는 오류를 내지 않습니다(그중 최소 길이 미달 %s건). "
              "자세한 것은 7-5." if ko else
              "Out of %s calls with a cache mark: cache writes and reads both 0, and the vendor gives no error (%s of them "
              "under the minimum). Details in 7-5.") % ("{:,}".format(ms["calls_marked"]), "{:,}".format(ms["below_min"])))
@@ -6091,7 +6091,7 @@ def renum(text, ko, m=SEC_RENUM):
 # note goes to the section it is about (the section-4 range note to 4, the scanner's own document grouping to 3, the
 # rest -- lines that were not read -- to 0). Section numbers stay, so every "see section N" still points right.
 FRAME_ORDER = ("0", "7", "3", "4", "2", "5", "1", "8", "ref")
-FRAME_NOTE_TO = (("4절의 절감 범위", "4"), ("The saving ranges in section 4", "4"),
+FRAME_NOTE_TO = (("4절의 절감 범위", "4"), ("The estimated savings in section 4", "4"),
                  ("엔진이 문서를 찾아 묶은", "3"), ("into documents itself", "3"))
 # The head summary adds section 7's found items, each at its lower side (PM 10-25 09:32 ladder: amounts of kind 1, and
 # the low end of kind 3 ranges): within an item only its largest priced way, as MORE_USD does (the ways act on the same
@@ -6103,15 +6103,15 @@ HEAD_USD = {"resent": ("usd",), "truncated": ("usd",),
 
 
 def head_summary(res, ko):
-    """The three head lines: money leaking now, money that could be saved (both sums of section 7's found items at
+    """The three head lines: money additional costs identified, money that could be saved (both sums of section 7's found items at
     their lower side), and that this is a floor."""
     W = res.get("waste")
     if not W:
         return []
     out = ["## " + ("요약" if ko else "Summary"), ""]
     split, leak_sum = {}, None
-    for kind, name in (("leak", ("새고 있는 돈", "Leaking now", "새고 있는 것", "Leaking now")),
-                       ("more", ("더 줄일 수 있는 돈", "Could cost less", "더 줄일 수 있는 것", "Could cost less"))):
+    for kind, name in (("leak", ("확인된 추가 비용", "Additional costs identified", "비용 증가 요인", "Additional costs identified")),
+                       ("more", ("추가 절감 가능 금액", "Additional savings opportunities", "추가 최적화 기회", "Additional savings opportunities"))):
         ks = [k for k in WKIND if WKIND[k] == kind and k in W and k not in NO_KNIFE and W[k]["status"] == "found"]
         amt = []
         for k in ks:
@@ -6134,15 +6134,15 @@ def head_summary(res, ko):
             continue
         miss = len(amt) - len(known)
         line = ("- %s: **%s** — 7절 「%s」 %d건의 합" if ko else "- %s: **%s** — the sum of section 7 '%s', %d items") % (
-            name[0 if ko else 1], usd(sum(known)) if known else ("금액 미상" if ko else "unknown"), name[2 if ko else 3], len(ks))
+            name[0 if ko else 1], usd(sum(known)) if known else ("금액 산정 불가" if ko else "unknown"), name[2 if ko else 3], len(ks))
         if kind == "more":
-            line += ", 범위가 있는 항목은 아래쪽 값" if ko else ", ranges at their low end"
+            line += ", 범위가 있는 항목은 하한값 적용" if ko else ", using the lower bound of each range"
         if miss and known:
-            line += (" (금액을 못 낸 %d건은 뺐습니다)" if ko else " (%d without an amount left out)") % miss
+            line += (" (금액을 산정할 수 없는 %d건은 제외했습니다)" if ko else " (%d without an amount left out)") % miss
         out.append(line)
     if split:
         sums = {g: sum(a for kk, (gg, a) in split.items() if a is not None and gg == g) for g in ("A", "B")}
-        out.append(("- 그중 설정 개선 %s · 지속 최적화 %s. 바뀐 부분만 고쳐 쓰기(4절)와 호출 없이 답하기(5절)도 지속 최적화 항목입니다. "
+        out.append(("- 그중 설정 개선 %s · 지속 최적화 %s. 변경된 부분만 변경 부분만 생성(4절)와 기존 응답 재사용(5절)도 지속 최적화 항목입니다. "
                     "적용 효과는 이전 응답과의 유사도와 응답 길이에 따라 달라집니다. 요청 패턴이 바뀌면 적용 기준도 조정해야 합니다. "
                     "유사도가 낮은 요청에 적용하면 오히려 비용이 증가할 수 있습니다." if ko else
                     "- Of that, a one-time fix you can do yourself: %s · needs ongoing tuning: %s. Rewriting only the "
@@ -6150,13 +6150,13 @@ def head_summary(res, ko):
                     "pieces are kept and compared on every request.") % (usd(sums["A"]), usd(sums["B"])))
     bill = (res.get("bill") or {}).get("usd_total")
     if res.get("synthetic_calls") and bill and usd(leak_sum or 0.0) == usd(0.0):
-        out.append(("- 견본 로그는 전체 청구가 %s 인 작은 로그입니다. 여기서 찾은 새는 돈은 $%.3f 라서 소수 둘째 자리까지 적는 "
-                    "금액 칸에 $0.00 으로 보입니다. 내 로그를 넣으면 그 로그의 청구 크기대로 금액이 나옵니다." if ko else
-                    "- The example log is a small one: its whole bill is %s. The leak found in it is $%.3f, so the money "
-                    "lines, which show two decimals, read $0.00. Your own log gives amounts at the size of its bill.")
+        out.append(("- 합성 예시 로그의 전체 비용은 %s입니다. 분석된 추가 비용은 $%.3f이므로 소수 둘째 자리까지 표시하면 "
+                    "$0.00으로 표시됩니다. 실제 서비스의 금액은 입력한 로그를 기준으로 계산합니다." if ko else
+                    "- The synthetic example has a total cost of %s. Identified additional costs are $%.3f, so the value "
+                    "is displayed as $0.00 at two decimal places. Your report uses amounts from your own log.")
                    % (usd(bill), leak_sum or 0.0))
-    out += ["", ("최소 기준입니다 — 켜면 실제로 줄어든 금액이 화면에 뜹니다." if ko else
-                 "This is the floor. Once switched on, the amount actually saved shows on screen."), ""]
+    out += ["", ("위 금액은 진단 로그에 근거한 추정치입니다. 실제 절감 효과는 적용 후 기준 요청과 비교해 확인합니다." if ko else
+                 "These figures are estimates derived from the supplied logs. Actual savings are verified after deployment against baseline requests."), ""]
     return out
 
 
@@ -6206,10 +6206,10 @@ def _report_body(res, lang="ko", cache_line=True):
                "- %d lines · %d not JSON · %d rejected for missing ts -> 0 usable calls")
               % (res["lines"], res["bad_json"], res["rejected_no_ts"])] + sources_line(res, ko) + \
              ["", "**" + res["error"] + "**", ""]
-        L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않습니다." if ko else "Nothing could be read, so sections 1-5 are not produced.")]
+        L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않습니다." if ko else "No readable records were found, so sections 1–5 are omitted.")]
         L += ["-" + x[1:] for x in unread_lines(None, ko, blank=not res["lines"]) if x]
         if res["rejected_no_ts"]:
-            L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 응답 쌍을 만들면 뒤의 답이 앞 답의 재료로 쓰여 응답 유사도가 부풀고 진단이 거짓이 됩니다. "
+            L.append("- " + (("ts 없는 줄 %d개 거부 — 시간 순서 없이 응답 쌍을 만들면 뒤의 답이 이전 응답의 재료로 쓰여 응답 유사도가 부풀고 진단이 거짓이 됩니다. "
                               "고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요") if ko else
                              ("%d lines were rejected for missing ts. Without time order a later answer could be paired as an "
                               "earlier one's draft, which inflates similarity and makes the diagnosis false. To fix, add ts "
@@ -6231,17 +6231,17 @@ def _report_body(res, lang="ko", cache_line=True):
                 "in this report."))]
     if res.get("collector_nohash_calls"):  # EMPTY-HAND (10-23): said as the install, not as a field the log lacks
         L += [("- **수집기가 `linklbee_scan.py` 를 찾지 못해 요청 해시를 적지 못한 호출 %d건.** 두 파일을 같은 폴더에 두면 다음 기록부터 "
-               "7절의 다시 보낸 요청·접두·같은 앞부분 항목까지 봅니다. 아래 '더 주시면 볼 수 있는 것'의 요청 본문은 이것 때문입니다." if ko else
+               "7절의 다시 보낸 요청·접두·공통 접두부 항목까지 봅니다. 아래 '더 주시면 볼 수 있는 것'의 요청 본문은 이것 때문입니다." if ko else
                "- **%d calls were logged by a collector that could not find `linklbee_scan.py`, so no request hashes were written.** "
                "With both files in one folder, the next records also show section 7's re-sent calls, prefixes and shared "
-               "prefixes. That is why 'the request body' is listed under what more data would show.") % res["collector_nohash_calls"]]
+               "prefixes. That is why 'the request body' is listed under what more data required.") % res["collector_nohash_calls"]]
     if res.get("agent_log_calls"):
         L += [("- **코딩 에이전트(Claude Code) 기록을 읽었습니다(호출 %d건).** 체험용 입구입니다. 링클비가 줄이려는 것은 회사 "
                "서비스가 부르는 LLM 호출이고, 그 호출 로그로도 같은 리포트가 나옵니다." if ko else
                "- **This is a coding agent's record (Claude Code, %d calls).** It is a way to try the scanner. Linklbee "
                "cuts the LLM calls a company's own service makes, and that service's call log gives the same report.") % res["agent_log_calls"]]
     if res.get("synthetic_calls"):
-        L += [("- **[합성] 예시 로그입니다.** 호출 %d건 중 %d건이 지어낸 것이라 실제 회사의 숫자가 아닙니다. 자기 로그는 "
+        L += [("- **[합성] 예시 로그입니다.** 총 %d건 중 %d건이 합성 데이터이며 실제 서비스의 측정 결과가 아닙니다. 실제 로그는 "
                "`%s --logs <파일>` 로 넣습니다." if ko else
                "- **[synthetic] This is the example log.** %d of %d calls are made up, so these are not a real company's "
                "figures. To scan your own log: `%s --logs <file>`.") % ((res["calls"], res["synthetic_calls"], command_name()) if ko else
@@ -6273,7 +6273,7 @@ def _report_body(res, lang="ko", cache_line=True):
               % (fl["calls"], ", ".join("%s %d" % kv for kv in sorted(fl["models"].items(), key=lambda kv: -kv[1])),
                  "{:,}".format(fl["output_tokens"]))]
     if res.get("bill"):
-        L += [("- 출력 금액 %s / 전체 %s = **%s** (가격 호출 %d건, 가격표 %s 기준)" if ko else
+        L += [("- 출력 금액 %s / 전체 %s = **%s** (가격 호출 %d건, 단가표 %s 기준)" if ko else
                "- output %s of %s total = **%s** (%d priced calls, prices as of %s)")
               % (usd(res["bill"]["usd_output"]), usd(res["bill"]["usd_total"]), pct(res["bill"]["output_share"]),
                  res["pricing"]["priced_calls"], res["pricing"]["as_of"])]
@@ -6288,7 +6288,7 @@ def _report_body(res, lang="ko", cache_line=True):
                "- Every call is flat-rate traffic, so there is no dollar figure. Total output: %s tokens.")
               % "{:,}".format(res["output_tokens_total"]), ""]
     else:
-        L += [("- 금액 환산 불가: 가격표에 있는 모델 + input_tokens 가 있는 호출이 없습니다. 출력 토큰 합 %d." if ko else
+        L += [("- 금액 환산 불가: 단가표에 있는 모델 + input_tokens 가 있는 호출이 없습니다. 출력 토큰 합 %d." if ko else
                "- No dollar figure: no call has both a priced model and input_tokens. Total output: %d tokens.")
               % res["output_tokens_total"]]
         lc = res.get("logged_cost")
@@ -6331,7 +6331,7 @@ def _report_body(res, lang="ko", cache_line=True):
                   % (SWITCH["min_answer_tokens"], pct(ub, 2)), ""]
         L += ["## " + t["s6"], ""]
         gaps = [("시각(ts) 없는 호출 %d개 — 같은 문서의 판을 시간 순서로 이을 수 없어 2절(응답 쌍 분포)·3절의 실제 비중·4절(절감 예상 범위)·"
-                 "5절(호출 없이 답하기 후보)을 내지 않았습니다. 고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요" if ko else
+                 "5절(기존 응답 재사용 후보)을 내지 않았습니다. 고칠 법: 각 줄에 ts(ISO-8601 또는 epoch 초)를 넣으세요" if ko else
                  "%d calls have no ts. Without it the versions of a document cannot be put in order, so section 2 "
                  "(answer pairs), section 3's real share, section 4 (estimated savings) and section 5 (answering without a call) are not "
                  "produced. To fix, add ts (ISO-8601 or epoch seconds) to every line") % res["no_ts"]]
@@ -6350,7 +6350,7 @@ def _report_body(res, lang="ko", cache_line=True):
             L[-1:-1] = [("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 항목은 8절에 적었습니다." if ko else
                         "- Why this is 0% (counted on this log), and what to look at instead: section 8.")]
         L += ["## " + t["s6"], ""]
-        gaps = [("본문 없는 호출 %d개 — 응답 유사도를 하나도 잴 수 없습니다. 그래서 2절(응답 쌍 분포)·4절(절감 예상 범위)·5절(호출 없이 답하기 후보)을 내지 않았습니다. "
+        gaps = [("응답 본문이 없는 호출 %d개 — 응답 유사도를 하나도 잴 수 없습니다. 그래서 2절(응답 쌍 분포)·4절(절감 예상 범위)·5절(기존 응답 재사용 후보)을 내지 않았습니다. "
                  "고칠 법: output 또는 output_token_hashes(--hashify)를 넣으세요" if ko else
                  "%d calls have no body, so no similarity can be measured. Section 2 (answer pairs), section 4 (estimated "
                  "savings) and section 5 (answering without a call) are not produced. To fix, add output, or "
@@ -6364,7 +6364,7 @@ def _report_body(res, lang="ko", cache_line=True):
     g = res["grouping"]
     at_s2 = len(L)
     L += ["## " + t["s2"], "",
-          ("비교한 응답 쌍 %d개(문서 %d개). 쌍마다 같은 문서의 바로 앞 답과 이번 답을 비교했습니다. 응답 유사도는 이번 답을 보고 잰 "
+          ("비교한 응답 쌍 %d개(문서 %d개). 쌍마다 같은 문서의 바로 이전 응답과 이번 답을 비교했습니다. 응답 유사도는 이번 답을 보고 잰 "
            "값입니다. 문서를 정한 방법: 지정한 문서 키 호출 %d · 엔진이 찾아 묶은 호출 %d(쌍 %d) · 같은 시각이라 건너뜀 %d." if ko else
            "%d answer pairs from %d documents. Each pair compares an answer with the previous answer for the same "
            "document. Similarity here is measured with the answer known. How documents were found: %d calls by the "
@@ -6389,7 +6389,7 @@ def _report_body(res, lang="ko", cache_line=True):
     warn = []
     if cl.get("warn"):
         warn = [("- 이 로그에는 이전 답이 이미 다음 답과 거의 같은(응답 유사도 %.2f 이상) 요청이 비교한 응답 쌍 출력의 %s 있습니다. 그런 요청은 "
-                 "애초에 부르지 않는 편이 낫습니다(행정규칙 실호출 277건에서 이전 답 그대로 0.9635 > 바뀐 부분만 고쳐 쓰기 0.9611 > "
+                 "애초에 부르지 않는 편이 낫습니다(행정규칙 실호출 277건에서 이전 답 그대로 0.9635 > 변경된 부분만 변경 부분만 생성 0.9611 > "
                  "처음부터 다시 쓰기 0.9545). 링클비는 호출을 없애는 판단을 기본으로 켜지 않습니다. 위 수치는 그 요청도 부른다고 보고 "
                  "잰 값입니다. 이 설명을 붙이는 선(응답 유사도 %.2f 이상이 출력의 %s 이상)은 다른 재료 3종에서 정했고, 이 로그의 선이 아닙니다." if ko else
                  "- In this log, %s of paired output comes from calls whose previous answer is already almost the "
@@ -6403,8 +6403,8 @@ def _report_body(res, lang="ko", cache_line=True):
     small = []  # its own list: the rescue branch below replaces warn
     if res.get("small_models"):
         sm = ", ".join("%s (%gB, %d)" % m for m in res["small_models"][:4])
-        small = [("- **주의 — 작은 모델: %s.** 이름이 %gB 미만을 밝힌 모델은 바뀐 부분만 고쳐 쓰기에서 빼고 보세요. 우리 법령 재료에서 3B 의 "
-                  "고쳐 쓰기는 이전 답 그대로보다 품질이 낮았습니다(토큰 F1 0.9163 < 0.9348, 개정 반영 0.114 — 7B 0.377·14B 0.422). 재료 하나·모델 "
+        small = [("- **주의 — 작은 모델: %s.** 이름이 %gB 미만을 밝힌 모델은 변경된 부분만 변경 부분만 생성에서 빼고 보세요. 우리 법령 재료에서 3B 의 "
+                  "변경 부분만 생성는 이전 답 그대로보다 품질이 낮았습니다(토큰 F1 0.9163 < 0.9348, 개정 반영 0.114 — 7B 0.377·14B 0.422). 재료 하나·모델 "
                   "계열 하나에서 정한 선이고 이 로그의 값이 아닙니다." if ko else
                   "- **Caution — small models: %s.** Don't use models whose name says under %gB for rewriting only the "
                   "changed parts. On our statute material, a 3B model's rewrite scored below the unchanged previous "
@@ -6416,9 +6416,9 @@ def _report_body(res, lang="ko", cache_line=True):
                ("모든 문서에 폭 %d" % rc["span"])) if ko else \
               (("spans fitted per length tier: %s" % "/".join(str(c["span"]) for c in sp["chosen"])) if rc["by"] == "fitted"
                else ("a span of %d for every document" % rc["span"]))
-        warn = [("- **판마다 부르면 호출 자체가 손해인 구간이 크지만(응답 유사도 %.2f 이상 출력 %s), 몇 판에 한 번 부르면 줄일 수 있는 구간이 됩니다.** "
-                 "%s(그 판 수마다 한 번 부름): 응답 유사도 %.2f 이상 %s · 고쳐 쓰기가 손해인 0.78 미만 %s · 돈이 나는 %.2f~%.2f 구간 %s. "
-                 "폭은 이 로그에서 정했습니다(아래 표)." if ko else
+        warn = [("- **버전마다 호출하면 호출 자체가 비용이 증가하는 구간이 크지만(응답 유사도 %.2f 이상 출력 %s), 몇 개 버전마다 호출하면 줄일 수 있는 구간이 됩니다.** "
+                 "%s(그 판 수마다 한 번 부름): 응답 유사도 %.2f 이상 %s · 변경 부분만 생성 방식에서 비용이 증가하는 0.78 미만 %s · 비용 효율이 높은 %.2f~%.2f 구간 %s. "
+                 "비교 간격은 해당 로그를 기준으로 산정했습니다(아래 표)." if ko else
                  "- **Calling at every version wastes many calls (%s of output at similarity %.2f+). Calling once every "
                  "few versions makes them reducible.** With %s (one call per that many versions): %.2f+ %s · under 0.78, "
                  "where rewriting the changed parts costs more, %s · %.2f-%.2f, where it saves money, %s. The span was "
@@ -6430,12 +6430,12 @@ def _report_body(res, lang="ko", cache_line=True):
     # the span table only when some span has a share to move (REPORT-READ 10-22: an all-0.0% table of internal terms
     # told the reader nothing)
     if sp and any(pct(c[k]) not in ("—", pct(0)) for c in sp["by_span"] for k in ("top_share", "money_share")):
-        warn += ["", ("몇 판마다 부르나(몇 판 앞의 답을 이전 답으로 보나) — 응답 쌍이 있는 출력 중 비중. 응답 유사도 ≥%.2f / <0.78 / %.2f~%.2f:" if ko else
+        warn += ["", ("몇 버전마다 부르나(몇 판 앞의 답을 이전 답으로 보나) — 응답 쌍이 있는 출력 중 비중. 응답 유사도 ≥%.2f / <0.78 / %.2f~%.2f:" if ko else
                       "Span (how many versions back the previous answer is taken from) — share of paired output at "
                       "%.2f+ / under 0.78 / %.2f-%.2f:")
                  % (CALL_LOSS_BAND, MONEY_BAND[0], MONEY_BAND[1]), "",
-                 ("이 표는 바로 앞 답과 같은 답(반복: 응답 쌍 %d개, 폭 1 응답 쌍 출력의 %s)을 접고, 더 이른 판으로 돌아간 답(되돌림: 응답 쌍 %d개, "
-                  "%s)을 뺀 사슬에서 쟀습니다. 그 둘은 몇 판에 한 번 부르든 부를 필요가 없는 자리라 폭의 효과로 세지 않습니다." if ko else
+                 ("이 표는 바로 이전 응답과 동일한 응답(반복: 응답 쌍 %d개, 폭 1 응답 쌍 출력의 %s)을 접고, 더 이른 판으로 돌아간 답(되돌림: 응답 쌍 %d개, "
+                  "%s)을 뺀 사슬에서 쟀습니다. 그 둘은 몇 버전에 한 번 부르든 부를 필요가 없는 자리라 폭의 효과로 세지 않습니다." if ko else
                   "Before measuring, answers identical to the previous one were folded (repeats: %d pairs, %s of span-1 "
                   "paired output), and answers that went back to an earlier version were left out (reverts: %d pairs, "
                   "%s). Neither needs a call at any span, so neither counts toward the span's effect.")
@@ -6444,8 +6444,8 @@ def _report_body(res, lang="ko", cache_line=True):
                                                              CALL_LOSS_BAND, MONEY_BAND[0], MONEY_BAND[1]), "|---|---|---|---|---|"]
         warn += ["| %d | %d | %s | %s | %s |" % (c["span"], c["pairs"], pct(c["top_share"]), pct(c["low_share"]),
                                                 pct(c["money_share"])) for c in sp["by_span"]]
-        warn += ["", ("길이 층(답 토큰 경계 %s, 이 로그의 3분위)별로 고른 폭: %s. 응답 쌍이 %d개 미만인 층은 폭 1을 씁니다. "
-                      "폭 2 이상은 같은 답을 한 판 앞 이전 답으로 쟀을 때보다 돈 구간 비중이 클 때만 고릅니다"
+        warn += ["", ("길이 층(답 토큰 경계 %s, 입력 로그의 삼분위)별로 고른 폭: %s. 응답 쌍이 %d개 미만인 층은 폭 1을 씁니다. "
+                      "폭 2 이상은 동일한 응답을 한 판 앞 이전 답으로 쟀을 때보다 돈 구간 비중이 클 때만 고릅니다"
                       "(문서 단위 재표집 2.5 백분위로도)." if ko else
                       "Span chosen per length tier (answer-token edges %s, this log's tertiles): %s. A tier with fewer "
                       "than %d answer pairs keeps span 1. A span of 2 or more is chosen only where it beats span 1 on the "
@@ -6456,14 +6456,14 @@ def _report_body(res, lang="ko", cache_line=True):
           ("- **줄일 수 있는 구간의 출력 토큰 = 전체 출력의 %s** (응답 쌍 %d개). 응답 쌍이 있는 출력 중에서는 %s." if ko else
            "- **Reducible calls produce %s of all output tokens** (%d answer pairs), and %s of paired output.")
           % (pct(q["share_of_all_output"]), q["on_pairs"], pct(q["share_of_paired_output"])),
-          ("- 링클비 엔진이 그때그때 판단했다면(답을 보기 전, 그 문서의 지난 기록만 보고): 전체 출력의 %s (응답 쌍 %d개). 문서의 첫 비교는 기록이 없어 줄이지 않습니다." if ko else
+          ("- 링클비 엔진 적용 기준을 반영한 경우(응답을 생성하기 전, 그 문서의 지난 기록만 보고): 전체 출력의 %s (응답 쌍 %d개). 문서의 첫 비교는 기록이 없어 줄이지 않습니다." if ko else
            "- If the Linklbee engine had decided each call as it came (before the answer, from that document's history "
            "only): %s of all output (%d answer pairs). A document's first pair has no history, so it is not reduced.") % (pct(rp["share_of_all_output"]), rp["on_pairs"])]
     gn = (rp.get("guard_full_pairs") or {}).get("new_text") or 0
     if gn:
         L.append(("  - 스위치는 응답 쌍 %d개를 켰지만, 새 글 가드(요청에 이전 답에 없는 글이 응답 길이의 절반 이상이면 처음부터 쓰기)가 그중 "
                   "%d개(전체 출력의 %s)를 처음부터 쓰기로 보냈습니다. 이 가드는 고정이 아닙니다. 엔진은 막힌 요청의 일부를 "
-                  "고쳐 쓰기로 시험해 보고, 그 고객에서 가드를 올리거나 끕니다. 이 비중은 시험 결과가 나오기 전에는 줄일 수 있는지 "
+                  "변경 부분만 생성로 시험해 보고, 그 고객에서 가드를 올리거나 끕니다. 이 비중은 시험 결과가 나오기 전에는 줄일 수 있는지 "
                   "모르는 비중입니다." if ko else
                   "  - The switch turned on %d answer pairs, but the new-text guard (a full write when the request holds "
                   "new text of at least half the answer's length) sent %d of them (%s of all output) to a full write. The "
@@ -6475,9 +6475,9 @@ def _report_body(res, lang="ko", cache_line=True):
         L.append(("- 이 0% 가 왜 나왔는지(이 로그에서 센 값)와 대신 볼 항목은 8절에 적었습니다." if ko else
                       "- Why this is 0% (counted on this log), and what to look at instead: section 8."))
     if q["on_pairs_with_prompt"]:
-        L.append(("- 그중 같은 프롬프트를 다시 보낸 응답 쌍 %d개(프롬프트가 있는, 줄일 수 있는 응답 쌍 %d개 중), 출력 %s — 사용자가 다른 답을 원해 "
+        L.append(("- 그중 같은 프롬프트를 다시 보낸 응답 쌍 %d개(프롬프트가 있는, 줄일 수 있는 응답 쌍 %d개 중), 출력 %s — 사용자가 다른 응답을 요청해 "
                   "다시 보냈을 수 있는 비중입니다. 그중 %d개는 %d초 안에 다시 보냈습니다 — 링클비 엔진은 이것을 다시 생성으로 보고 처음부터 다시 쓰기로 "
-                  "보냅니다('엔진이 판단했다면'과 '호출 없이 답하기' 값에서 뺐습니다). %s" if ko else
+                  "보냅니다('엔진 적용 기준 반영 시'와 '기존 응답 재사용' 값에서 뺐습니다). %s" if ko else
                   "- Of these, %d answer pairs resent the same prompt (out of %d reducible pairs with a prompt), %s of "
                   "all output. The user may have wanted a different answer. %d of them came within %d s. The Linklbee "
                   "engine treats those as a regenerate and rewrites from scratch, so they are left out of the "
@@ -6503,7 +6503,7 @@ def _report_body(res, lang="ko", cache_line=True):
                     pct(ref["miss"][0]), pct(ref["miss"][1])))
         gm = fi["ge_min"]
         if gm["pairs"]:
-            L.append(("  - 새 토큰이 %d개 이상인 응답 쌍만(%d개 — 한두 토큰 고침은 거저 100%%가 나와서 따로 봅니다): 토큰 가중 %s · 중앙 %s · "
+            L.append(("  - 새 토큰이 %d개 이상인 응답 쌍만(%d개 — 1~2개 토큰만 변경되는 경우은 거저 100%%가 나와서 따로 봅니다): 토큰 가중 %s · 중앙 %s · "
                       "대조군 %s → 고유 비중 %s." if ko else
                       "  - Only pairs with %d+ new tokens (%d; a one- or two-token fix scores 100%% for free): "
                       "token-weighted %s · median %s · control %s -> unique share %s.")
@@ -6533,7 +6533,7 @@ def _report_body(res, lang="ko", cache_line=True):
            "(below) are applied to this log's reducible calls. Everything else counts as 0."), "",
           ("- 출력 토큰: 전체 출력의 %s ~ %s (구간에 대입)" if ko else "- output tokens: %s – %s of all output (ranges applied)")
           % (pct(s["share_of_all_output_low"]), pct(s["share_of_all_output_high"])),
-          ("- 엔진이 판단했다면: %s ~ %s" if ko else "- if the engine had decided: %s – %s")
+          ("- 엔진 적용 기준 반영 시: %s ~ %s" if ko else "- if the engine had decided: %s – %s")
           % (pct(rp["saving_share_low"]), pct(rp["saving_share_high"])),
           ("  - 엔진과 같은 규칙으로 다시 센 값입니다. 공개 재료(법령·eCFR, 문서 키 없는 로그)에서 엔진이 실제로 켠 양의 %s배였습니다. "
            "엔진만 하는 판정(이어 쓸 이전 답 후보가 둘이라 모호한 요청 등)은 다시 세지 않습니다." if ko else
@@ -6541,7 +6541,7 @@ def _report_body(res, lang="ko", cache_line=True):
            "it came to %s times what the engine actually turned on. Judgments only the engine makes (such as a request "
            "with two equally likely previous answers) are not replayed.") % ENGINE_REPLAY_RANGE]
     if s.get("share_of_bill_low") is not None:
-        L.append(("- 금액(캐시 없음 가정의 금액 절감 범위): %s ~ %s = 분석 기간 비용의 %s ~ %s · 가격표 %s · 금액을 못 낸 줄일 수 있는 응답 쌍 %d" if ko else
+        L.append(("- 금액(캐시 없음 가정의 금액 절감 범위): %s ~ %s = 분석 기간 비용의 %s ~ %s · 단가표 %s · 금액을 산정할 수 없는 줄일 수 있는 응답 쌍 %d" if ko else
                   "- dollars (cost ranges measured without a prompt cache): %s – %s = %s – %s of the bill · "
                   "prices as of %s · reducible pairs without a price: %d")
                  % (usd(s["usd_low"]), usd(s["usd_high"]), pct(s["share_of_bill_low"]), pct(s["share_of_bill_high"]),
@@ -6568,7 +6568,7 @@ def _report_body(res, lang="ko", cache_line=True):
     L.append("")
     if not g["pairs"]:  # no answer pair: an empty table and 0.0% ranges tell nothing (REPORT-READ 10-22)
         L[at_s2:] = ["## " + t["s2"], "",
-                     ("- 비교할 응답 쌍(같은 문서의 앞 답과 이번 답)이 없습니다(문서 %d개). 그래서 2절 표와 4절(절감 예상 범위)은 내지 않았습니다." if ko else
+                     ("- 비교할 응답 쌍(같은 문서의 이전 응답과 이번 답)이 없습니다(문서 %d개). 그래서 2절 표와 4절(절감 예상 범위)은 내지 않았습니다." if ko else
                       "- There is no answer pair to compare (a document's previous answer and this one; %d documents), so the "
                       "section 2 table and section 4 (estimated savings) are not produced.") % g["keys"], "",
                      "## " + t["s3"], "",
@@ -6578,7 +6578,7 @@ def _report_body(res, lang="ko", cache_line=True):
     z = res["zero_call"]
     L += ["## " + t["s5"], ""]
     if z["pairs_with_prompt"]:
-        L += [("- 켜는 조건(직전 호출과 프롬프트가 숫자만 빼고 같으면 호출 없이 답하기)이 고른 응답 쌍 %d개 = 전체 출력의 %s. 그중 실제 답이 직전 답과 같았던 비중: 완전 일치 %s · 숫자만 다름 포함 %s. **켜는 조건은 프롬프트만 보고 골랐습니다(답을 보지 않음).**" if ko else
+        L += [("- 적용 조건(직전 호출과 비교해 프롬프트의 숫자를 제외한 내용이 같을 때 기존 응답 재사용)이 고른 응답 쌍 %d개 = 전체 출력의 %s. 그중 실제 응답이 직전 응답과 일치한 비율: 완전 일치 %s · 숫자만 다름 포함 %s. **적용 조건은 응답 생성 전 프롬프트만으로 판단했습니다(생성된 응답을 사용하지 않음).**" if ko else
                "- The rule (a prompt equal to the previous call's except for digits gets no call) picked %d answer "
                "pairs, %s of all output. Of those, the answer really matched the previous one in: exactly %s · "
                "allowing digit-only differences %s. **The rule looked only at prompts, never at answers.**")
@@ -6589,17 +6589,17 @@ def _report_body(res, lang="ko", cache_line=True):
                       "No answer pair to compare, so this candidate is not checked (a document's earlier call is needed).")]
     else:
         L += ["- " + ("로그에 prompt(또는 prompt_hash)가 있으면 이 후보를 봅니다. 지금 로그에는 없습니다." if ko else "Shown when the log has prompt (or prompt_hash). This log does not.")]
-    L += [("- 참고(답을 보고 센 상한): 직전 답과 완전 일치 응답 쌍 %d · 숫자만 다른 응답 쌍 포함 %d" if ko else
+    L += [("- 참고(실제 응답과 비교한 상한값): 직전 답과 완전 일치 응답 쌍 %d · 숫자만 다른 응답 쌍 포함 %d" if ko else
            "- For reference, counted with the answer known (an upper bound): pairs identical to the previous answer "
            "%d · allowing digit-only differences %d") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]), ""]
     at_s6 = len(L)
     L += ["## " + t["s6"], ""]
     gaps = []
     if res["rejected_no_ts"]:
-        gaps.append(("ts 없는 줄 %d개 거부(시간 순서 없이 응답 쌍을 만들면 뒤의 답이 앞 답 쪽으로 샙니다)" if ko else
+        gaps.append(("ts 없는 줄 %d개 거부(시간 순서 없이 응답 쌍을 만들면 뒤의 답이 이전 응답 쪽으로 샙니다)" if ko else
                      "%d lines were rejected for missing ts (without time order, a later answer would leak into an earlier pair)") % res["rejected_no_ts"])
     if b["none"]:
-        gaps.append(("본문 없는 호출 %d개 — 응답 쌍·응답 유사도에서 빠짐" if ko else "%d calls have no body, so they are not in the answer pairs or similarity") % b["none"])
+        gaps.append(("응답 본문이 없는 호출 %d개 — 응답 쌍·응답 유사도에서 빠짐" if ko else "%d calls have no body, so they are not in the answer pairs or similarity") % b["none"])
     gaps += _gaps_common(res, ko)
     if g["auto_key_calls"]:
         # AP-1/AP-1b (10-18): with keys hidden, auto pairs matched the true on-cell volume on law / eCFR (0.98-1.00) but
@@ -6617,7 +6617,7 @@ def _report_body(res, lang="ko", cache_line=True):
         gaps.append(("모드 '%s' 는 확정 모드가 아닙니다 — 모드 없는 값만 보였습니다" if ko else "mode '%s' is not a confirmed mode, so only mode-free values are shown") % res["mode"]["name"])
     if g["pairs"]:  # section 4 is produced only with answer pairs; its own line names the materials (3, not 2)
         gaps.append(("4절의 절감 범위는 다른 재료(4절 끝에 적은 공개 문서)에서 잰 값입니다. 이 고객 트래픽에서 잰 값은 파일럿에서 비교용으로 남긴 요청과 견줘 나옵니다" if ko else
-                     "The saving ranges in section 4 were measured on other materials (the public documents named at the end "
+                     "The estimated savings in section 4 were measured on other materials (the public documents named at the end "
                      "of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison"))
     if gaps:
         L += ["- " + x for x in gaps] + [""]
@@ -6642,12 +6642,12 @@ MISSING = {
                                                       "`finish_reason` (or `max_tokens` with `output_tokens`)"),
     "request (tools / system)": ("요청 본문의 도구 정의·시스템 지시(`request` 의 `tools` / `system`)",
                                  "the request's tool definitions and system text (`tools` / `system` in `request`)"),
-    "model listed in cache_constants.json + input_tokens": ("`model`(벤더 캐시 표에 있는 모델)과 `input_tokens`",
+    "model listed in cache_constants.json + input_tokens": ("`model`(AI 제공사 캐시 표에 있는 모델)과 `input_tokens`",
                                                             "`model` (one in the vendor cache table) with `input_tokens`"),
-    "answer body (output) + the vendor's output_tokens": ("답 본문(`output`)과 벤더가 보고한 `output_tokens`",
+    "answer body (output) + the vendor's output_tokens": ("답 본문(`output`)과 AI 제공사가 보고한 `output_tokens`",
                                                           "the answer body (`output`) with the vendor's `output_tokens`"),
     "input_tokens + the vendor's cache-read field (cached_tokens / cache_read_input_tokens / cachedContentTokenCount)":
-        ("`input_tokens` 와 벤더의 캐시 읽기 값(`cached_tokens` / `cache_read_input_tokens` / `cachedContentTokenCount`)",
+        ("`input_tokens` 와 AI 제공사의 캐시 읽기 값(`cached_tokens` / `cache_read_input_tokens` / `cachedContentTokenCount`)",
          "`input_tokens` with the vendor's cache-read value (`cached_tokens` / `cache_read_input_tokens` / "
          "`cachedContentTokenCount`)"),
     "request body (messages / system / tools) or prompt, + input_tokens + ts":
@@ -6684,7 +6684,7 @@ def table_gap(w, ko):
     """7-5 when the log has model and input_tokens but none of its models' minimum is in cache_constants.json: the gap is
     Linklbee's table, so it is said that way, with the input curve at common minimums (EMPTY-HAND, PM 10-23 21:12)."""
     if "open_curve" not in w and w.get("upstream_spread"):  # SELFHOST-SPREAD: a log that names its servers
-        return (("보낸 서버가 기록된 자체 호스팅 로그로 보입니다. 자체 호스팅 서버의 접두 캐시에는 벤더의 최소 길이가 없어 그 기준으로는 "
+        return (("보낸 서버가 기록된 자체 호스팅 로그로 보입니다. 자체 호스팅 서버의 접두 캐시에는 AI 제공사의 최소 길이가 없어 그 기준으로는 "
                  "판정하지 않았습니다. 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. 서버를 옮겨 다니며 다시 계산한 비중은 "
                  "아래에 셉니다." if ko else
                  "This looks like a self-hosted log that names its servers. A self-hosted prefix cache has no vendor "
@@ -6693,14 +6693,14 @@ def table_gap(w, ko):
                 % (pct(w.get("hit_rate")), w.get("open_calls", 0)))
     if "open_curve" not in w:  # 7-7: the whole-log hit rate, which needs no minimum
         return (("이 로그 모델의 캐시 최소 길이가 링클비 상수표에 아직 없어 최소 길이 이상 호출의 적중률을 판정하지 않았습니다(추측하지 "
-                 "않음). 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. 벤더 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
+                 "않음). 전체 적중률(캐시 읽기 ÷ 입력)은 **%s**(호출 %d건)입니다. AI 제공사 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
                  "The cache minimum of this log's models is not in Linklbee's table yet, so the hit rate above the minimum "
                  "is not judged (not guessed). The whole-log hit rate (cache reads / input) is **%s** (%d calls). Once "
                  "the vendor's documented minimum is confirmed it goes in the table and this is judged.")
                 % (pct(w.get("hit_rate")), w.get("open_calls", 0))).replace(
-            " 벤더 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
+            " AI 제공사 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
             " Once the vendor's documented minimum is confirmed it goes in the table and this is judged.",
-            pre56_note(w, ko) or (" 벤더 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
+            pre56_note(w, ko) or (" AI 제공사 문서의 최소 길이가 확인되면 표에 넣어 판정합니다." if ko else
                                   " Once the vendor's documented minimum is confirmed it goes in the table and this is judged."))
     c = w.get("open_curve") or {}
     return (("이 로그 모델의 캐시 최소 길이가 링클비 상수표에 아직 없어 미달 여부를 정하지 않았습니다(추측하지 않음). 입력 길이로 보면(%d건): "
@@ -6708,7 +6708,7 @@ def table_gap(w, ko):
              "decided (not guessed). By input length (%d calls): ") % w.get("open_calls", 0) +
             " · ".join(("최소가 %s 라면 %s 미달" if ko else "a %s minimum -> %s under") % ("{:,}".format(int(n)), pct(v))
                        for n, v in c.items()) +
-            ((("." + pre56_note(w, ko)) if pre56_note(w, ko) else ". 벤더 문서의 최소 길이가 확인되면 표에 넣어 금액까지 냅니다.") if ko else
+            ((("." + pre56_note(w, ko)) if pre56_note(w, ko) else ". AI 제공사 문서의 최소 길이가 확인되면 표에 넣어 금액까지 냅니다.") if ko else
              (("." + pre56_note(w, ko)) if pre56_note(w, ko) else
               ". Once the vendor's documented minimum is confirmed it goes in the table, and the amounts follow.")))
 # Report groups (PM 10-22 19:15). 'leak' = money going out now; a healthy log should have none. 'more' = a cheaper
@@ -6757,45 +6757,45 @@ def more_order(res):
 # What the Linklbee engine does about each found item (docs/PAIRING-1021.md; PM 10-21 13:48: an item the engine does
 # not fix says so). Change this together with that table.
 WFIX = {  # what the engine at tag engine-2026.10.22 does (ko: docs/STYLE-KO.md on master)
-    "failed": ("처방: 링클비 엔진은 이 항목을 찾기만 하고 고치지 않습니다. 고치려면 서비스 코드를 직접 바꿔야 합니다.",
+    "failed": ("개선 방향: 링클비 엔진은 이 항목을 찾기만 하고 고치지 않습니다. 고치려면 서비스 코드를 직접 바꿔야 합니다.",
                "Fix: the Linklbee engine detects this but does not fix it. The fix is in your service code."),
-    "resent": ("처방: 엔진은 같은 요청(본문 전체가 같은 것)이 정한 시간 안에 다시 오면 저장한 답을 호출 없이 돌려줄 수 있습니다"
-               "(스트리밍·되돌릴 수 없는 요청 제외). '다시 생성'에도 같은 답이 가므로, 엔진이 금액과 함께 먼저 제안하고 켤지는 직접 정합니다.",
+    "resent": ("개선 방향: 엔진은 같은 요청(본문 전체가 같은 것)이 설정한 시간 안에 반복되면 기존 응답을 재사용해 추가 API 호출을 줄일 수 있습니다"
+               "(스트리밍·되돌릴 수 없는 요청 제외). 응답을 다시 생성해야 하는 요청에도 동일한 응답이 사용될 수 있어, 예상 효과와 적용 여부를 확인한 뒤 선택합니다.",
                "Fix: when an identical request (same full body) comes back within a set time, the engine can return "
                "the stored answer without calling the vendor. Streams and irreversible actions are excluded. A "
                "regenerate would also get the stored answer, so the engine proposes this with the amount first, and "
                "you decide whether to turn it on."),
-    "truncated": ("처방: 같은 요청이 잘린 뒤 더 큰 상한으로 다시 가는 일이 반복되면, 엔진이 그 상한으로 처음부터 보낼 수 있습니다. "
-                  "잘린 첫 시도에 내는 돈이 빠집니다. 답이 길어질 수 있어 엔진이 금액과 함께 먼저 제안하고, 켤지는 직접 정합니다.",
+    "truncated": ("개선 방향: 같은 요청이 출력 길이 제한으로 중단되고 더 높은 제한값으로 재시도되는 일이 반복되면, 엔진이 그 상한으로 처음부터 보낼 수 있습니다. "
+                  "중단된 첫 호출에서 발생한 추가 비용을 줄일 수 있습니다. 응답 길이와 비용이 달라질 수 있으므로 예상 효과를 확인한 뒤 적용 여부를 선택합니다.",
                   "Fix: if the same request is often cut and then resent with a higher cap, the engine can send it with "
                   "that cap from the start, so you stop paying for the cut first attempt. Answers may get longer, so the "
                   "engine proposes this with the amount first, and you decide whether to turn it on."),
-    "prefix_unstable": ("처방: 엔진이 도구 정의·시스템 블록의 키 순서를 한 가지로 맞춰 보냅니다. 사용 기록에서 이득이 확인되면 엔진이 "
-                        "켤 수 있고, 손해로 돌면 끕니다(Anthropic·OpenAI GPT-5.6 이상 기록으로 판단). 시각·ID 같은 가변 부분은 "
+    "prefix_unstable": ("개선 방향: 엔진이 도구 정의·시스템 블록의 키 순서를 한 가지로 맞춰 보냅니다. 사용 기록에서 이득이 확인되면 엔진이 "
+                        "켤 수 있고, 비용이 증가하면 적용을 중단합니다(Anthropic·OpenAI GPT-5.6 이상 기록으로 판단). 시각·ID 같은 가변 부분은 "
                         "아직 고치지 않습니다.",
                         "Fix: the engine sends tool definitions and system blocks in one key order. It can turn this on "
                         "when usage records show a gain, and turns it off when they show a loss (judged on Anthropic and "
                         "OpenAI GPT-5.6+ records). Changing parts such as times and ids are not handled yet."),
-    "cache_min": ("처방: 엔진이 요청마다 하한까지 모자란 토큰을 셉니다. 직접 정한 고정 문구로 하한까지 채우는 기능이 있지만, "
-                  "문구를 넣어야 켜집니다. 같은 앞부분의 짧은 요청을 한 호출로 묶어 보내는 기능도 있습니다(OpenAI·Anthropic, "
-                  "도구 없는 단발 요청). 답이 달라질 수 있어 엔진이 켜지 않고, 켤지는 직접 정합니다.",
+    "cache_min": ("개선 방향: 엔진이 요청마다 최소 토큰 수에 부족한 토큰을 셉니다. 사용자가 설정한 고정 문구로 캐시 최소 토큰 수를 충족하는 기능이 있지만, "
+                  "고정 문구를 설정해야 적용할 수 있습니다. 공통 접두부의 짧은 요청을 한 호출로 묶어 보내는 기능도 있습니다(OpenAI·Anthropic, "
+                  "도구 없는 단발 요청). 응답이 달라질 수 있어 자동 적용하지 않으며, 사용자가 적용 여부를 선택합니다.",
                   "Fix: the engine counts how many tokens each request is short of the minimum. It can pad a short "
                   "fixed prefix up to the minimum, but only with text you provide. It can also send short calls "
                   "that share a prefix as one call (OpenAI and Anthropic, single calls without tools). The answers "
                   "can change, so the engine never turns this on itself; you decide."),
-    "billing": ("처방: 고치는 쪽은 벤더 청구 정정입니다. 링클비 엔진은 근거 숫자만 냅니다.",
+    "billing": ("개선 방향: 고치는 쪽은 AI 제공사 청구 정정입니다. 링클비 엔진은 근거 숫자만 냅니다.",
                 "Fix: this is corrected by the vendor on the bill. The Linklbee engine provides the numbers as evidence."),
-    "cache_hit": ("처방: 엔진이 반복되는 고정 앞부분에 캐시 표시를 붙입니다. Anthropic·Bedrock(Claude·Nova)·Vertex Claude·"
-                  "OpenAI GPT-5.6 이상(Bedrock 포함)이 대상입니다. 사용 기록에서 이득이 확인되면 엔진이 켤 수 있고, 손해로 돌면 "
-                  "끕니다. Azure OpenAI 는 공급사 캐시가 기본으로 켜져 있고, 엔진의 캐시 표시는 엔진 설정으로 켭니다. Gemini 는 "
-                  "공급사가 이미 자동으로 캐시합니다.",
+    "cache_hit": ("개선 방향: 엔진이 반복되는 고정 앞부분에 캐시 표시를 붙입니다. Anthropic·Bedrock(Claude·Nova)·Vertex Claude·"
+                  "OpenAI GPT-5.6 이상(Bedrock 포함)이 대상입니다. 사용 기록에서 이득이 확인되면 엔진이 켤 수 있고, 비용이 증가하면 "
+                  "끕니다. Azure OpenAI 는 AI 제공사 캐시가 기본으로 켜져 있고, 엔진의 캐시 표시는 엔진 설정으로 켭니다. Gemini 는 "
+                  "AI 제공사가 이미 자동으로 캐시합니다.",
                   "Fix: the engine adds a cache marker to a fixed prefix that keeps coming back. This covers Anthropic, "
                   "Bedrock (Claude, Nova), Claude on Vertex, and OpenAI GPT-5.6+ (Bedrock included). It can turn this on "
                   "when usage records show a gain, and turns it off when they show a loss. On Azure OpenAI the vendor's "
                   "cache is on by default and the engine's marker is turned on in the engine settings. Gemini already "
                   "caches automatically."),
-    "shared_prefix": ("처방: 엔진이 같은 숫자를 셉니다. 같은 앞부분이 5~60분 간격으로 돌아오면 1시간 캐시 표시를 붙입니다"
-                      "(Anthropic API·Bedrock·Vertex 의 Claude 4 이상, 사용 기록에서 이득일 때 엔진이 켤 수 있음). 같은 앞부분이 "
+    "shared_prefix": ("개선 방향: 엔진이 같은 숫자를 셉니다. 공통 접두부이 5~60분 간격으로 돌아오면 1시간 캐시 표시를 붙입니다"
+                      "(Anthropic API·Bedrock·Vertex 의 Claude 4 이상, 사용 기록에서 이득일 때 엔진이 켤 수 있음). 공통 접두부이 "
                       "캐시 최소 길이보다 짧으면 캐시가 읽지 못합니다. 그런 요청은 한 호출로 묶어 보낼 수 있습니다. 답이 달라질 수 "
                       "있어 켤지는 직접 정합니다.",
                       "Fix: the engine counts the same numbers. When a prefix keeps coming back 5-60 minutes apart, it "
@@ -6803,9 +6803,9 @@ WFIX = {  # what the engine at tag engine-2026.10.22 does (ko: docs/STYLE-KO.md 
                       "turn it on when usage records show a gain). A shared prefix shorter than the cache minimum cannot be "
                       "cached; those calls can be sent as one bundled call instead. The answers can change, so you decide "
                       "whether to turn it on."),
-    "flex": ("처방: 엔진이 Flex 로 보낼 수 있었던 호출과 금액을 계산해 먼저 제안합니다. 켜면 고른 트래픽을 Flex 로 보내고, "
-             "Flex 자원이 없으면 표준으로 한 번 다시 보냅니다(그 거절은 과금 없음). Flex 는 답이 표준보다 늦게 옵니다. "
-             "사람이 답을 기다리는 화면의 요청에는 켜지 마세요.",
+    "flex": ("개선 방향: 엔진이 Flex로 처리할 수 있는 호출과 금액을 계산해 먼저 제안합니다. 켜면 선택한 트래픽을 Flex로 처리하고, "
+             "Flex 자원이 없으면 표준 처리 방식으로 한 차례 재시도합니다(그 거절은 과금 없음). Flex는 표준 처리보다 응답 시간이 길어질 수 있습니다. "
+             "실시간 응답이 필요한 화면의 요청에는 켜지 마세요.",
              "Fix: the engine works out which calls could have used Flex and how much that saves, and proposes it "
              "first. Once on, it sends the chosen traffic at Flex. If Flex has no capacity, it retries once at "
              "standard (the refusal is not billed). Flex answers come later than standard ones, so leave it off for "
@@ -6834,25 +6834,25 @@ FIX_HOWTO = {
                "않게 고치세요.",
                "How: find where the same request is sent again shortly after (retries, double clicks) and stop it from "
                "going out again before the first one has finished."),
-    "truncated": ("개선 방법: 잘린 뒤 더 큰 길이 상한으로 다시 보내는 요청은 처음부터 그 상한으로 보내세요.",
+    "truncated": ("개선 방법: 출력 길이 제한에 도달한 뒤 더 높은 제한값으로 다시 보내는 요청은 처음부터 그 상한으로 보내세요.",
                   "How: send the calls that are resent with a bigger length limit after a cut with that limit from "
                   "the start."),
-    "prefix_unstable": ("개선 방법: 도구 정의와 시스템 지시를 늘 같은 순서·같은 글로 보내고, 시각·ID 처럼 바뀌는 값은 요청 뒤쪽으로 "
+    "prefix_unstable": ("개선 방법: 도구 정의와 시스템 지시를 늘 같은 순서·동일한 내용로 보내고, 시각·ID 처럼 바뀌는 값은 요청 뒤쪽으로 "
                         "옮기세요.",
                         "How: send the tool definitions and system instructions in the same order and the same text "
                         "every time, and move changing values such as times and IDs to the end of the call."),
     "cache_min": ("개선 방법: 앞부분이 같은 짧은 요청은 고정 지시문을 캐시 최소 길이 위로 늘리거나, 여러 개를 한 요청으로 묶어 보내세요.",
                   "How: for short calls that share a start, lengthen the fixed instructions past the cache minimum or "
                   "send several of them together as one request."),
-    "billing": ("개선 방법: 위 호출 목록을 근거로 벤더에 청구 정정을 요청하세요.",
+    "billing": ("개선 방법: 위 호출 목록을 근거로 AI 제공사에 청구 정정을 요청하세요.",
                 "How: ask the vendor to correct the bill, with the calls above as the evidence."),
-    "cache_hit": ("개선 방법: 반복되는 고정 앞부분 끝에 캐시 표시를 붙이고(Anthropic 은 `cache_control`), 같은 앞부분 요청이 같은 "
+    "cache_hit": ("개선 방법: 반복되는 고정 앞부분 끝에 캐시 표시를 붙이고(Anthropic 은 `cache_control`), 공통 접두부 요청이 같은 "
                   "계정·같은 키로 가게 하세요.",
                   "How: put a cache mark at the end of the repeated fixed start (`cache_control` on Anthropic) and send "
                   "calls that share it through the same account and key."),
     "flex": ("개선 방법: 사람이 기다리지 않는 요청(야간 작업·일괄 처리)에 `service_tier: \"flex\"` 를 붙여 보내세요.",
              "How: add `service_tier: \"flex\"` to the calls no one is waiting on (overnight jobs, batch work)."),
-    "shared_prefix": ("개선 방법(대화 기록 비중): 긴 대화는 몇 턴마다 앞 기록을 잘라 보내세요. 답이 달라질 수 있어 품질을 먼저 확인하세요.",
+    "shared_prefix": ("개선 방법(대화 기록 비중): 긴 대화는 몇 턴마다 앞 기록을 잘라 보내세요. 응답이 달라질 수 있어 품질을 먼저 확인하세요.",
                       "How (history part): cut the earlier history every few turns in long conversations. Answers can "
                       "change, so check quality first."),
 }
@@ -6863,7 +6863,7 @@ def _spent(w, ko):
     i = "{:,}".format(w["input_tokens"]) if w.get("input_known", 1) else ("미상" if ko else "unknown")
     t = ("입력 %s · 출력 %s 토큰" if ko else "input %s · output %s tokens") % (i, "{:,}".format(w["output_tokens"]))
     if w.get("usd") is not None:
-        t += (", 금액 %s(가격 있는 호출 %d건, API usage × 가격표)" if ko else ", %s (%d priced calls, API usage x price list)") \
+        t += (", 금액 %s(가격 있는 호출 %d건, API usage × 단가표)" if ko else ", %s (%d priced calls, API usage x price list)") \
             % (usd(w["usd"]), w["priced_calls"])
     return t
 
@@ -6890,7 +6890,7 @@ def waste_lines(res, ko):
     W = res.get("waste")
     if not W:
         return []
-    L = ["## " + ("7. 상세 진단 결과" if ko else "7. Checklist — what is leaking, what could cost less"), ""]
+    L = ["## " + ("7. 상세 진단 결과" if ko else "7. Checklist — what is leaking, what additional savings opportunities"), ""]
     marks = []  # (item, index of its first line): the items are regrouped at the end
 
     def head(n, k, title):
@@ -6939,7 +6939,7 @@ def waste_lines(res, ko):
                   "much less. So this amount is what the bill would have saved without the failures.")
                  % (usd(w["usd_billed"]), usd(w["usd_back_on_retry"]), w["calls_back_on_retry"]))
     if w["status"] == "found":
-        L.append(("  - 이유: 벤더가 끊기거나 실패한 호출을 어디까지 청구하는지 공식 문서에 없어, 확인 전에는 고치지 않습니다. "
+        L.append(("  - 이유: AI 제공사가 끊기거나 실패한 호출을 어디까지 청구하는지 공식 문서에 없어, 확인 전에는 고치지 않습니다. "
                   "링클비 서버는 고객 연결이 끊긴 스트림도 기록에 남겨(`client_gone`) 이 숫자를 계속 셉니다." if ko else
                   "  - Why: vendor documents do not say how much of a cut or failed call is billed, so nothing changes "
                   "until that is confirmed. The Linklbee server also records streams whose client disconnected "
@@ -6948,8 +6948,8 @@ def waste_lines(res, ko):
     L.append(head("7-2", "resent", "짧은 간격으로 다시 보낸 같은 요청" if ko else "the same request sent again shortly after"))
     dc, rt = (W["failed"].get("split") or {}).get("discarded") or {}, (W["failed"].get("split") or {}).get("retries") or {}
     if dc.get("usd") or rt.get("after_failed_usd"):
-        L.append(("  - 돈은 냈는데 쓰지 않은 호출, 두 갈래(같은 로그에서 가름): **버려진 산출물** %s(청구된 실패 %d건 + 같은 요청이 다시 "
-                  "가서 버려진 정상 답 %d건 — 품질 검사 탈락·형식 깨짐 재생성·사용자 다시 생성은 로그로 못 가른다) · **재시도** %s(실패·시간 초과 뒤 "
+        L.append(("  - 비용이 청구됐지만 결과가 활용되지 않은 호출을 두 유형으로 분류했습니다: **버려진 산출물** %s(청구된 실패 %d건 + 같은 요청이 다시 "
+                  "가서 버려진 정상 답 %d건 — 품질 검사 탈락·형식 깨짐 재생성·사용자 다시 생성은 현재 로그만으로는 구분할 수 없습니다) · **재시도** %s(실패·시간 초과 뒤 "
                   "같은 요청 %d건 — 서비스의 재시도 설정). 잘린 뒤 다시 보낸 것은 7-3 에 셉니다." if ko else
                   "  - Calls paid for and not used, two kinds (told apart in the same log): **discarded output** %s (%d "
                   "failed calls still billed + %d OK answers the same request replaced — a quality check, a broken format or a "
@@ -6967,7 +6967,7 @@ def waste_lines(res, ko):
                       "failures is counted.")
                      % (usd(fb["usd_billed"]), usd(fb["usd_back_on_retry"]), fb["calls_back_on_retry"]))
     if dc.get("redraft_calls"):
-        L.append(("  - 버려진 산출물 중 **다시 쓴 초안 %d건 %s** — 같은 입력을 앞 답과 함께 %d초 안에 다시 보낸 호출의 앞 답입니다"
+        L.append(("  - 버려진 산출물 중 **다시 쓴 초안 %d건 %s** — 같은 입력을 이전 응답과 함께 %d초 안에 다시 보낸 호출의 이전 응답입니다"
                   "(심사 미달 재작성 등). 그 사이에 그 초안을 읽은 심사 호출 %d건도 같이 셌습니다. 같은 요청이 아니라서 아래 "
                   "'같은 요청' 셈에는 없습니다. 끝내 통과 못 한 항목의 마지막 초안은 다시 쓴 호출이 없어 빠졌습니다 — 이 금액은 "
                   "하한입니다. 엔진은 이것을 찾기만 합니다. 줄이려면 생성 지시와 심사 기준을 맞춰야 합니다." if ko else
@@ -6979,13 +6979,13 @@ def waste_lines(res, ko):
                  % ((dc["redraft_calls"], usd(dc.get("redraft_usd")) if dc.get("redraft_usd") else "—", RETRY_WINDOW,
                      dc.get("redraft_judge_calls", 0))))
     if w["status"] != "cannot_judge" and not w["resent_calls"]:
-        L.append(("  - 요청을 알 수 있는 호출 %d건 중 같은 요청이 %d초 안에 다시 간 호출은 없습니다." if ko else
+        L.append(("  - 요청을 알 수 있는 호출 %d건 중 같은 요청이 %d초 안에 반복 전송된 호출은 없습니다." if ko else
                   "  - Of %d calls whose request is known, none repeated the same request within %d s.")
                  % (w["calls_with_request"], w["window_s"]))
     elif w["status"] != "cannot_judge":
         a = w["after"]
-        L.append(("  - 같은 요청(문서 id 가 있으면 같은 문서 안)이 %d초 안에 다시 간 호출 %d건(요청을 알 수 있는 호출 %d건 중). "
-                  "앞 호출이 실패 %d · 잘림 %d · 정상 %d · 모름 %d. 간격 중앙 %s초. %s. 정상 뒤에 다시 간 것은 사용자가 다른 답을 "
+        L.append(("  - 같은 요청(문서 id 가 있으면 같은 문서 안)이 %d초 안에 반복 전송된 호출 %d건(요청을 알 수 있는 호출 %d건 중). "
+                  "이전 호출이 실패 %d · 잘림 %d · 정상 %d · 모름 %d. 중앙 재전송 간격 %s초. %s. 정상 응답 이후 반복 전송된 요청은 사용자가 다른 답을 "
                   "원해 다시 생성했을 수도 있습니다." if ko else
                   "  - Within %d s, %d calls repeated the request just sent (within the same document when the log has "
                   "document ids; out of %d calls whose request is known). The earlier call had: failed %d · been cut %d · "
@@ -6997,8 +6997,8 @@ def waste_lines(res, ko):
         ua = w.get("usd_after") or {}
         if w["status"] == "found" and any(v is not None for v in ua.values()):
             m = lambda st: usd(ua[st]) if ua.get(st) is not None else ("없음" if ko else "none")  # noqa: E731
-            L.append(("  - 금액을 앞 호출 상태로 가르면: 정상 뒤 %s — 엔진이 저장한 답으로 고칠 수 있는 비중 · 실패 뒤 %s — 서비스의 재시도 "
-                      "설정으로 고칩니다 · 잘림 뒤 %s — 7-3 의 큰 상한이 고칩니다." if ko else
+            L.append(("  - 이전 호출의 상태에 따라 비용을 분류하면: 정상 뒤 %s — 엔진이 저장한 답으로 고칠 수 있는 비중 · 실패 뒤 %s — 서비스의 재시도 "
+                      "설정으로 고칩니다 · 잘림 뒤 %s — 7-3 의 최대 출력 토큰 수 조정으로 개선할 수 있습니다." if ko else
                       "  - Split by the earlier call: after a successful answer %s — the engine's stored answer can fix this · "
                       "after a failure %s — fixed by the service's retry settings · after a "
                       "cut %s — fixed by 7-3's larger cap.") % (m("ok"), m("failed"), m("truncated")))
@@ -7012,8 +7012,8 @@ def waste_lines(res, ko):
             L.append(("  - 정상 뒤 재요청 중 %d건(%s)은 앞 요청이 JSON 을 스키마 강제 없이 받았습니다(OpenAI `json_object`, 또는 "
                       "`strict` 가 아닌 스키마). 형식이 깨져 다시 물은 것이라면 저장한 답으로는 못 고칩니다 — 저장한 답이 깨진 "
                       "답입니다. 고칠 칼은 구조화 출력입니다: OpenAI 는 `json_schema` + `strict: true`, Anthropic 은 "
-                      "`output_config.format`. 두 벤더 문서 모두 스키마를 지키는 답을 보장한다고 적습니다(거절과 길이 상한에서 "
-                      "잘린 답은 예외. 2026-10-24 읽음). 다시 물은 이유는 이 로그로 못 가립니다." if ko else
+                      "`output_config.format`. 두 AI 제공사 문서 모두 스키마를 지키는 답을 보장한다고 적습니다(거절과 길이 상한에서 "
+                      "출력 제한으로 중단된 응답은 예외. 2026-10-24 읽음). 다시 물은 이유는 이 로그로 못 가립니다." if ko else
                       "  - Of the repeats after a successful answer, %d (%s) followed a request that took JSON without an "
                       "enforced schema (OpenAI `json_object`, or a schema without `strict`). If the format broke and was "
                       "asked again, the stored answer cannot fix it — the stored answer is the broken one. The fix is "
@@ -7023,12 +7023,12 @@ def waste_lines(res, ko):
                      % (jl["calls"], usd(jl["usd"]) if jl.get("usd") is not None else "—"))
     if W["failed"]["status"] == "found" or w["status"] == "found":
         L.append(("  - 엔진: 링클비 서버는 응답 상태와 요청 서명을 기록에 남깁니다. 엔진의 사용 현황에 실패 뒤 "
-                  "재전송 연쇄·간격을 내어 재시도 정책(백오프 간격·최대 횟수·반복 실패 시 다른 경로로 전환) 교정안을 붙입니다." if ko else
+                  "연속 재시도와 요청 간격을 분석해 재시도 정책(백오프 간격·최대 횟수·반복 실패 시 다른 경로로 전환) 개선안을 제시합니다." if ko else
                   "  - Engine: the Linklbee server records each response's status and request signature. The engine's "
                   "usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff "
                   "interval, maximum retries, switching route after repeated failures)."))
     w = W["truncated"]
-    L.append(head("7-3", "truncated", "길이 상한에서 잘린 답" if ko else "answers cut off at the length limit"))
+    L.append(head("7-3", "truncated", "길이 상한에서 출력 제한으로 중단된 응답" if ko else "answers cut off at the length limit"))
     if w["status"] != "cannot_judge":
         mt = ", ".join("%s×%d" % kv for kv in w["max_tokens_of_cut"].items())
         L.append(("  - 판단 가능한 호출 %d건 중 잘림 %d건(%s), 출력 %s 토큰 = 전체 출력의 %s, 그 호출들의 금액 %s.%s" if ko else
@@ -7038,8 +7038,8 @@ def waste_lines(res, ko):
                     pct(w["share_of_all_output"]), usd(w["usd"]),
                     ((" 잘린 호출의 max_tokens: %s." if ko else " max_tokens of the cut calls: %s.") % mt) if mt else ""))
         if w["status"] == "found":
-            L.append(("  - 엔진: 링클비 서버는 답의 종료 사유와 요청의 max_tokens 를 기록에 남깁니다. 엔진의 사용 현황에 "
-                      "잘린 요청의 상한별 비중과 상한 교정안을 냅니다." if ko else
+            L.append(("  - 엔진: 링클비 서버는 응답 종료 사유와 요청의 max_tokens 를 기록에 남깁니다. 엔진의 사용 현황에 "
+                      "잘린 요청의 상한별 비중과 출력 토큰 상한 개선안을 제시합니다." if ko else
                       "  - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. "
                       "The engine's usage view shows the cut share per limit, with a suggested limit."))
     w = W["prefix_unstable"]
@@ -7055,8 +7055,8 @@ def waste_lines(res, ko):
                        " The forms first differ at character %s (the block is %s characters, %s o200k tokens).")
                       % ("{:,}".format(b["first_split_char"] + 1), "{:,}".format(b["chars"]), "{:,}".format(b["o200k_tokens"])))
                      if "first_split_char" in b else "")
-            L.append(("  - **블록 `%s`: 내용은 같고 키 순서만 다른 직렬화 %d가지 — 벤더 캐시에 항목 %d개로 쪼개져 있습니다.** "
-                      "이 블록을 쓴 호출 %d건 중 주 형태가 아닌 것 %d건.%s" if ko else
+            L.append(("  - **블록 `%s`: 내용은 같고 키 순서만 다른 직렬화 %d가지 — AI 제공사 캐시에 항목 %d개로 쪼개져 있습니다.** "
+                      "이 블록을 쓴 호출 %d건 중 가장 많이 사용된 형식과 다른 요청 %d건.%s" if ko else
                       "  - **Block `%s`: %d serializations with the same content in a different key order, so the vendor "
                       "caches it as %d separate entries.** Of %d calls with this block, %d were not in the most common form.%s")
                      % (b["block"], b["as_sent_forms"], b["as_sent_forms"], b["calls"], b["calls_off_main_form"], where))
@@ -7069,7 +7069,7 @@ def waste_lines(res, ko):
                       "answer would change. Fix: build each kind of schema with one field order in your code."))
             if w.get("usd_schema_order"):
                 L.append(("  - 금액으로: 스키마의 필드 순서를 하나로 고정하면 **%s** 를 덜 냅니다 — 같은 스키마가 캐시에서 하나로 읽히는 "
-                          "비중입니다(키 순서 비중은 뺀 값, 그 호출들의 입력 단가, 가격표 %s). 답의 필드 순서가 바뀔 수 있어 고객이 정할 "
+                          "비중입니다(키 순서 비중은 뺀 값, 그 호출들의 입력 단가, 단가표 %s). 답의 필드 순서가 바뀔 수 있어 고객이 정할 "
                           "일입니다. 필드 순서 말고 다른 키의 순서는 엔진이 정렬해 보냅니다(답 그대로)." if ko else
                           "  - In dollars: one field order for the schema saves **%s** — the same schema read from the cache "
                           "as one (the key-order share left out; at those calls' input price, price list %s). It can change "
@@ -7080,25 +7080,25 @@ def waste_lines(res, ko):
         if w.get("usd_sort"):
             how = []
             if sp_.get("anthropic"):
-                how.append(("Anthropic 호출 %s — 같은 앞부분에 5분 캐시 표시를 달았을 때 형태마다 따로 쓰던 것을 한 번 쓰고 읽게 되는 비중"
+                how.append(("Anthropic 호출 %s — 공통 접두부에 5분 캐시 표시를 달았을 때 형태마다 따로 쓰던 것을 한 번 쓰고 읽게 되는 비중"
                             if ko else "Anthropic calls %s — with 5-minute cache marks on the repeated prefix, what each form "
                             "wrote separately is written once and read") % usd(sp_["anthropic"]))
             if sp_.get("openai"):
                 how.append(("OpenAI 호출 %s — 기본 캐시가 형태마다 따로 쓰던 앞부분을 한 형태로 읽게 되는 비중" if ko else
                             "OpenAI calls %s — the default cache reads one form of the prefix where each form wrote its own")
                            % usd(sp_["openai"]))
-            L.append(("  - 금액으로: 키를 한 순서로 맞추면 **%s** 를 덜 냅니다. %s(그 호출들의 입력 단가, 가격표 %s)." if ko else
+            L.append(("  - 금액으로: 키를 한 순서로 맞추면 **%s** 를 덜 냅니다. %s(그 호출들의 입력 단가, 단가표 %s)." if ko else
                       "  - In dollars: one key order saves **%s**. %s (at those calls' input price, price list %s).")
                      % (usd(w["usd_sort"]), " · ".join(how), (res.get("pricing") or {}).get("as_of") or "—"))
         for b in w.get("value_blocks") or []:
-            L.append(("  - **블록 `%s`: 같은 틀에 값(숫자·날짜·이메일·id)만 다른 형태 %d가지 — 벤더 캐시에 항목 %d개로 쪼개져 "
+            L.append(("  - **블록 `%s`: 같은 틀에 값(숫자·날짜·이메일·id)만 다른 형태 %d가지 — AI 제공사 캐시에 항목 %d개로 쪼개져 "
                       "있습니다.** 이 틀을 쓴 호출 %d건 중 가장 많은 형태 %d건." if ko else
                       "  - **Block `%s`: %d forms of the same template that differ only in values (numbers, dates, email, "
                       "ids), so the vendor caches it as %d separate entries.** %d calls use this template; the most common "
                       "form has %d of them.") % (b["block"], b["value_forms"], b["value_forms"], b["calls"], b["calls_in_main_form"]))
         if w.get("usd_values"):
             L.append(("  - 금액으로: 값을 앞부분에서 빼면 **%s** 를 덜 냅니다 — 값을 가린 틀이 하나로 캐시에서 읽히는 비중입니다(키 순서 비중은 "
-                      "뺀 값, 그 호출들의 입력 단가, 가격표 %s). 엔진이 하는 일이 아니라 서비스 코드를 고쳐야 나오는 금액입니다." if ko else
+                      "뺀 값, 그 호출들의 입력 단가, 단가표 %s). 엔진이 하는 일이 아니라 서비스 코드를 고쳐야 나오는 금액입니다." if ko else
                       "  - In dollars: taking the values out of the prefix saves **%s** — the masked template read from the "
                       "cache as one (the key-order share left out; at those calls' input price, price list %s). This is "
                       "what a change in your code saves, not something the engine does.")
@@ -7115,9 +7115,9 @@ def waste_lines(res, ko):
                         "{:,}".format(sw["tail_tokens"])))
             if w.get("usd_sandwich"):
                 L.append(("  - 금액으로: 그 문단을 바뀌는 부분 앞으로 옮기면 **%s** 덜 냅니다(앞부분이 최소 길이에 닿는 호출만, 그 호출들의 "
-                          "입력 단가, 가격표 %s). 출력 형식·인용 지시처럼 지울 수 없는 문단은 옮기면 됩니다. 링클비 엔진은 켜 두면"
+                          "입력 단가, 단가표 %s). 출력 형식·인용 지시처럼 지울 수 없는 문단은 옮기면 됩니다. 링클비 엔진은 켜 두면"
                           "(엔진 설정 파일 `waste.json` 의 `\"sandwich_move\": true`) 마지막 사용자 메시지 끝의 고정 문단을 시스템 쪽으로 옮겨 "
-                          "보냅니다. 모델이 읽는 순서가 바뀌어 답이 달라질 수 있어 켤지는 고객이 정합니다." if ko else
+                          "보냅니다. 모델이 읽는 순서가 바뀌어 응답이 달라질 수 있어 켤지는 고객이 정합니다." if ko else
                           "  - In dollars: moving those paragraphs ahead of the changing part saves **%s** (calls whose front "
                           "reaches the minimum; at those calls' input price, price list %s). Blocks you cannot drop, such as "
                           "output-format or citation instructions, can be moved. Turned on (`\"sandwich_move\": true` in "
@@ -7132,8 +7132,8 @@ def waste_lines(res, ko):
                      % ("{:,}".format(tu_["switches"]), "{:,}".format(tu_["templates"]), "{:,}".format(tu_["tool_sets"])))
             if w.get("usd_tool_union"):
                 L.append(("  - 금액으로: 도구 전체를 매번 같은 목록으로 보내고 부를 수 있는 도구만 제한하면 **%s** 덜 냅니다(늘어난 "
-                          "도구 정의 값을 뺀 금액, 가격표 %s). OpenAI 는 `tool_choice` 의 `allowed_tools` 로 제한합니다. 모델이 "
-                          "보는 도구가 늘어 답이 달라질 수 있어 고객이 정할 일입니다." if ko else
+                          "도구 정의 값을 뺀 금액, 단가표 %s). OpenAI 는 `tool_choice` 의 `allowed_tools` 로 제한합니다. 모델이 "
+                          "보는 도구가 늘어 응답이 달라질 수 있어 고객이 정할 일입니다." if ko else
                           "  - In dollars: sending the whole tool list every time and restricting which tools may be called "
                           "saves **%s** (net of the extra tool definitions; price list %s). OpenAI restricts them with "
                           "`allowed_tools` in `tool_choice`. The model sees more tools, so the answer can change: your call.")
@@ -7148,7 +7148,7 @@ def waste_lines(res, ko):
                       "things in a different order and the answer could change. This check cannot see non-numeric values "
                       "such as names."))
         if w["unstable_blocks"]:
-            L.append(("  - 근거(벤더 문서): Anthropic 프롬프트 캐싱 문서는 \"some languages (for example, Swift, Go) randomize key "
+            L.append(("  - 근거(AI 제공사 문서): Anthropic 프롬프트 캐싱 문서는 \"some languages (for example, Swift, Go) randomize key "
                       "order during JSON conversion, breaking caches\" 라고 적습니다. OpenAI 프롬프트 캐싱 문서는 캐시에 영향을 주는 "
                       "설정 표의 tools 줄에 \"Changes tool names, descriptions, schemas, ordering, or tool-specific "
                       "instructions.\" 라고 적습니다." if ko else
@@ -7157,7 +7157,7 @@ def waste_lines(res, ko):
                       "of settings that affect the cached prefix, says of tools: \"Changes tool names, descriptions, "
                       "schemas, ordering, or tool-specific instructions.\""))
             L.append(("  - 엔진: 링클비 엔진이 도구 정의·시스템 블록의 키를 정렬해 보냅니다(목록 순서·문자열은 그대로, 모델이 읽는 내용 "
-                      "같음. 구조화 출력 스키마는 필드 순서를 그대로 두고 나머지 키만 정렬). 사용 기록에서 이득이 확인되면 엔진이 켤 수 있고, 손해로 돌면 끕니다. 엔진 설정 파일 `waste.json` 에 "
+                      "같음. 구조화 출력 스키마는 필드 순서를 그대로 두고 나머지 키만 정렬). 사용 기록에서 이득이 확인되면 엔진이 켤 수 있고, 비용이 증가하면 적용을 중단합니다. 엔진 설정 파일 `waste.json` 에 "
                       "`\"prefix_normalize\": false` 를 두면 꺼진 채로 둡니다." if ko else
                       "  - Engine: the Linklbee engine sends tool definitions and system blocks with sorted keys. List order "
                       "and strings stay the same, so the model reads the same content (a structured-output schema keeps "
@@ -7175,7 +7175,7 @@ def waste_lines(res, ko):
                         (b["model"], b["vendor"], b["below"], b["calls"], "{:,}".format(b["min_tokens"]),
                          pct(b["below"] / b["calls"] if b["calls"] else None), b["below_cache_read_0"])))
         c = w["curve"]
-        L.append(("  - 문턱별(판단 가능 %d건): " if ko else "  - by threshold (%d calls checked): ") % w["calls_judged"] +
+        L.append(("  - 최소 토큰 수 기준별(판단 가능 %d건): " if ko else "  - by threshold (%d calls checked): ") % w["calls_judged"] +
                  " · ".join(("%s 이면 %s 미달" if ko else "%s -> %s under") % ("{:,}".format(int(n)), pct(v)) for n, v in c.items()))
         if w["by_model"] and any(b["vendor"] == "anthropic" and b["below"] for b in w["by_model"]):
             L.append(("  - Anthropic 은 최소 길이에 못 미치면 오류 없이 캐시 없이 처리합니다 — 로그에 아무 표시가 없습니다." if ko else
@@ -7190,9 +7190,9 @@ def waste_lines(res, ko):
         bd = w.get("bundle")
         if w.get("usd_bundle"):
             rp = bd["replay"]
-            L.append(("  - 묶어 보내면: 고정 앞부분이 최소 길이에 못 미친 호출 %d건을 같은 앞부분끼리 %d개씩(2초 안에 온 것만 — 켰을 때 링클비가 기다리는 시간) 묶으면 "
+            L.append(("  - 묶어 보내면: 고정 앞부분이 최소 길이에 못 미친 호출 %d건을 공통 접두부끼리 %d개씩(2초 안에 온 것만 — 켰을 때 링클비가 기다리는 시간) 묶으면 "
                       "**%s** 덜 냅니다 — 앞부분을 묶음마다 한 번만 보내는 비중입니다(묶음 %d개에 호출 %d건, 항목 번호 비중은 뺀 값, "
-                      "가격표 %s). 한 호출이 여러 건에 답하므로 답이 달라질 수 있습니다 — 상한이고, 켤지는 고객이 정합니다. "
+                      "단가표 %s). 한 호출이 여러 건에 답하므로 답이 달라질 수 있습니다 — 상한이고, 켤지는 고객이 정합니다. "
                       "답 품질은 아직 재지 않았습니다." if ko else
                       "  - Bundled: %d calls whose fixed prefix is under the minimum, bundled %d at a time with the same "
                       "prefix (only calls within 2 seconds of each other — how long Linklbee waits once it is on), cost **%s** less — the prefix sent once a bundle "
@@ -7231,7 +7231,7 @@ def waste_lines(res, ko):
             pv = w["pad"]
             L.append(("  - 금액으로: 고정 문구로 최소 길이까지 채우면 **%s** 덜 듭니다. 고정 앞부분이 최소 길이에 못 미친 호출 %d건에 "
                       "엔진의 5분 표시 규칙을 다시 적용한 값입니다. 캐시 읽기 %d번의 이득에서 쓰기 %d번의 웃돈을 뺐습니다"
-                      "(엔진 화면과 같은 셈, 그 호출들의 입력 단가, 가격표 %s)." if ko else
+                      "(엔진 화면과 같은 셈, 그 호출들의 입력 단가, 단가표 %s)." if ko else
                       "  - In dollars: padding to the minimum with fixed text costs **%s** less. The engine's 5-minute marking "
                       "rule is replayed on the %d calls whose fixed prefix is under the minimum: the gain of %d cache reads "
                       "minus the premium on %d writes (the engine screen's count, at those calls' input price, price "
@@ -7239,7 +7239,7 @@ def waste_lines(res, ko):
                      % (usd(w["usd_pad"]), pv["calls"], pv["reads"], pv["writes"],
                         (res.get("pricing") or {}).get("as_of") or "—"))
         L.append(("  - 엔진: 엔진의 사용 현황이 같은 상수로 사용 기록의 미달 비중을 내고, 미달 요청에는 "
-                  "접두를 문턱 이상으로 묶거나 캐시 표시를 빼라는 교정안을 붙입니다." if ko else
+                  "접두를 문턱 이상으로 묶거나 캐시 표시를 빼라는 개선안을 제시합니다." if ko else
                   "  - Engine: the engine's usage view reports the same share from your usage records, using "
                   "the same constants, with a suggested fix for those calls (grow the prefix past the threshold, or "
                   "drop the cache marker)."))
@@ -7248,18 +7248,18 @@ def waste_lines(res, ko):
         parts = []
         for k, v in sorted(nj.items()):
             if k == "unsupported":
-                parts.append(("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A" if ko else "vendors without prompt caching (CLOVA and others) %d — N/A") % v)
+                parts.append(("캐싱 미지원 AI 제공사(CLOVA 등) %d건 — N/A" if ko else "vendors without prompt caching (CLOVA and others) %d — N/A") % v)
             elif k.startswith("unknown:"):
                 parts.append(("%s 모델 중 문턱이 상수표에 없는 것 %d건 — 추정하지 않음" if ko else
                               "%s models with no threshold in the table %d — not guessed") % (k[8:], v))
             elif k == "unrecognised":
-                parts.append(("벤더를 알 수 없는 모델 %d건" if ko else "models from an unknown vendor %d") % v)
+                parts.append(("AI 제공사를 알 수 없는 모델 %d건" if ko else "models from an unknown vendor %d") % v)
             elif k == "no_model":
                 parts.append(("model 필드 없음 %d건" if ko else "no model field %d") % v)
             elif k == "no_input_tokens":
                 parts.append(("input_tokens 없음 %d건" if ko else "no input_tokens %d") % v)
         L.append(("  - 판단 못 한 호출: " if ko else "  - not checked: ") + " · ".join(parts))
-    L.append(("  - 상수 기준일 %s(벤더 공식 문서). Gemini 가격은 %s 에 바뀝니다." if ko else
+    L.append(("  - 상수 기준일 %s(AI 제공사 공식 문서). Gemini 가격은 %s 에 바뀝니다." if ko else
               "  - Thresholds as of %s (vendor documents). Gemini prices change on %s.")
              % (w["constants_as_of"], w["gemini_valid_until"]))
     w = W["billing"]
@@ -7267,7 +7267,7 @@ def waste_lines(res, ko):
                   "billing check — billed output tokens vs the answer body"))
     if w["status"] != "cannot_judge":
         f = lambda n: "{:,}".format(n)  # noqa: E731
-        L.append(("  - 판단 가능한 호출 %d건: 청구 출력 %s 토큰 = 본문(o200k) %s + 추론(벤더 보고) %s + **설명되지 않는 차이 %s "
+        L.append(("  - 판단 가능한 호출 %d건: 청구 출력 %s 토큰 = 본문(o200k) %s + 추론(AI 제공사 보고) %s + **설명되지 않는 차이 %s "
                   "토큰 (%s)**. 추론 토큰을 보고한 호출 %d건." if ko else
                   "  - %d calls checked: billed output %s tokens = body (o200k) %s + reasoning (vendor-reported) %s + "
                   "**unexplained %s tokens (%s)**. %d calls report reasoning tokens.")
@@ -7295,18 +7295,18 @@ def waste_lines(res, ko):
                         f(rz["reasoning_tokens"]), rz["calls_reasoning_over_body"], f(rz["max_reasoning"]),
                         f(rz["max_reasoning_body"])))
         if len(w["by_vendor"]) > 1:
-            L.append(("  - 벤더별 설명되지 않는 차이: " if ko else "  - Unexplained, by vendor: ") +
+            L.append(("  - AI 제공사별 설명되지 않는 차이: " if ko else "  - Unexplained, by vendor: ") +
                      " · ".join("%s %s" % (k, pct(v["unexplained_share"])) for k, v in w["by_vendor"].items()))
         L.append(("  - 이 차이는 과다 청구의 판정이 아닙니다. 정당한 사유가 있을 수 있습니다: 본문은 o200k 로 셌습니다(OpenAI 밖 모델은 "
                   "토크나이저가 달라 그 차이가 여기 잡힙니다 — 추론 없는 Claude 실호출에서도 청구/o200k 가 1.54~1.71배였습니다) · "
-                  "벤더가 붙이는 보이지 않는 시스템·형식 토큰 · 로그에 남지 않은 출력(도구 호출이 보이는 %d건은 뺐습니다)." if ko else
+                  "AI 제공사가 붙이는 보이지 않는 시스템·형식 토큰 · 로그에 남지 않은 출력(도구 호출이 보이는 %d건은 뺐습니다)." if ko else
                   "  - This difference does not mean overbilling. It can have legitimate causes: the body was counted "
                   "with o200k, so for non-OpenAI models the tokenizer difference shows up here (paid Claude calls without "
                   "reasoning billed 1.54-1.71x per o200k token) · hidden system or format tokens added by the vendor · "
                   "output the log does not keep (the %d calls with a visible tool call are left out).")
                  % w["calls_with_tool_call_left_out"])
-        L.append(("  - 엔진: 링클비 서버는 벤더가 보고한 추론 토큰과 응답 id 를 기록에 남깁니다. 엔진의 사용 현황에 "
-                  "같은 차이와 차이가 큰 응답 id(벤더 문의에 쓸 증빙, 본문은 안 남김)를 냅니다." if ko else
+        L.append(("  - 엔진: 링클비 서버는 AI 제공사가 보고한 추론 토큰과 응답 id 를 기록에 남깁니다. 엔진의 사용 현황에 "
+                  "같은 차이와 차이가 큰 응답 id(AI 제공사 문의에 쓸 증빙, 본문은 안 남김)를 냅니다." if ko else
                   "  - Engine: the Linklbee server records vendor-reported reasoning tokens and each response id. "
                   "The engine's usage view shows the same difference, with the response ids of the largest gaps as "
                   "evidence for a vendor inquiry (no text is kept)."))
@@ -7367,7 +7367,7 @@ def waste_lines(res, ko):
                  % (pct(w["hit_rate"]), w["calls_judged"], w["over_min_calls"], pct(w["over_min_hit_rate"]), pct(w["line"])))
         if w.get("ceiling") is not None:
             L.append(("  - 그 선은 이 로그가 닿을 수 있는 적중률의 절반입니다: 최소 길이 이상 호출의 입력 중 같은 모델의 앞 호출과 5분 "
-                      "안에 겹친 접두가 **%s**(7-8 재생, 완벽한 캐시의 천장) × 0.5. 같은 접두가 적은 로그에 남의 로그 기준을 대지 "
+                      "안에 겹친 접두가 **%s**(7-8 재생, 이상적인 조건에서 가능한 캐시 적중률의 상한) × 0.5. 같은 접두가 적은 로그에 남의 로그 기준을 대지 "
                       "않습니다." if ko else
                       "  - That line is half of what this log could read: of the input of the calls above the minimum, "
                       "**%s** is a prefix shared with an earlier call of the same model within 5 minutes (the 7-8 replay, a "
@@ -7382,17 +7382,17 @@ def waste_lines(res, ko):
                       "  - %s (%s): %s; above the minimum %s (%d calls); %d calls with no cache read.")
                      % (b["model"], b["vendor"], pct(b["hit_rate"]), pct(b["over_min_hit_rate"]), b["over_min_calls"],
                         b["calls_read_0"]))
-        L.append(("  - 최소 길이를 넘고도 못 읽는 비중은 캐시를 켜지 않았거나(Anthropic API 는 요청에 `cache_control` 을 달아야 "
-                  "캐시합니다. Bedrock 은 표시 없이도 캐시를 시도하지만 최선 노력이라 적중이 보장되지 않습니다), 접두가 바이트 단위로 같지 않거나(7-4), 캐시 유지 시간이 지났거나, 벤더가 다른 서버로 보낸 경우입니다"
+        L.append(("  - 최소 길이를 넘고도 읽지 못하는 비중은 캐시를 켜지 않았거나(Anthropic API 는 요청에 `cache_control` 을 달아야 "
+                  "캐시합니다. Bedrock 은 표시 없이도 캐시를 시도하지만 적중이 보장되지 않습니다), 접두가 바이트 단위로 같지 않거나(7-4), 캐시 유지 시간이 지났거나, AI 제공사가 다른 서버로 보낸 경우입니다"
                   "(GPT-5.6 전 OpenAI 모델은 한 키에 분당 약 15건을 넘으면 다른 서버로 넘칠 수 있다고 문서에 적혀 있습니다. "
                   "GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정합니다)." if ko else
                   "  - Why calls above the minimum still miss: caching was not turned on (the Anthropic API caches only "
                   "with `cache_control` in the request; Bedrock tries without it, best effort, with no hit guaranteed), the prefix is not byte-identical (7-4), the cache expired, or the "
                   "vendor sent the request to another server (OpenAI's guide says traffic over about 15 a minute on one key "
                   "can overflow on models before GPT-5.6; from GPT-5.6 on OpenAI routes the cache itself)."))
-        L.append(("  - 엔진: 엔진의 사용 현황이 사용 기록에서 같은 비율을 내고, 선 아래면 `cache_control` "
+        L.append(("  - 엔진: 엔진의 사용 현황이 사용 기록에서 같은 비율을 내고, 기준값 미만이면 `cache_control` "
                   "표시(Anthropic·Bedrock)·접두 정규화(`\"prefix_normalize\": true`)·고정 부분 앞 배치·OpenAI `prompt_cache_key` "
-                  "교정안을 붙입니다." if ko else
+                  "개선안을 제시합니다." if ko else
                   "  - Engine: the engine's usage view reports the same rate from your usage records. Below the "
                   "line it suggests `cache_control` markers (Anthropic, Bedrock), prefix normalization "
                   "(`\"prefix_normalize\": true`), putting fixed parts first, and OpenAI `prompt_cache_key`."))
@@ -7450,30 +7450,30 @@ def waste_lines(res, ko):
                  % (ot["calls"], "{:,}".format(ot["input_tokens"]), "{:,}".format(ot["written_tokens"]),
                     "{:,}".format(ot["unread_tokens"])))
     if w.get("sparse_no_material"):
-        L.append(("  - 1시간 안에 같은 앞부분을 나눈 입력이 %s 뿐이라(7-8), 캐시가 읽을 재료가 없었습니다. 호출 사이가 캐시 수명보다 길어 "
+        L.append(("  - 1시간 안에 공통 접두부을 나눈 입력이 %s 뿐이라(7-8), 캐시가 읽을 재료가 없었습니다. 호출 사이가 캐시 수명보다 길어 "
                   "생긴 낮은 적중률이라 캐시로 줄일 자리가 없습니다." if ko else
                   "  - Only %s of input shared a prefix with a call in the past hour (7-8), so there was nothing for a cache "
                   "to read. The low hit rate comes from calls further apart than any cache life; caching cannot cut it.")
                  % pct(W["shared_prefix"]["share_3600"]))
     pw = w.get("usd_waste_parts") or {}
     if w.get("usd_waste") and w["status"] == "found":
-        L.append(("  - 금액으로: 새는 비중 **%s** — %s(그 호출들의 입력 단가로 환산, 가격표 %s)." if ko else
+        L.append(("  - 금액으로: 새는 비중 **%s** — %s(그 호출들의 입력 단가로 환산, 단가표 %s)." if ko else
                   "  - In dollars: **%s** leaking — %s (at those calls' input price, price list %s).")
                  % (usd(w["usd_waste"]), " · ".join(
                      (("아무도 안 읽은 기본 표시 쓰기의 웃돈 %s" if ko else "the premium on implicit writes nobody read, %s") % usd(pw["implicit_unread"])
                       if k == "implicit_unread" else
                       ("직접 단 표시의 순 손해 %s" if ko else "the net loss on your own cache marks, %s") % usd(pw["own_mark_loss"])
                       if k == "own_mark_loss" else
-                      ("캐시 표시를 하나도 안 달아서 놓친 비중 %s(같은 앞부분에 5분 표시를 달았다면)" if ko else
+                      ("캐시 표시를 하나도 안 달아서 놓친 비중 %s(공통 접두부에 5분 표시를 달았다면)" if ko else
                        "what no cache mark at all left on the table, %s (with 5-minute marks on the repeated prefix)")
                       % usd(pw["no_mark_gain"]))
                      for k in ("implicit_unread", "own_mark_loss", "no_mark_gain") if pw.get(k)),
                     (res.get("pricing") or {}).get("as_of") or "—"))
     if w.get("usd_spread") and w["status"] == "found":
-        L.append(("  - 놓친 재료: 같은 앞부분이 5분 안에 다시 왔고 최소 길이도 넘었는데 읽지 못한 입력 %s 토큰 — 캐시가 있는 서버가 "
+        L.append(("  - 놓친 재료: 공통 접두부이 5분 안에 다시 왔고 최소 길이도 넘었는데 읽지 못한 입력 %s 토큰 — 캐시가 있는 서버가 "
                   "아닌 곳으로 갔거나 첫 응답이 시작되기 전에 몰린 비중입니다(GPT-5.6 이상은 OpenAI 가 캐시 경로를 알아서 정한다고 "
                   "문서에 적혀 있어, 어느 쪽인지는 로그로 가르지 못합니다). 금액으로 **최대 %s**(그 호출들의 "
-                  "입력 단가, 가격표 %s). 엔진이 요청 경로를 바꾸는 칼은 없습니다 — 몰아 보내는 일괄 처리라면 먼저 한 건을 보내고 "
+                  "입력 단가, 단가표 %s). 엔진이 요청 경로를 바꾸는 칼은 없습니다 — 몰아 보내는 일괄 처리라면 먼저 한 건을 보내고 "
                   "첫 응답이 온 뒤 나머지를 보내거나, Flex·Batch(7-9)로 보내세요." if ko else
                   "  - Material missed: %s input tokens came back within 5 minutes on a prefix over the minimum and were "
                   "not read — they reached a machine without the cached entry or came before the first answer started "
@@ -7485,7 +7485,7 @@ def waste_lines(res, ko):
                     (res.get("pricing") or {}).get("as_of") or "—"))
     ks_ = w.get("key_split")
     if ks_ and w["status"] != "cannot_judge":
-        L.append(("  - **GPT-5.6 이전 OpenAI 모델에서 같은 앞부분이 분당 15건을 넘어 캐시를 못 읽은 호출 %s건**. 이 모델들은 "
+        L.append(("  - **GPT-5.6 이전 OpenAI 모델에서 공통 접두부이 분당 15건을 넘어 캐시를 못 읽은 호출 %s건**. 이 모델들은 "
                   "`prompt_cache_key` 하나에 분당 약 15건을 권합니다(OpenAI 프롬프트 캐싱 안내). 넘친 호출은 캐시가 없는 서버로 "
                   "갈 수 있습니다." if ko else
                   "  - **%s calls on OpenAI models before GPT-5.6 missed the cache while their prefix came more than 15 "
@@ -7494,7 +7494,7 @@ def waste_lines(res, ko):
                  % "{:,}".format(ks_["spread_misses"]))
         if w.get("usd_key_split"):
             L.append(("  - 금액으로: 앞부분마다 키를 붙이고 분당 호출 수만큼 키를 나누면 **최대 %s** 덜 냅니다(새 키의 첫 호출 값을 "
-                      "뺀 금액, 가장 비싼 캐시 읽기 비율, 가격표 %s). 답은 바뀌지 않습니다. 키는 요청의 "
+                      "뺀 금액, 가장 비싼 캐시 읽기 비율, 단가표 %s). 답은 바뀌지 않습니다. 키는 요청의 "
                       "`prompt_cache_key` 에 넣습니다." if ko else
                       "  - In dollars: a key per prefix, split by the calls a minute, saves **at most %s** (net of each "
                       "new key's first call, at the dearest cache-read rate; price list %s). The answer does not change. The "
@@ -7502,7 +7502,7 @@ def waste_lines(res, ko):
                      % (usd(w["usd_key_split"]), (res.get("pricing") or {}).get("as_of") or "—"))
     nj = w["not_judged"]
     if nj and w["status"] != "cannot_judge":
-        names = {"unsupported": ("캐싱 미지원 벤더(CLOVA 등) %d건 — N/A", "vendors without prompt caching (CLOVA and others) %d — N/A"),
+        names = {"unsupported": ("캐싱 미지원 AI 제공사(CLOVA 등) %d건 — N/A", "vendors without prompt caching (CLOVA and others) %d — N/A"),
                  "no_input_tokens": ("input_tokens 없음 %d건", "no input_tokens %d"),
                  "no_cache_read_field": ("캐시 읽기 필드 없음 %d건 — 0 으로 세지 않음", "no cache-read field %d — not counted as 0"),
                  "cache_read_over_input": ("캐시 읽기가 입력보다 큰 기록 %d건 — 입력에 캐시 비중이 빠진 것으로 보여 뺐습니다",
@@ -7510,7 +7510,7 @@ def waste_lines(res, ko):
         L.append(("  - 판단 못 한 호출: " if ko else "  - not checked: ") +
                  " · ".join(names[k][0 if ko else 1] % v for k, v in sorted(nj.items())))
     w = W["shared_prefix"]
-    L.append(head("7-8", "shared_prefix", "호출끼리 같은 앞부분(접두)" if ko else "prefix shared between calls"))
+    L.append(head("7-8", "shared_prefix", "호출끼리 같은 접두부" if ko else "prefix shared between calls"))
     if w["status"] != "cannot_judge":
         L.append(("  - 입력 토큰 중 앞선 호출(같은 모델)과 같은 접두: 5분 안 **%s** · 1시간 안 %s · 기간 전체 %s "
                   "(호출 %d건, 5분 안에 접두를 나눈 호출 %d건)." if ko else
@@ -7522,7 +7522,7 @@ def waste_lines(res, ko):
                   "  - Shared prefixes that came back after more than 5 minutes, once the cache had expired: **%s**.")
                  % pct(w["ttl_missed_share"]))
         if w["judged_min_calls"]:
-            L.append(("  - 5분 안에 같은 접두가 있었지만 그 접두가 벤더 캐시 최소 길이(cache_constants.json) 미만이라 캐시가 못 읽는 비중: "
+            L.append(("  - 5분 안에 같은 접두가 있었지만 그 접두가 AI 제공사 캐시 최소 길이(cache_constants.json) 미만이라 캐시가 읽지 못하는 비중: "
                       "**%s** (호출 %d건 / 판단 %d건)." if ko else
                       "  - Shared within 5 minutes but shorter than the vendor's cache minimum (cache_constants.json), so "
                       "it cannot be cached: **%s** (%d of %d calls checked).")
@@ -7550,18 +7550,18 @@ def waste_lines(res, ko):
                         "{:,}".format(a["write_1h"]), "{:,}".format(b["write_1h"])))
         for m in w.get("model_split") or []:
             tg = ", ".join("%s %d" % (x[1], x[2]) for x in m["by_target"])
-            L.append(("  - **같은 앞부분을 모델 %d개(벤더 %d곳)에 나눠 보냈습니다: %s.** 캐시는 모델마다 따로라 가장 많이 받은 모델 밖의 "
+            L.append(("  - **공통 접두부을 모델 %d개(AI 제공사 %d곳)에 나눠 보냈습니다: %s.** 캐시는 모델마다 따로라 가장 많이 받은 모델 밖의 "
                       "호출 %d건(앞부분 %s 토큰)은 다른 쪽이 쌓은 캐시를 못 읽습니다." if ko else
                       "  - **The same prefix went to %d models (%d vendors): %s.** Each model has its own cache, so the %d "
                       "calls not sent to the most-used model (%s prefix tokens) cannot read what the others cached.")
                      % (m["targets"], m["vendors"], tg, m["calls_off_main"], "{:,}".format(m["tokens_off_main"])))
         if w.get("model_split"):
-            L.append(("  - 고칠 법: 같은 앞부분은 한 모델로 보내세요(대체 모델·부하 분산 규칙을 앞부분 기준으로 고정). 일부러 나눈 "
+            L.append(("  - 고칠 법: 공통 접두부은 한 모델로 보내세요(대체 모델·부하 분산 규칙을 앞부분 기준으로 고정). 일부러 나눈 "
                       "것(비교 시험 등)이면 그대로 두세요. 리전 차이는 로그에 리전 필드가 없어 이 검사로 못 봅니다." if ko else
                       "  - Fix: send each prefix to one model (pin fallback and load-balancing rules by prefix). If the split "
                       "is on purpose, such as an A/B test, leave it. This check cannot see regions: the log has no region field."))
         if w.get("usd_ttl") and w["status"] == "found":
-            L.append(("  - 금액으로: 1시간 선택이 5분 표시만 쓸 때보다 **%s** 덜 듭니다(그 호출들의 입력 단가로 환산, 가격표 %s)." if ko else
+            L.append(("  - 금액으로: 1시간 선택이 5분 표시만 쓸 때보다 **%s** 덜 듭니다(그 호출들의 입력 단가로 환산, 단가표 %s)." if ko else
                       "  - In dollars: the 1-hour choice costs **%s** less than 5-minute marks alone (at those calls' input price, "
                       "price list %s).") % (usd(w["usd_ttl"]), (res.get("pricing") or {}).get("as_of") or "—"))
         hs_ = w.get("history")
@@ -7573,16 +7573,16 @@ def waste_lines(res, ko):
                       "system instructions. The history after it is paid again every time.")
                      % ("{:,}".format(hs_["rewrites"]), "{:,}".format(hs_["counted"])))
             if w.get("usd_history"):
-                L.append(("  - 금액으로: %d턴에 한 번만 자르면 **%s** 덜 냅니다(남겨 둔 기록을 실어 보내는 값을 뺀 금액, 가격표 "
-                          "%s). 모델이 보는 기록이 늘어 답이 달라질 수 있어 고객이 정할 일입니다. 링클비 엔진은 사용 기록에서 몇 "
+                L.append(("  - 금액으로: %d턴에 한 번만 자르면 **%s** 덜 냅니다(남겨 둔 기록을 실어 보내는 값을 뺀 금액, 단가표 "
+                          "%s). 모델이 보는 기록이 늘어 응답이 달라질 수 있어 고객이 정할 일입니다. 링클비 엔진은 사용 기록에서 몇 "
                           "턴마다가 맞는지 다시 고릅니다." if ko else
                           "  - In dollars: cutting only once every %d turns saves **%s** (net of carrying the history "
                           "you keep; price list %s). The model sees more history, so the answer can change: your call. The "
                           "Linklbee engine refits the number of turns from its usage records.")
                          % (hs_["k"], usd(w["usd_history"]), (res.get("pricing") or {}).get("as_of") or "—"))
             elif hs_["k"] > 1 and hs_.get("net_tokens", 0) > 0:
-                L.append(("  - 토큰으로: %d턴에 한 번만 자르면 다시 계산하는 입력이 **%s 토큰** 줄어듭니다(가격표에 없는 모델이라 금액은 "
-                          "적지 않습니다). 모델이 보는 기록이 늘어 답이 달라질 수 있어 고객이 정할 일입니다." if ko else
+                L.append(("  - 토큰으로: %d턴에 한 번만 자르면 다시 계산하는 입력이 **%s 토큰** 줄어듭니다(단가표에 없는 모델이라 금액은 "
+                          "적지 않습니다). 모델이 보는 기록이 늘어 응답이 달라질 수 있어 고객이 정할 일입니다." if ko else
                           "  - In tokens: cutting only once every %d turns recomputes **%s fewer input tokens** (the model is "
                           "not in the price list, so no amount). The model sees more history, so the answer can change: your "
                           "call.") % (hs_["k"], "{:,}".format(int(hs_["net_tokens"]))))
@@ -7590,16 +7590,16 @@ def waste_lines(res, ko):
             L.append(("  - 비교: 실제 캐시 읽기(7-7) %s 대 5분 안 같은 접두 %s." if ko else
                       "  - Compare: actual cache reads (7-7) %s vs prefixes shared within 5 minutes %s.")
                      % (pct(W["cache_hit"]["hit_rate"]), pct(w["share_300"])))
-        L.append(("  - 센 방법: 도구 정의 → 시스템 → 대화 항목 순서로 항목이 통째로 같은 것만 셌습니다(요청 본문이 없으면 프롬프트를 "
-                  "%d토큰 조각으로). 항목 안 부분 일치는 안 셌습니다. 벤더가 실제로 캐시하는 자리(`cache_control` 표시·벤더의 "
-                  "단위)는 따로 정해지므로 이 비중은 절감액이 아니라 캐시가 읽을 수 있는 재료의 크기입니다." if ko else
+        L.append(("  - 계산 방법: 도구 정의 → 시스템 → 대화 항목 순서로 항목이 통째로 같은 것만 셌습니다(요청 본문이 없으면 프롬프트를 "
+                  "%d토큰 조각으로). 항목 안 부분 일치는 안 셌습니다. AI 제공사가 실제로 캐시하는 자리(`cache_control` 표시·AI 제공사의 "
+                  "단위)는 따로 정해지므로 이 비중은 절감액이 아니라 캐시 적용 후보가 되는 입력 토큰 비율입니다." if ko else
                   "  - Method: only whole items count, in the order tools → system → conversation items (without a request "
                   "body, the prompt in %d-token blocks). Partial matches inside an item are not counted. Where the vendor "
                   "actually caches (`cache_control` markers, its own block sizes) is decided separately, so this share is "
                   "how much a cache could read, not a saving.") % w["block_tokens"])
     w = W.get("flex")
     if w and w["status"] != "cannot_judge":
-        L.append(head("7-9", "flex", "OpenAI Flex 로 보낼 수 있었던 호출(스트림 아님)" if ko else
+        L.append(head("7-9", "flex", "OpenAI Flex로 처리할 수 있는 호출(비스트리밍 요청)" if ko else
                       "calls that could have used OpenAI Flex (not streamed)"))
         if not w["calls_flex_models"]:
             L.append(("  - Flex 할인이 있는 OpenAI 모델의 호출이 이 로그에 없습니다." if ko else
@@ -7609,8 +7609,8 @@ def waste_lines(res, ko):
                       "  - All %d calls to models that Flex offers were streamed, so none could move to Flex.")
                      % w["calls_flex_models"])
         else:
-            L.append(("  - Flex 를 쓸 수 있는 OpenAI 모델 호출 %d건 중 스트림 아님 %d건: %s. Flex 는 같은 모델을 표준 단가의 절반(Batch 단가, "
-                      "가격표 %s)에 답합니다." if ko else
+            L.append(("  - Flex 를 쓸 수 있는 OpenAI 모델 호출 %d건 중 비스트리밍 요청 %d건: %s. Flex 는 같은 모델을 표준 단가의 절반(Batch 단가, "
+                      "단가표 %s)에 답합니다." if ko else
                       "  - %d calls used models that Flex offers, and %d of them were not streamed: %s. Flex runs the same "
                       "model at half the standard rate (Batch rates, price list %s).")
                      % (w["calls_flex_models"], w["nonstream_calls"], _spent(w, ko), w["table_as_of"]))
@@ -7618,13 +7618,13 @@ def waste_lines(res, ko):
             # bill is known, else in dollars; the two ends said in the customer's words
             bill_, up = (res.get("bill") or {}).get("usd_total"), w["saving_upper_usd"]
             if up is None:
-                L.append("  - " + (("덜 드는 비중: 금액 미상(입력 토큰 수가 로그에 없음)." if ko else
+                L.append("  - " + (("예상 비용 절감률: 금액 산정 불가(입력 토큰 수가 로그에 없음)." if ko else
                                     "What it would save: unknown (the log has no input token counts).") if not w.get("input_known", 1) else
-                                   ("덜 드는 비중: 금액 미상(가격표에 없는 모델)." if ko else
+                                   ("예상 비용 절감률: 금액 산정 불가(단가표에 없는 모델)." if ko else
                                     "What it would save: unknown (model not in the price list).")))
             else:
-                L.append(("  - 덜 드는 비중: %s **0 ~ %s** 입니다. 기다려도 되는 호출이 하나도 없으면 0, 스트림 아닌 호출이 전부 기다려도 "
-                          "되면 %s 입니다. 어느 호출이 기다려도 되는지는 로그로 가를 수 없습니다." if ko else
+                L.append(("  - 예상 비용 절감률: %s **0 ~ %s** 입니다. 지연을 허용할 수 있는 요청이 하나도 없으면 0, 스트림 아닌 호출이 전부 기다려도 "
+                          "되면 %s 입니다. 어느 호출이 기다려도 되는지는 로그만으로는 판단할 수 없습니다." if ko else
                           "  - What it would save: %s **0 – %s**. It is 0 if no call can wait, and %s if every call that was "
                           "not streamed can wait. The log cannot tell which calls can wait.")
                          % ((("분석 기간 비용의" if ko else "a share of the bill,"), pct(up / bill_), pct(up / bill_)) if bill_ else
@@ -7635,9 +7635,9 @@ def waste_lines(res, ko):
     for i, (k, a) in enumerate(marks):
         segs[k] = L[a:marks[i + 1][1] if i + 1 < len(marks) else len(L)]
     L = L[:2]
-    groups = (("leak", ("새고 있는 것 — 지금 돈이 나가는 자리", "Leaking now — money going out"),
+    groups = (("leak", ("비용 증가 요인 — 발견 항목", "Additional costs identified — money going out"),
                ("입력된 로그 범위에서 찾지 못했습니다.", "None found in this log.")),
-              ("more", ("더 줄일 수 있는 것 — 지금 문제가 없어도 더 싸게 하는 길", "Could cost less — cheaper ways, even with nothing wrong"),
+              ("more", ("추가 최적화 기회 — 검토 항목", "Additional savings opportunities — cheaper ways, even with nothing wrong"),
                ("이 로그에서 더 싸게 할 길을 찾지 못했습니다.", "No cheaper way found in this log.")))
     for kind, title, empty in groups:
         ks = [k for k in WKIND if WKIND[k] == kind and k in segs and k not in NO_KNIFE and W[k]["status"] != "cannot_judge"]
@@ -7670,14 +7670,14 @@ def waste_lines(res, ko):
         if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge" and W[k]["missing"] != "threshold table":
             need.setdefault(W[k]["missing"], []).append(ITEM_NAMES[k][0 if ko else 1])
     # the other sections' items this log cannot show yet, as the next step (section 8 keeps only the zeros)
-    label = {"switch": ("2~4절 바뀐 부분만 고쳐 쓰기(응답 유사도 × 응답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
+    label = {"switch": ("2~4절 변경된 부분만 변경 부분만 생성(응답 유사도 × 응답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
              "fact_input": ("3절 사실 입력(요청이 바뀐 내용을 알려 주는가)", "Section 3, facts in the request (does it say what changed)"),
-             "zero_call": ("5절 호출 없이 답하기", "Section 5, answering without a call")}
+             "zero_call": ("5절 기존 응답 재사용", "Section 5, answering without a call")}
     nm_ = [e for e in (res.get("zero_explain") or {}).get("axes") or () if e["state"] == "not_measured" and e["axis"] in label]
     for e in nm_:
         need.setdefault(e["missing"], []).append(label[e["axis"]][0 if ko else 1])
     if need:
-        L += ["### " + ("분석이 제한된 항목 — 더 주시면 볼 수 있는 것" if ko else "What more data would show"), "",
+        L += ["### " + ("추가 데이터가 필요한 항목 — 더 주시면 볼 수 있는 것" if ko else "What more data required"), "",
               (("코딩 에이전트 기록에는 아래 필드가 남지 않습니다. 회사 서비스의 호출 로그에 있으면 오른쪽 항목을 봅니다." if ko else
                 "A coding agent's record does not keep the fields on the left. A service's call log that has them gets the items on the right.")
                if res.get("agent_log_calls") else
@@ -7690,7 +7690,7 @@ def waste_lines(res, ko):
 
 ZTITLE = {"failed": ("7-1 실패 호출 과금", "7-1 billed failed calls"),
           "resent": ("7-2 짧은 간격 재전송", "7-2 the same request resent shortly after"),
-          "truncated": ("7-3 길이 상한에서 잘린 답", "7-3 answers cut off at the length limit"),
+          "truncated": ("7-3 길이 상한에서 출력 제한으로 중단된 응답", "7-3 answers cut off at the length limit"),
           "prefix_unstable": ("7-4 요청 접두 직렬화 불안정", "7-4 request prefix serialized inconsistently"),
           "cache_min": ("7-5 캐시 최소 길이 미달", "7-5 prompts shorter than the cache minimum"),
           "billing": ("7-6 과금 대조", "7-6 billing check"),
@@ -7721,7 +7721,7 @@ def zero_lines(res, ko):
     def cache_pointer(e):
         c = e.get("cache_ref")
         if c:
-            return (("7-5 캐시 최소 길이(%s: 입력 중앙값 %s 토큰, 벤더 최소 %s 토큰(cache_constants.json) 미만 %d/%d건)" if ko else
+            return (("7-5 캐시 최소 길이(%s: 입력 중앙값 %s 토큰, AI 제공사 최소 %s 토큰(cache_constants.json) 미만 %d/%d건)" if ko else
                      "7-5 cache minimum (%s: median prompt %s tokens; %s-token vendor minimum (cache_constants.json), "
                      "%d of %d calls under it)")
                     % (c["model"], _n(c["input_median"]), _n(c["min_tokens"]), c["below"], c["calls"]))
@@ -7736,7 +7736,7 @@ def zero_lines(res, ko):
         if stt == "not_measured" or ax in NO_KNIFE:  # said once in section 7; no-knife items are left out of the report
             continue
         if ax == "switch":
-            head = "- " + ("바뀐 부분만 고쳐 쓰기(응답 유사도 × 응답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
+            head = "- " + ("변경된 부분만 변경 부분만 생성(응답 유사도 × 응답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
             if stt == "not_measured" and e["missing"] == "ts":
                 L.append(head + " — " + nm("ts") + (". (나) ts(ISO-8601 또는 epoch 초)를 넣으면 같은 문서의 판을 시간 순서로 이어 응답 유사도를 잽니다. "
                                                     "이 로그에서는 대신 %s 를 봅니다." if ko else
@@ -7750,7 +7750,7 @@ def zero_lines(res, ko):
             if res.get("upper_bound_only"):  # no section 5 without a body
                 look = (" 이 로그에서는 대신 %s 를 봅니다." if ko else " On this log, look at %s instead.") % cache_pointer(e)
             else:
-                look = (" 이 로그에서는 대신 %s와 5절 호출 없이 답하기를 봅니다." if ko else
+                look = (" 이 로그에서는 대신 %s와 5절 기존 응답 재사용를 봅니다." if ko else
                         " On this log, look at %s and section 5 (answering without a call) instead.") % cache_pointer(e)
             by = e["blocked_by"]
             if by == "no_pairs":
@@ -7780,7 +7780,7 @@ def zero_lines(res, ko):
                         sw["min_answer_tokens"]))
             elif by == "overlap":
                 a = (("(가) 응답 쌍 %d개 중 응답 유사도 %.2f(응답 유사도 선) 이상 0개, 응답 유사도 중앙 %s. 답 %d 토큰 이상 응답 쌍은 "
-                      "%d개. (나) 같은 문서의 다음 답이 앞 답을 크게 되풀이하는 트래픽(개정·갱신형 문서)이면 켜집니다." if ko else
+                      "%d개. (나) 같은 문서의 다음 답이 이전 응답을 크게 되풀이하는 트래픽(개정·갱신형 문서)이면 켜집니다." if ko else
                       "(a) 0 of %d answer pairs at similarity %.2f+ (the similarity line), median similarity "
                       "%s. Pairs with answers of %d+ tokens: %d. (b) This applies to traffic where the next answer largely "
                       "repeats the previous one for the same document (amended or updated documents).")
@@ -7788,7 +7788,7 @@ def zero_lines(res, ko):
                         sw["min_answer_tokens"], e["answers_ge_length"]))
             else:
                 a = (("(가) 응답 쌍 %d개 중 답 %d 토큰 이상 %d개, 응답 유사도 %.2f 이상 %d개 — 둘 다 넘는 응답 쌍 0개(길이선·응답 유사도 선 둘 다). "
-                      "(나) 긴 답이 앞 답을 되풀이하는 문서가 생기면 켜집니다." if ko else
+                      "(나) 긴 답이 이전 응답을 되풀이하는 문서가 생기면 켜집니다." if ko else
                       "(a) of %d answer pairs, %d have answers of %d+ tokens and %d have similarity %.2f+, but none have "
                       "both (the length and similarity lines). (b) This applies once a document's long answers repeat the previous one.")
                      % ((e["pairs"], sw["min_answer_tokens"], e["answers_ge_length"], sw["min_overlap"], e["pairs_ge_overlap"])
@@ -7803,7 +7803,7 @@ def zero_lines(res, ko):
                    (("all %d reducible answer pairs are their document's first pair (no history)" % n) if f1 == n else
                     ("of %d reducible answer pairs, %d are their document's first pair (no history); for the other %d, "
                      "the document's earlier pairs were under the line or fell in the resend window" % (n, f1, n - f1))))
-            L.append(("- 엔진이 판단했다면 — **0%%**. (가) %s. (나) 문서마다 응답 쌍이 쌓이면(더 긴 기간의 로그) 켜집니다." if ko else
+            L.append(("- 엔진 적용 기준 반영 시 — **0%%**. (가) %s. (나) 문서마다 응답 쌍이 쌓이면(더 긴 기간의 로그) 켜집니다." if ko else
                       "- If the engine had decided — **0%%**. (a) %s. (b) This changes as answer pairs build up per "
                       "document (a log covering a longer period).") % why)
         elif ax == "fact_input":
@@ -7812,16 +7812,16 @@ def zero_lines(res, ko):
                       ". (b) With the request body (prompt, or prompt_token_hashes from --hashify), it is measured."))
         elif ax == "zero_call":
             z = res["zero_call"]
-            ref = (("답을 보고 센 상한(참고): 직전 답과 완전 일치 응답 쌍 %d · 숫자만 다름 포함 %d." if ko else
+            ref = (("실제 응답과 비교한 상한값(참고): 직전 답과 완전 일치 응답 쌍 %d · 숫자만 다름 포함 %d." if ko else
                     "For reference, counted with the answer known (an upper bound): pairs identical to the previous "
                     "answer %d · allowing digit-only differences %d.") % (z["oracle_exact_pairs"], z["oracle_digits_masked_pairs"]))
             if stt == "not_measured":
-                L.append("- " + ("5절 호출 없이 답하기 — " if ko else "Section 5, answering without a call — ") + nm(e["missing"]) +
+                L.append("- " + ("5절 기존 응답 재사용 — " if ko else "Section 5, answering without a call — ") + nm(e["missing"]) +
                          (". (나) prompt 또는 prompt_hash 를 넣으면 돕니다. " if ko else ". (b) With prompt or prompt_hash, it runs. ")
                          + ref)
             else:
-                L.append((("- 5절 호출 없이 답하기 — **0%%**. (가) 응답 쌍 %d개 중 프롬프트가 있는 응답 쌍 %d개, 그중 직전 호출과 숫자만 빼고 같은 프롬프트 0개. %s "
-                           "(나) 같은 요청이 되풀이되는 트래픽(고정 템플릿·FAQ)이면 켜는 조건이 고릅니다.") if ko else
+                L.append((("- 5절 기존 응답 재사용 — **0%%**. (가) 응답 쌍 %d개 중 프롬프트가 있는 응답 쌍 %d개, 그중 직전 호출과 숫자만 빼고 같은 프롬프트 0개. %s "
+                           "(나) 동일 요청이 반복되는 호출 패턴(고정 템플릿·FAQ)이면 켜는 조건이 고릅니다.") if ko else
                           ("- Section 5, answering without a call — **0%%**. (a) %d answer pairs, %d of them with a prompt; "
                            "none match the previous call's prompt apart from digits. %s (b) The rule picks traffic that "
                            "repeats the same request (fixed templates, FAQs).")) % (e["pairs"], e["pairs_with_prompt"], ref))
@@ -7840,7 +7840,7 @@ def zero_lines(res, ko):
                 "prefix_unstable": (("접두가 있는 호출 %d건, 블록 %d종 모두 직렬화 한 가지",
                                      "%d calls with a prefix; each of the %d kinds of block serialized one way"),
                                     (w.get("calls_with_prefix"), w.get("blocks_checked"))),
-                "cache_min": (("판단 가능한 호출 %d건 모두 벤더 캐시 최소 길이(벤더 공식 문서) 이상",
+                "cache_min": (("판단 가능한 호출 %d건 모두 AI 제공사 캐시 최소 길이(AI 제공사 공식 문서) 이상",
                                "all %d calls checked are at or above the vendor cache minimum (the vendor's documentation)"),
                               (w.get("calls_judged"),)),
                 "billing": (("설명되지 않는 차이 %s — 선 %s(설명 안 되는 차이 선) 미만",
@@ -7851,7 +7851,7 @@ def zero_lines(res, ko):
                               (pct(w.get("over_min_hit_rate")), pct(w.get("line")))),
             }[ax]
             nxt = (("7-7 캐시 적중률을 보세요" if ko else "look at 7-7, the cache hit rate") if ax == "cache_min" else
-                   ("이 로그 범위에서 이 항목으로 줄일 비중이 없습니다(낭비가 없다는 뜻)" if ko else
+                   ("해당 로그 범위에서 이 항목으로 줄일 비중이 없습니다(낭비가 없다는 뜻)" if ko else
                     "nothing to cut here within this log (no waste)"))
             L.append(("- %s — 없음. (가) %s. (나) %s." if ko else "- %s — none. (a) %s. (b) %s.")
                      % (t, why[0][0 if ko else 1] % why[1], nxt))
@@ -7902,7 +7902,7 @@ def billing_line(res, ko):
     m = res.get("billing_mode")
     if not m:
         return []
-    return [{"api": ("- 과금 방식: API 종량(토큰당 과금) — 금액은 API usage × 가격표입니다. 정액·구독이면 `--flat all`.",
+    return [{"api": ("- 과금 방식: API 종량(토큰당 과금) — 금액은 API usage × 단가표입니다. 정액·구독이면 `--flat all`.",
                      "- Billing: per token on the API — dollars are API usage x the price list. On a flat rate or a plan, add `--flat all`."),
              "subscription": ("- 과금 방식: 구독·정액 — 토큰을 줄여도 청구액은 그대로입니다. 그래서 금액 대신 한도로 봅니다(1절).",
                               "- Billing: plan or flat rate — fewer tokens do not change the bill, so section 1 shows the limit instead of dollars."),
@@ -7923,17 +7923,17 @@ def limit_lines(res, ko):
     if not lv or not lv["tokens"]:
         return []
     name = {"resent": ("7-2 짧은 간격 재전송을 없애면", "Without the 7-2 resends"),
-            "truncated": ("7-3 잘린 첫 시도의 출력을 없애면", "Without the output of the 7-3 cut first attempts"),
+            "truncated": ("7-3 출력 제한으로 중단된 첫 요청의 출력을 없애면", "Without the output of the 7-3 cut first attempts"),
             "redraft": ("7-2 다시 쓴 초안과 그 심사 호출을 없애면", "Without the 7-2 rewritten drafts and their judge calls")}
     cr = int(lv["cache_read_tokens"] or 0)
     # PM 10-23 07:32 item 3: a log with nothing to remove and its cache already well used says so first, as a result
     good = lv.get("already_good") and not lv["items"] and lv.get("nothing_found")
-    top = [("- **결과: 이 기록은 이미 잘 쓰고 있습니다.** 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 비중이 거의 없고, 토큰을 덜어 "
+    top = [("- **결과: 이 기록은 이미 잘 쓰고 있습니다.** 캐시 읽기가 입력의 **%s** 입니다. 캐시로 추가 절감 가능 비율이 거의 없고, 토큰을 덜어 "
             "낼 항목도 찾지 못했습니다." if ko else
             "- **Result: this log is already used well.** Cache reads are **%s** of input. Little is left for caching to "
             "cut, and no item here removes tokens.") % pct(lv["already_good"]["cache_hit_rate"])] if good else []
     if cr:
-        L = top + [("- **한도로 보면** — 같은 사용 한도 안에서 더 할 수 있는 일. 이 기록의 토큰 %s(캐시 읽기 %s 포함)으로 셉니다. 벤더가 한도에 "
+        L = top + [("- **한도로 보면** — 같은 사용 한도 안에서 더 할 수 있는 일. 이 기록의 토큰 %s(캐시 읽기 %s 포함)으로 셉니다. AI 제공사가 한도에 "
               "캐시 읽기를 세는지는 공개돼 있지 않아 뺀 값을 괄호에 같이 적었습니다." if ko else
               "- **As a usage limit** — how much more work fits in the same limit, counted on this log's %s tokens (%s of "
               "them cache reads). Vendors do not publish whether a limit counts cache reads, so the value without them is in brackets.")
@@ -7961,7 +7961,7 @@ def limit_lines(res, ko):
     if not lv["items"]:
         L.append(("  - 이 기록에서 토큰을 덜어 낼 항목을 찾지 못했습니다." if ko else "  - No item in this log removes tokens."))
     if lv.get("already_good") and lv.get("nothing_found"):
-        L.append(("  - 이미 잘 쓰고 있는 것: 캐시 읽기가 입력의 **%s** 입니다. 캐시로 더 줄일 비중이 거의 남아 있지 않습니다." if ko else
+        L.append(("  - 이미 잘 쓰고 있는 것: 캐시 읽기가 입력의 **%s** 입니다. 캐시로 추가 절감 가능 비율이 거의 남아 있지 않습니다." if ko else
                   "  - Already done well: cache reads are **%s** of input. Little is left for caching to cut.")
                  % pct(lv["already_good"]["cache_hit_rate"]))
     elif lv.get("already_good"):  # WRONG-SWEEP (10-24, CS): 7-7 is fine but another item of section 7 still saves
@@ -8946,7 +8946,7 @@ def _report_bill_fit(res, ko):
                      % (m, usd(f["input_per_1m"]), usd(f["output_per_1m"]), f["read_multiple"], f["days"], f["fit_days"][0],
                         f["fit_days"][1], f["check_days"], pct(f["max_err"])))
         elif f["status"] == "check_failed":
-            L.append(("- %s: 청구서로 푼 단가가 맞춰 본 날과 %s 어긋나 쓰지 않았습니다. 가격표 단가를 씁니다." if ko else
+            L.append(("- %s: 청구서로 푼 단가가 맞춰 본 날과 %s 어긋나 쓰지 않았습니다. 단가표 단가를 씁니다." if ko else
                       "- %s: the prices solved from the bill missed a check day by %s, so they are not used; list prices are.")
                      % (m, pct(f["max_err"])))
     few = sorted(m for m, f in fits.items() if f["status"] in ("too_few_days", "no_solution"))
@@ -8957,7 +8957,7 @@ def _report_bill_fit(res, ko):
     al = res.get("bill_alias") or {}
     used = sorted(a for a, v in al.items() if v["used"])
     if used:
-        L.append(("- 날짜 붙은 이름 %d개(%s)는 기본 이름의 가격표 단가로 셌습니다. 그 이름이 든 날을 청구서와 맞춰 보니 모두 %s 안이었습니다(가장 큰 차이 %s)." if ko else
+        L.append(("- 날짜 붙은 이름 %d개(%s)는 기본 이름의 단가표 단가로 셌습니다. 그 이름이 든 날을 청구서와 맞춰 보니 모두 %s 안이었습니다(가장 큰 차이 %s)." if ko else
                   "- %d dated model names (%s) are priced at their base name's list price: on every day they appear, the "
                   "bill agreed within %s (largest gap %s).")
                  % (len(used), ", ".join(used), pct(BILL_FIT_MAX_ERR), pct(max(al[a]["max_gap"] for a in used))))
@@ -8991,7 +8991,7 @@ def report_usage(res, lang="ko"):
     ti0 = sum(tk0.get(f) or 0 for f in ("input", "cached", "write"))
     if ti0 and not res.get("error"):  # CACHE-HEAD: the same "cache read / input" as below, first
         hr = _hit_range(res.get("models") or {})
-        L += [("**캐시 적중률 %s** — 입력 토큰 중 캐시에서 읽힌 비중입니다(공급사 사용량 집계 기준). 자세한 것은 2절." if ko else
+        L += [("**캐시 적중률 %s** — 입력 토큰 중 캐시에서 읽힌 비중입니다(AI 제공사 사용량 집계 기준). 자세한 것은 2절." if ko else
                "**Cache hit rate %s** — the share of input tokens read from the cache (the vendor's usage totals). "
                "Details in section 2.") % pct(tk0["cached"] / ti0)
               + ((" 모델별로는 %s ~ %s 입니다." if ko else " By model it runs from %s to %s.") % (pct(hr[0]), pct(hr[1]))
@@ -9005,7 +9005,7 @@ def report_usage(res, lang="ko"):
                    "token counts).") % pct(sum(v["usd_cache_read"] for v in ac["models"].values()) / a_inp)
                   + ((" 모델별로는 %s ~ %s 입니다." if ko else " By model it runs from %s to %s.") % (pct(a_range[0]), pct(a_range[1]))
                      if a_range else ""), ""]
-    L += ["## " + ("0. 분석 대상 — 입력 등급 D(공급사 사용량 집계)" if ko else "0. What was read — input grade D (vendor usage file)"), ""]
+    L += ["## " + ("0. 분석 대상 — 입력 등급 D(AI 제공사 사용량 집계)" if ko else "0. What was read — input grade D (vendor usage file)"), ""]
     L += [("- 형식: %s · 집계 줄 %d" if ko else "- format: %s · %d summary rows")
           % (" + ".join(USAGE_KINDS[k][0 if ko else 1] for k in res["kinds"]), res["rows"])]
     if res.get("error"):
@@ -9023,7 +9023,7 @@ def report_usage(res, lang="ko"):
             ds = ac.get("period")
             if ds:
                 L.append(("- 기간 %s ~ %s · 모델 %d개" if ko else "- %s to %s · %d models") % (ds[0], ds[1], len(ac["models"])))
-            L += [("- 공급사가 모델·토큰 종류별로 매긴 금액입니다. 본문·요청은 없습니다." if ko else
+            L += [("- AI 제공사가 모델·토큰 종류별로 매긴 금액입니다. 본문·요청은 없습니다." if ko else
                    "- Dollars the vendor billed by model and token type. No text, no prompts."),
                   ("- 로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다." if ko else "- The scanner has no network code.")]
             L += ["", "## " + t["s1"], ""] + a_lines
@@ -9031,7 +9031,7 @@ def report_usage(res, lang="ko"):
         return "\n".join(L)
     per = res["period"] or ["—", "—"]
     if res.get("n_calls") and res.get("kinds", {}).get("openai_activity"):
-        L.append(("- 요청 %s건 (공급사가 센 수, num_model_…)" if ko else "- %s calls (the vendor's own count, num_model_…)")
+        L.append(("- 요청 %s건 (AI 제공사가 센 수, num_model_…)" if ko else "- %s calls (the vendor's own count, num_model_…)")
                  % "{:,}".format(int(res["n_calls"])))
     bd = res.get("bill_days")
     if bd:
@@ -9039,7 +9039,7 @@ def report_usage(res, lang="ko"):
                   "- billed (cost CSV): %s over %d days (%s to %s), daily totals not split by model or key.")
                  % (usd(bd["usd_total"]), bd["days"], bd["period"][0], bd["period"][1]))
     L += [("- 기간 %s ~ %s · 모델 %d개" if ko else "- %s to %s · %d models") % (per[0][:10], per[1][:10], len(res["models"])),
-          ("- 호출 하나하나가 아니라 공급사가 묶어 센 값입니다(가장 촘촘한 것이 1분 묶음). 본문·요청은 없습니다." if ko else
+          ("- 호출 하나하나가 아니라 AI 제공사가 묶어 센 값입니다(가장 촘촘한 것이 1분 묶음). 본문·요청은 없습니다." if ko else
            "- These are totals counted by the vendor (1-minute buckets at the finest), not one row per call. No text, no prompts."),
           ("- 로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다." if ko else "- The scanner has no network code."),
           ("- **이 파일로 볼 수 있는 것**: 출력이 청구서에서 차지하는 비중 · 모델별 토큰과 금액 · 캐시 읽기 비율 · 시간대 몰림 · "
@@ -9047,15 +9047,15 @@ def report_usage(res, lang="ko"):
            "- **What this file shows**: output's share of the bill · tokens and dollars by model · the cache-read share · "
            "busy hours · the least cache written and never read · a cache-minimum signal (files with request counts) · "
            "the most that could go to OpenAI Flex (section 3)."),
-          ("- **호출 로그를 주시면 볼 수 있는 것**: 새고 있는 것(재전송·잘린 답·접두 흔들림·캐시 적중)과 더 줄일 수 있는 것(캐시 최소 "
-           "미달·호출끼리 같은 앞부분·바뀐 부분만 고쳐 쓰기·호출 없이 답하기). 공급사 집계에는 호출 하나하나가 없습니다. 호출 로그를 "
+          ("- **호출 로그를 주시면 볼 수 있는 것**: 비용 증가 요인(재전송·출력 제한으로 중단된 응답·접두 흔들림·캐시 적중)과 추가 최적화 기회(캐시 최소 "
+           "미달·호출끼리 공통 접두부·변경된 부분만 변경 부분만 생성·기존 응답 재사용). AI 제공사 집계에는 호출 하나하나가 없습니다. 호출 로그를 "
            "남기려면 README 의 \"이 파일이 아직 없다면\" 을 보세요." if ko else
            "- **What a call log would add**: what is leaking (resends, cut-off answers, unstable prefixes, cache hits) and "
-           "what could cost less (prompts under the cache minimum, shared prefixes, rewriting only the changed parts, "
+           "what additional savings opportunities (prompts under the cache minimum, shared prefixes, rewriting only the changed parts, "
            "answering without a call). Vendor totals have no single calls. To start keeping a call log, see \"No log "
            "file yet?\" in the README."), ""]
     if res.get("synthetic_docs"):
-        L.insert(next(i for i, x in enumerate(L) if x.startswith(("- 형식", "- format"))) + 1, ("- **[합성] 예시 파일입니다.** 지어낸 숫자라 실제 회사의 값이 아닙니다." if ko else
+        L.insert(next(i for i, x in enumerate(L) if x.startswith(("- 형식", "- format"))) + 1, ("- **[합성] 예시 파일입니다.** 합성 데이터이며 실제 서비스의 측정값이 아닙니다." if ko else
                                    "- **[synthetic] This is an example file.** The numbers are made up, not a real company's."))
     if "aws_cur" in res["kinds"] and res.get("units"):
         L.insert(-1, ("- AWS 단위 열(pricing_unit) 그대로: %s. 사용량 값이 토큰 하나 단위인지 공식 문서에 없어, line_item_usage_amount 를 그대로 토큰 수로 적었습니다. 금액은 파일의 비용 열입니다." if ko else
@@ -9077,17 +9077,17 @@ def report_usage(res, lang="ko"):
               % (((usd(b["usd_output"]), usd(b["usd_total"]), pct(b["output_share"]), b["models"], b["priced_models"])
                   if ko else (usd(b["usd_output"]), usd(b["usd_total"]), pct(b["output_share"]), b["priced_models"], b["models"]))
                  + ((("파일의 비용 열" if ko else "the file's cost column") if src == {"file"} else
-                  (("가격표 %s 기준" if ko else "prices as of %s") % b["as_of"]) if src == {"table"} else
+                  (("단가표 %s 기준" if ko else "prices as of %s") % b["as_of"]) if src == {"table"} else
                   ("청구서로 역산한 단가" if ko else "prices fitted from the bill") if src == {"bill"} else
-                  (("청구서로 역산한 단가와 가격표 %s" if ko else "prices fitted from the bill and the price list as of %s")
+                  (("청구서로 역산한 단가와 단가표 %s" if ko else "prices fitted from the bill and the price list as of %s")
                    % b["as_of"]) if src == {"bill", "table"} else
-                  ("파일 비용 열과 가격표" if ko else "the file's cost column and the price list")),)), ""]
+                  ("파일 비용 열과 단가표" if ko else "the file's cost column and the price list")),)), ""]
         if bd and b["priced_models"] < b["models"]:
             L.insert(-1, ("- 청구서 합계는 %s 입니다. 위 전체는 단가를 아는 모델 %d개 비중입니다." if ko else
                       "- The bill says %s in all. The total above covers the %d models with a price.")
                      % (usd(bd["usd_total"]), b["priced_models"]))
     else:
-        L += [("- 금액 환산 불가: 가격표에 있는 모델이 없고 파일에 비용 열도 없습니다." if ko else
+        L += [("- 금액 환산 불가: 단가표에 있는 모델이 없고 파일에 비용 열도 없습니다." if ko else
                "- No dollar figure: no model is in the price list and the file has no cost column."), ""]
     bf = _report_bill_fit(res, ko)
     if bf:
@@ -9142,10 +9142,10 @@ def report_usage(res, lang="ko"):
         L.append(("- 시간대(UTC): 출력이 가장 많은 시각 %02d시 = 출력의 %s, 상위 6시간 = %s (1시간 이하 묶음 %d줄로 셈)." if ko else
                   "- hour of day (UTC): the busiest hour, %02d:00, has %s of output; the top 6 hours have %s (from %d rows of 1-hour buckets or finer).")
                  % (h["peak_hour"], pct(h["peak_share"]), pct(h["top6_share"]), h["rows"]))
-    L += ["", "## " + ("3. 새고 있는 것 · 더 줄일 수 있는 것" if ko else "3. What is leaking, what could cost less"), ""]
+    L += ["", "## " + ("3. 비용 증가 요인 · 추가 최적화 기회" if ko else "3. What is leaking, what additional savings opportunities"), ""]
     cu, cs = res.get("cache_unread") or {}, res.get("cache_min_signal") or {}
     if cu.get("status") == "found":
-        L += ["### " + ("새고 있는 것" if ko else "Leaking now"), "",
+        L += ["### " + ("비용 증가 요인" if ko else "Additional costs identified"), "",
               ("- 7-7 써 놓고 못 읽은 캐시 — **발견(하한)**" if ko else "- 7-7 cache written and never read — **found (lower bound)**")]
         for m, v in sorted(cu["models"].items(), key=lambda kv: -kv[1]["unread_lower"]):
             L.append(("  - %s: 캐시 쓰기 %s · 읽기 %s 토큰 → 읽히지 않은 쓰기가 **적어도 %s 토큰**%s." if ko else
@@ -9161,10 +9161,10 @@ def report_usage(res, lang="ko"):
                   "takes a call log."))
         L.append("")
     elif cu.get("models_with_writes"):
-        L += ["### " + ("새고 있는 것" if ko else "Leaking now"), "",
+        L += ["### " + ("비용 증가 요인" if ko else "Additional costs identified"), "",
               ("- 7-7 써 놓고 못 읽은 캐시 — **없음** (모델마다 캐시 읽기가 쓰기 이상입니다)" if ko else
                "- 7-7 cache written and never read — **none** (each model read at least as much as it wrote)"), ""]
-    L += ["### " + ("더 줄일 수 있는 것" if ko else "Could cost less"), ""]
+    L += ["### " + ("추가 최적화 기회" if ko else "Additional savings opportunities"), ""]
     if cs.get("status") == "found":
         L += [("- 7-5 캐시 최소 길이 미달 — **신호**" if ko else "- 7-5 prompts under the cache minimum — **signal**"),
               ("  - 요청 수가 있는 집계 줄 %d 중 %d 줄은 평균 입력이 그 모델의 캐시 최소 길이보다 짧습니다(그 줄의 요청 %s건 / 요청 수가 있는 %s건). "
@@ -9179,8 +9179,8 @@ def report_usage(res, lang="ko"):
     f = res.get("flex") or {}
     if f.get("status") == "found":
         L += [("- 7-9 OpenAI Flex 로 보낼 수 있는 비중 — **발견(상한)**" if ko else "- 7-9 what could go to OpenAI Flex — **found (upper bound)**"),
-              ("  - Flex 를 쓸 수 있는 모델(%s) 집계 줄 %d: 입력(캐시 포함) %s · 출력 %s 토큰, 금액 %s(가격표). Flex 는 같은 모델을 표준 단가의 "
-               "절반(Batch 단가, 가격표 %s)에 답합니다 — 다 Flex 였다면 **최대 %s** 덜 듭니다." if ko else
+              ("  - Flex 를 쓸 수 있는 모델(%s) 집계 줄 %d: 입력(캐시 포함) %s · 출력 %s 토큰, 금액 %s(단가표). Flex 는 같은 모델을 표준 단가의 "
+               "절반(Batch 단가, 단가표 %s)에 답합니다 — 다 Flex 였다면 **최대 %s** 덜 듭니다." if ko else
                "  - %d summary rows on Flex-table models (%s): %s input tokens (cache included) and %s output tokens, %s at "
                "list prices. Flex runs the same model at half the standard rate (Batch rates, price list %s). Sending all "
                "of it at Flex would cost **at most %s** less.")
@@ -9197,9 +9197,9 @@ def report_usage(res, lang="ko"):
     # the bridge to the collector (PM 10-23 07:34 item 1): what a few minutes of call log would add, from COLLECT_WAKE
     cw = COLLECT_WAKE
     L += ["", "## " + ("4. 호출 기록을 켜면" if ko else "4. With a call log"), "",
-          ("- 기록 도구(코드 두 줄, 본문은 남기지 않음)를 켜면 새고 있는 것·더 줄일 수 있는 것을 호출 단위로 봅니다. 답·요청 해시까지 "
-           "켜면 바뀐 부분만 고쳐 쓰기와 호출 없이 답하기도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 비중:" if ko else
-           "- The recording tool (two lines of code, no text kept) checks what is leaking and what could cost less, call by "
+          ("- 기록 도구(코드 두 줄, 본문은 남기지 않음)를 켜면 비용 증가 요인·추가 최적화 기회을 호출 단위로 봅니다. 답·요청 해시까지 "
+           "켜면 변경된 부분만 변경 부분만 생성와 기존 응답 재사용도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 비중:" if ko else
+           "- The recording tool (two lines of code, no text kept) checks what is leaking and what additional savings opportunities, call by "
            "call. With answer and request hashes on, it also checks rewriting only the changed parts and answering without "
            "a call. Of what a full day would find to fix, the share seen after:"),
           "  - " + " · ".join((("%s %d%%" % (("%d분" % m) if m < 60 else ("%d시간" % (m // 60)) if m < 1440 else "하루", round(100 * a / b)))
@@ -9216,140 +9216,126 @@ def report_usage(res, lang="ko"):
 # Markdown's, checked by html_numbers_match), with a summary, item cards, a colored two-axis table and a range bar on
 # top. Standard library only, inline CSS, system fonts, inline SVG, no external reference of any kind.
 REPORT_CSS = """
-
-:root{
-  --ink:#312723; --bg:#ffffff; --fg:#312723; --acc:49,39,35;
-  --f1:color-mix(in srgb,#312723 4%,transparent);
-  --f2:color-mix(in srgb,#312723 7%,transparent);
-  --mut:color-mix(in srgb,#312723 62%,transparent);
-  --faint:color-mix(in srgb,#312723 42%,transparent);
-  --line:color-mix(in srgb,#312723 14%,transparent);
-  --line2:color-mix(in srgb,#312723 26%,transparent);
-  --found:#a3261c; --none:#1e6b3e; --more:#8a6d1f;
-  --sans:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  color-scheme:light;
+:root {
+ --bg:#fcfbf5;--ink:#342923;--fg:#342923;--brand:#2452e8;--acc:36,82,232;
+ --paper:#ffffff;--soft:#f3f3ef;--brand-tint:#edf1ff;--f1:#f6f5f0;--f2:#efeee8;
+ --mut:#615b56;--faint:#77716b;--line:#e3e0d8;--line2:#cfcac0;
+ --found:#a3261c;--none:#286d48;--more:#80681b;
+ --sans:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
+ --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ color-scheme:light;
 }
-@media (prefers-color-scheme:dark){:root{
-  --ink:#f2efed; --bg:#241d1a; --fg:#f2efed; --acc:242,239,237;
-  --f1:color-mix(in srgb,#ffffff 5%,transparent);
-  --f2:color-mix(in srgb,#ffffff 9%,transparent);
-  --mut:color-mix(in srgb,#f2efed 68%,transparent);
-  --faint:color-mix(in srgb,#f2efed 46%,transparent);
-  --line:color-mix(in srgb,#ffffff 14%,transparent);
-  --line2:color-mix(in srgb,#ffffff 26%,transparent);
-  --found:#f08b80; --none:#7fd18b; --more:#dcc06a;
-  color-scheme:dark;
-}}
-
 *{box-sizing:border-box}
 html{background:var(--bg)}
-body{margin:0 auto;max-width:880px;padding:40px 24px 72px;background:var(--bg);color:var(--fg);
-  font:400 15px/1.65 var(--sans);word-break:keep-all;overflow-wrap:anywhere;
-  -webkit-font-smoothing:antialiased}
-
-header{padding-bottom:28px;border-bottom:1px solid var(--line2);margin-bottom:8px}
-h1{font-size:26px;line-height:1.18;font-weight:600;letter-spacing:-.02em;margin:0 0 6px;color:var(--fg)}
-.meta{color:var(--faint);font:400 12px/18px var(--mono);font-variant-numeric:tabular-nums}
-.syn{display:inline-block;font:600 11px/18px var(--sans);background:var(--f2);color:var(--mut);
-  padding:0 7px;border-radius:3px;margin-left:7px;vertical-align:1px}
-
-h2{font-size:19px;line-height:1.3;font-weight:600;letter-spacing:-.012em;
-  margin:46px 0 14px;padding-top:0;border-top:0}
-h2::before{content:"";display:block;width:26px;height:2px;background:var(--line2);margin-bottom:13px}
-h3{font-size:15px;line-height:1.5;font-weight:600;margin:24px 0 6px}
-
-.hero{margin:26px 0 10px}
-.hero .lab{font-size:13px;line-height:20px;color:var(--mut)}
-.hero .big{font:600 44px/1.08 var(--sans);letter-spacing:-.03em;color:var(--fg);
-  font-variant-numeric:tabular-nums;margin-top:2px}
-.hero .note{font-size:13px;line-height:20px;color:var(--faint);margin-top:4px}
-
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:26px 0;
-  border-top:1px solid var(--line2)}
-.card{border:0;border-radius:0;padding:16px 20px 14px 0;min-width:0}
-.card + .card{padding-left:20px;border-left:1px solid var(--line)}
-.card .t{font-size:12px;line-height:18px;color:var(--mut)}
-.card .n{font:600 28px/1.2 var(--sans);letter-spacing:-.025em;
-  font-variant-numeric:tabular-nums;margin-top:2px}
-.card ul{margin:7px 0 0;padding-left:16px;font-size:13px;line-height:1.55;color:var(--mut)}
-.card.found .n{color:var(--found)} .card.none .n{color:var(--none)} .card.more .n{color:var(--more)}
-
-.bar{margin:10px 0 0;color:var(--fg)}
-.bar svg{width:100%;height:auto;display:block}
-
-table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
-th,td{padding:9px 12px 9px 0;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
-th:last-child,td:last-child{padding-right:0}
-thead th,th{font-size:12px;line-height:18px;color:var(--faint);font-weight:600;
-  border-bottom:1px solid var(--line2);padding-bottom:8px}
+body{margin:0 auto;max-width:1120px;padding:54px 48px 92px;background:var(--bg);color:var(--fg);
+ font:400 15px/1.74 var(--sans);word-break:keep-all;overflow-wrap:anywhere;
+ -webkit-font-smoothing:antialiased}
+header{padding-bottom:32px;border-bottom:1px solid var(--line2);margin-bottom:12px}
+.report-brand{display:flex;align-items:center;justify-content:space-between;gap:18px;
+ padding-bottom:21px;margin-bottom:28px;border-bottom:2px solid var(--brand)}
+.report-brand img{display:block;width:168px;max-width:58%;height:auto;object-fit:contain;object-position:left center}
+.report-brand .report-label{font:700 10.5px/1.4 var(--sans);color:var(--brand);
+ letter-spacing:.12em;text-align:right;text-transform:uppercase}
+h1{font-size:clamp(26px,3.5vw,42px);line-height:1.22;font-weight:750;letter-spacing:-.04em;
+ margin:0 0 9px;color:var(--ink)}
+.meta{color:var(--faint);font:400 12px/1.65 var(--mono);font-variant-numeric:tabular-nums}
+.syn{display:inline-block;font:650 11px/18px var(--sans);background:var(--f2);color:var(--mut);
+ padding:1px 8px;border-radius:3px;margin-left:8px;vertical-align:1px}
+h2{font-size:clamp(19px,2.4vw,23px);line-height:1.4;font-weight:740;letter-spacing:-.024em;
+ margin:48px 0 18px;padding-top:20px;border-top:1px solid var(--line)}
+h2::before{content:"";display:block;width:34px;height:3px;background:var(--brand);margin-bottom:15px}
+h3{font-size:16px;line-height:1.5;font-weight:700;margin:26px 0 8px;letter-spacing:-.015em}
+p{margin:10px 0}
+.hero{margin:27px 0 17px;padding:23px 28px 25px;background:var(--paper);
+ border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:5px}
+.hero .lab{font-size:13px;line-height:1.55;color:var(--mut);font-weight:600}
+.hero .big{font:760 clamp(33px,5.8vw,56px)/1.12 var(--sans);letter-spacing:-.05em;
+ color:var(--brand);font-variant-numeric:tabular-nums;margin-top:7px}
+.hero .note{font-size:13px;line-height:1.65;color:var(--mut);margin-top:9px}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:26px 0 10px}
+.card{background:var(--paper);border:1px solid var(--line);border-top:3px solid var(--brand);
+ border-radius:5px;padding:20px;min-width:0}
+.card .n{font:750 34px/1.15 var(--sans);letter-spacing:-.04em;
+ font-variant-numeric:tabular-nums;color:var(--ink);margin-bottom:9px}
+.card .t{font-size:13px;line-height:1.5;color:var(--mut);font-weight:650}
+.card ul{margin:12px 0 0;padding-left:17px;font-size:12.5px;line-height:1.65;color:var(--mut)}
+.card.found{border-top-color:var(--found)}.card.found .n{color:var(--found)}
+.card.none .n{color:var(--brand)}.card.more .n{color:var(--ink)}
+.bar{margin:9px 0 0;color:var(--fg)}.bar svg{width:100%;height:auto;display:block}
+table{border-collapse:collapse;width:100%;margin:16px 0 21px;font-size:13.5px;
+ background:var(--paper);border:1px solid var(--line)}
+th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+thead th,th{font-size:12px;line-height:1.5;color:var(--mut);font-weight:700;
+ border-bottom:2px solid var(--line2);background:var(--soft)}
 tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--brand-tint)}
 td.num,td.money,td.r,th.r{text-align:right;font-family:var(--mono);font-size:13px;
-  font-variant-numeric:tabular-nums}
+ font-variant-numeric:tabular-nums}
 th.r{font-family:var(--sans);font-size:12px}
 td.heat{text-align:right;font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;
-  -webkit-print-color-adjust:exact;print-color-adjust:exact}
-
-ul{padding-left:19px;margin:9px 0}
-li{margin:5px 0}
-li li{font-size:14px;color:var(--mut)}
-
-code{font:13px/1.5 var(--mono);background:var(--f2);padding:1px 5px;border-radius:3px;
-  word-break:break-all}
-pre{font:12.5px/1.55 var(--mono);margin:9px 0 0;padding:12px 14px;background:var(--f1);
-  border:1px solid var(--line);border-radius:4px;overflow-x:auto}
-pre code{background:none;padding:0}
-
-.badge{display:inline-block;font:600 11px/17px var(--sans);padding:0 7px;border-radius:3px;
-  border:0;margin-right:6px;margin-left:0;vertical-align:1px;white-space:nowrap}
-.badge.found{background:var(--f2);color:var(--mut)}
-.badge.none{background:var(--f2);color:var(--none)}
-.badge.more{background:var(--ink);color:var(--bg)}
-
-.wrap{overflow-x:auto;max-width:100%}
+ -webkit-print-color-adjust:exact;print-color-adjust:exact}
+ul{padding-left:20px;margin:11px 0}li{margin:6px 0}li li{font-size:14px;color:var(--mut)}
+strong{font-weight:700}
+code{font:12.5px/1.5 var(--mono);background:var(--f2);padding:2px 5px;border-radius:3px;word-break:break-all}
+pre{font:12.5px/1.58 var(--mono);margin:12px 0 18px;padding:17px 18px;
+ background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--brand);
+ border-radius:4px;overflow-x:auto}pre code{background:none;padding:0}
+.badge{display:inline-block;font:650 11px/1.6 var(--sans);padding:2px 8px;border-radius:3px;
+ border:0;margin-right:6px;vertical-align:1px;white-space:nowrap}
+.badge.found{background:#f9e9e7;color:#8c251b}.badge.none{background:#e8f3ed;color:#286d48}
+.badge.more{background:var(--brand-tint);color:var(--brand)}
+.wrap{overflow-x:auto;max-width:100%;border-radius:5px}
 .card,section,header{min-width:0}
-
-footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
-  color:var(--faint);font-size:12px;line-height:19px}
-
-@media (max-width:640px){
-  body{padding:28px 18px 56px;font-size:14.5px}
-  h1{font-size:22px}
-  .cards{grid-template-columns:1fr;border-top:0}
-  .card{padding:14px 0;border-top:1px solid var(--line)}
-  .card + .card{padding-left:0;border-left:0}
-  .hero .big{font-size:34px}
+footer{margin-top:66px;padding-top:20px;border-top:2px solid var(--brand);
+ color:var(--faint);font-size:12px;line-height:1.8}
+.lead{margin-top:42px;padding:29px 30px 28px;background:var(--brand-tint);
+ border:1px solid #cbd5ff;border-radius:6px}
+.lead h3{margin:0 0 6px;font-size:21px;line-height:1.45;font-weight:740}
+.lead p.l{margin:0 0 18px;font-size:14px;line-height:1.65;color:var(--mut);max-width:70ch}
+.lead .row{display:flex;flex-wrap:wrap;gap:9px;align-items:flex-start}
+.lead input,.lead textarea{font:400 14px/1.5 var(--sans);padding:12px 13px;
+ border:1px solid var(--line2);border-radius:4px;background:var(--paper);color:var(--ink);min-width:0}
+.lead input{flex:1 1 210px}.lead textarea{flex:1 1 100%;min-height:64px;resize:vertical}
+.lead input:focus,.lead textarea:focus{outline:2px solid var(--brand);outline-offset:1px}
+.lead button{font:700 14px/1.5 var(--sans);padding:12px 18px;border:1px solid var(--brand);
+ border-radius:4px;cursor:pointer;background:var(--brand);color:#fff;white-space:nowrap}
+.lead button.ghost{background:transparent;color:var(--brand);font-weight:650}
+.lead button:disabled{opacity:.55;cursor:default}
+.lead .note{margin-top:13px;font-size:12.5px;line-height:1.65;color:var(--mut)}
+.lead .msg{margin-top:12px;font-size:13.5px;line-height:1.6;font-weight:650}
+.lead .msg.bad{font-weight:400;color:var(--found)}
+.lead details{margin-top:15px}.lead summary{font-size:13px;line-height:1.55;color:var(--mut);cursor:pointer}
+.lead pre.peek{margin:11px 0 0;padding:12px 14px;background:var(--paper);border:1px solid var(--line);
+ border-radius:4px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+ max-height:270px;overflow:auto}
+@media (max-width:700px){
+ body{padding:26px 18px 55px;font-size:14px}
+ .report-brand{margin-bottom:23px;padding-bottom:16px}.report-brand img{width:136px}
+ .report-brand .report-label{font-size:9px;letter-spacing:.045em}
+ h1{font-size:26px}.hero{margin:23px 0 14px;padding:21px 17px}
+ .hero .big{font-size:34px}.cards{grid-template-columns:1fr;gap:8px}
+ .card{padding:17px 18px}.card .n{font-size:30px}table{font-size:12px}
+ th,td{padding:10px 9px}.lead{padding:22px 18px}
 }
-
 @media print{
-  :root{--bg:#fff;--fg:#312723;--mut:#555;--faint:#777;--line:#ddd;--line2:#bbb}
-  body{max-width:none;padding:0;font-size:10.5pt;line-height:1.55}
-  h2{break-after:avoid;margin-top:26px}
-  .card,table,li,pre,.hero{break-inside:avoid}
-  .badge,.card.found .n,.card.none .n{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  footer{margin-top:28px}
+ :root{--bg:#fff;--paper:#fff;--fg:#342923;--mut:#555;--faint:#777;
+ --line:#ddd;--line2:#bbb;--brand-tint:#f0f3ff}
+ body{max-width:none;padding:0;font-size:10.5pt;line-height:1.55}
+ .report-brand{margin-bottom:14px}.report-brand img{width:135px}
+ h2{break-after:avoid;margin-top:24px}.card,table,li,pre,.hero{break-inside:avoid}
+ .cards{gap:8px}.card{padding:12px}.hero{padding:13px}
+ .badge,.card,.hero,.bar,td.heat{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ footer{margin-top:26px}.lead{display:none}
 }
-.lead{margin-top:26px;padding:22px 22px 20px;background:var(--f2,#f3f1f0);border-radius:6px}
-.lead h3{margin:0 0 5px;font-size:17px;line-height:25px;font-weight:600}
-.lead p.l{margin:0 0 15px;font-size:14px;line-height:21px;color:var(--mut);max-width:62ch}
-.lead .row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
-.lead input,.lead textarea{font:400 14px/21px var(--sans);padding:9px 11px;border:1px solid var(--line2);
-  border-radius:4px;background:var(--bg);color:inherit;min-width:0}
-.lead input{flex:1 1 210px}
-.lead textarea{flex:1 1 100%;min-height:54px;resize:vertical}
-.lead button{font:600 14px/21px var(--sans);padding:9px 17px;border:0;border-radius:4px;cursor:pointer;
-  background:var(--ink);color:var(--bg);white-space:nowrap}
-.lead button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line2);font-weight:500}
-.lead button:disabled{opacity:.5;cursor:default}
-.lead .note{margin-top:11px;font-size:12.5px;line-height:19px;color:var(--faint,#9b938f)}
-.lead .msg{margin-top:11px;font-size:13.5px;line-height:21px;font-weight:600}
-.lead .msg.bad{font-weight:400;color:var(--mut)}
-.lead details{margin-top:13px}
-.lead summary{font-size:13px;line-height:20px;color:var(--mut);cursor:pointer}
-.lead pre.peek{margin:9px 0 0;padding:11px 13px;background:var(--bg);border:1px solid var(--line);
-  border-radius:4px;font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;max-height:270px;overflow:auto}
-@media print{.lead{display:none}}
 """
+# Same pixel-perfect brand asset as the site. Embedded in report: the scanner never fetches it.
+REPORT_LOGO_URI = "data:image/png;base64,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"
+
+def report_brand(lang):
+    caption = "LLM API 비용 진단 리포트" if lang == "ko" else "LLM API COST DIAGNOSTIC"
+    return ('<div class="report-brand"><img alt="LinklBee" src="%s">'
+            '<span class="report-label">%s</span></div>' % (REPORT_LOGO_URI, caption))
+
 ITEM_KEYS = ("failed", "resent", "truncated", "prefix_unstable", "cache_min", "billing", "cache_hit", "shared_prefix", "flex")
 ITEM_NAMES = dict(ZTITLE, flex=("7-9 OpenAI Flex 후보", "7-9 calls that could use OpenAI Flex"))
 
@@ -9375,24 +9361,24 @@ def _inline(t):
 # reader presses send. Kept to mail and copy so the scanner's no-network proof stays true for the page it writes.
 LEAD_TO = "bee@linklbee.com"
 LEAD_T = {
-    "ko": {"h": "새는 돈을 멈추는 것까지 봐 드립니다",
-           "p": "위 숫자를 저희가 받아 보면, 어디부터 손대야 가장 많이 줄일 수 있는지 회신해 드립니다. 무료입니다.",
-           "email": "회신받을 메일", "company": "회사 이름 (선택)", "note": "하고 싶은 말 (선택)",
-           "send": "무료 정밀 진단 요청", "what": "무엇이 전송되는지 보기",
-           "never": "원문·프롬프트·답·문서 이름·키는 들어 있지 않습니다. 아래가 전부입니다.",
-           "manual": "진단기는 아무것도 보내지 않았습니다. 버튼을 누르시면 메일 앱에 아래 숫자 요약이 채워지고, 보내기는 직접 누르십니다.",
-           "mail": "메일 앱이 열립니다. 보내기를 눌러 주십시오. 메일 앱이 없으면 요약을 복사해 bee@linklbee.com 으로 보내 주십시오.",
-           "copy": "요약 복사", "copied": "복사했습니다", "bademail": "메일 주소를 확인해 주십시오.",
-           "subject": "링클비 정밀 진단 요청"},
-    "en": {"h": "We will help you stop the leak, not just find it",
-           "p": "Send us the numbers above and we will write back with what to fix first for the largest cut. Free of charge.",
-           "email": "Email for our reply", "company": "Company (optional)", "note": "Anything you want to add (optional)",
-           "send": "Request a free deep-dive", "what": "See exactly what gets sent",
-           "never": "No prompts, no answers, no document names, no keys. What you see below is all of it.",
-           "manual": "The scanner has sent nothing. The button fills the numbers summary below into your mail app; you press send.",
-           "mail": "Your mail app will open. Press send there. No mail app? Copy the summary and send it to bee@linklbee.com.",
+    "ko": {"h": "진단 결과를 바탕으로 개선 항목을 검토하세요",
+           "p": "진단 요약을 보내주시면 주요 비용 발생 패턴과 개선 항목의 우선순위를 무료로 검토해 안내합니다.",
+           "email": "답변받을 이메일", "company": "회사명 (선택)", "note": "추가 문의 내용 (선택)",
+           "send": "무료 진단 결과 검토 요청", "what": "공유할 정보 확인",
+           "never": "요약에는 요청·응답 원문, 프롬프트, 문서명, API 키가 포함되지 않습니다. 공유할 내용은 아래에서 확인할 수 있습니다.",
+           "manual": "진단기는 데이터를 자동 전송하지 않습니다. 요청 버튼을 누르면 이메일 앱에 진단 요약이 작성되며, 실제 발송은 사용자가 직접 결정합니다.",
+           "mail": "이메일 앱에서 내용을 확인한 뒤 발송해 주세요. 이메일 앱을 사용할 수 없다면 요약을 복사해 bee@linklbee.com으로 보내 주세요.",
+           "copy": "요약 복사", "copied": "요약을 복사했습니다", "bademail": "이메일 주소를 확인해 주세요.",
+           "subject": "링클비 진단 결과 검토 요청"},
+    "en": {"h": "Review optimization opportunities in your report",
+           "p": "Share the diagnostic summary for a free review of cost patterns, applicable improvements, and suggested priorities.",
+           "email": "Reply email", "company": "Company (optional)", "note": "Additional details (optional)",
+           "send": "Request a free report review", "what": "Review information to share",
+           "never": "The summary excludes prompt and response content, document names, and API keys. Review the information below before sharing.",
+           "manual": "The scanner does not transmit data automatically. This action prepares a diagnostic summary in your email app; you decide whether to send it.",
+           "mail": "Review the message in your email app before sending. If an email app is unavailable, copy the summary and email it to bee@linklbee.com.",
            "copy": "Copy summary", "copied": "Copied", "bademail": "Please check the email address.",
-           "subject": "Linklbee deep-dive request"}}
+           "subject": "LinklBee diagnostic report review"}}
 
 
 def lead_block(summary, lang="ko"):
@@ -9501,7 +9487,8 @@ def report_html(res, lang="ko"):
     import html
     ko, md = lang == "ko", report(res, lang, cache_line=False)
     t = T[lang]
-    head = ['<header><h1>%s</h1><div class="meta">%s%s</div>' % (
+    head = ['<header>%s<h1>%s</h1><div class="meta">%s%s</div>' % (
+        report_brand(lang),
         html.escape(t["title"]), html.escape(head_line(res, ko)),
         ('<span class="syn">%s</span>' % ("[합성] 예시 로그" if ko else "[synthetic] example log")) if res.get("synthetic_calls") else "")]
     s = res.get("savings") or {}
@@ -9523,13 +9510,13 @@ def report_html(res, lang="ko"):
                     % (html.escape(mh[0]), html.escape(mh[1]), _inline(mh[2])))
     if (lo is None or not hi) and lv.get("already_good") and not lv.get("items") and lv.get("nothing_found"):  # PM 07:32 ③
         head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
-                    % (("이미 잘 쓰고 있는 것 — 캐시 읽기 ÷ 입력" if ko else "Already used well — cache reads / input"),
+                    % (("캐시 활용 현황 — 캐시 읽기 토큰 ÷ 입력 토큰" if ko else "Cache utilization — cache-read tokens / input tokens"),
                        pct(lv["already_good"]["cache_hit_rate"]),
-                       renum("1절 — 이 기록에서 캐시로 더 줄일 비중이 거의 없습니다." if ko else "Section 1 — little is left for caching to cut in this log.", ko)
+                       renum("1절 — 이 기록에서 캐시로 추가 절감 가능 비율이 거의 없습니다." if ko else "Section 1 — little is left for caching to cut in this log.", ko)
                        + ((" " + _inline(ch[2])) if ch else "")))
     elif lo is not None:
         head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s ~ %s</div><div class="note">%s</div></div>'
-                    % (("이 로그에서 줄일 수 있는 것 — %s의" if ko else "What this log could save — %s") % what, pct(lo), pct(hi),
+                    % (("이번 로그의 예상 절감 범위 — %s" if ko else "Estimated savings for this log — %s") % what, pct(lo), pct(hi),
                        renum("4절 — 링클비가 다른 공개 문서로 잰 범위를 이 로그의 해당 구간에 대입한 추정입니다. 이 로그로 잰 절감이 아닙니다."
                              if ko else "Section 4 — ranges Linklbee measured on other public documents, applied to this log's "
                                         "reducible calls. Not a saving measured on this log.", ko)))
@@ -9538,7 +9525,7 @@ def report_html(res, lang="ko"):
         # no section-4 range (no answer text, or nothing in the diff cells): the bill's output share is the headline
         head.append('<div class="hero"><div class="lab">%s</div><div class="big">%s</div><div class="note">%s</div></div>'
                     % (("분석 기간 비용 중 출력 비중" if ko else "Output's share of the bill"), pct(res["bill"]["output_share"]),
-                       renum("1절 — 링클비가 줄이는 것이 이 출력입니다." if ko else "Section 1 — this output is what Linklbee shortens.", ko)))
+                       renum("1절 — 출력 토큰은 링클비 최적화의 분석 대상 중 하나입니다." if ko else "Section 1 — output tokens are one area examined for optimization.", ko)))
     W = res.get("waste") or {}
     if W:
         # the same groups as section 7 (PM 10-22 19:15): found leaks, found cheaper ways, needs more data
@@ -9549,8 +9536,8 @@ def report_html(res, lang="ko"):
             if k in W and k not in NO_KNIFE and W[k]["status"] != "none":
                 g = "cannot_judge" if W[k]["status"] == "cannot_judge" else "found" if WKIND[k] == "leak" else "more_found"
                 groups[g].append(html.escape(ITEM_NAMES[k][0 if ko else 1]))
-        names = {"found": ("새고 있는 것", "leaking now"), "more_found": ("더 줄일 수 있는 것", "could cost less"),
-                 "cannot_judge": ("분석이 제한된 항목", "more data would show")}
+        names = {"found": ("비용 증가 요인", "additional costs identified"), "more_found": ("추가 최적화 기회", "additional savings opportunities"),
+                 "cannot_judge": ("추가 데이터가 필요한 항목", "more data required")}
         head.append('<div class="cards">' + "".join(
             '<div class="card %s"><div class="n">%d</div><div class="t">%s</div>%s</div>'
             % ({"cannot_judge": "more", "more_found": "none"}.get(g, g), len(v), names[g][0 if ko else 1],
@@ -9576,8 +9563,8 @@ def report_html(res, lang="ko"):
 def _lead_net(md, ko):
     """The HTML page adds where to send the report; the sentence names the mail address, so it holds on paper too."""
     head = "로그는 이 컴퓨터 밖으로 나가지 않았습니다. 진단기는 아무것도 보내지 않습니다. " if ko else "The scanner has no network code. "
-    add = ("이 리포트를 %s 으로 보내 주시면 더 깊게 봐 드립니다. " % LEAD_TO if ko else
-           "Send this report to %s and we will take a deeper look. " % LEAD_TO)
+    add = ("추가 검토가 필요하면 %s으로 진단 요약을 보내 주세요. " % LEAD_TO if ko else
+           "For an additional review, email the diagnostic summary to %s. " % LEAD_TO)
     return md.replace(head, head + add, 1)
 
 def html_numbers_match(md, page):
@@ -9642,7 +9629,7 @@ def collect_first(lang="ko"):
     ko = lang == "ko"
     wake = globals().get("COLLECT_WAKE") or {}  # N-MIN's table (0c session); without it the hour line is left out
     hour = next((r for r in wake.get("rows") or () if r[0] == 60), None)
-    L = ["", ("이 폴더에서 호출 기록도, 공급사 사용량 파일도 찾지 못했습니다. 기록부터 남기세요." if ko else
+    L = ["", ("이 폴더에서 호출 기록도, AI 제공사 사용량 파일도 찾지 못했습니다. 기록부터 남기세요." if ko else
               "No call log and no vendor usage file in this folder. Start by keeping a record."), ""]
     if os.path.exists(os.path.join(HERE, "linklbee_collect.py")):
         L += [("  앱에서 클라이언트를 만드는 곳에 두 줄을 넣으세요(본문은 기록하지 않습니다):" if ko else
@@ -9658,7 +9645,7 @@ def collect_first(lang="ko"):
               % (((hour[3], hour[2]) if ko else (hour[2], hour[3])) + (b[0 if ko else 1] if isinstance(b, (tuple, list)) else b,))]
     L += ["", ("  모은 뒤 이 폴더에서 다시 %s 를 치세요." if ko else
            "  Then run %s again in this folder.") % command_name(), "",
-          ("  바로 보시려면: 공급사 콘솔의 사용량 파일(OpenAI Usage API·Costs API · OpenAI 콘솔 사용량·비용 CSV · Anthropic Admin API · "
+          ("  바로 보시려면: AI 제공사 콘솔의 사용량 파일(OpenAI Usage API·Costs API · OpenAI 콘솔 사용량·비용 CSV · Anthropic Admin API · "
            "Anthropic 콘솔 비용 CSV · AWS CUR · Azure 비용 내역 · Fireworks · Together)을 이 폴더에 두고 다시 치세요. 지금 바로 일부 항목을 봅니다." if ko else
            "  To see something now: put the vendor's usage file (OpenAI Usage or Costs API, OpenAI console usage or cost "
            "CSV, Anthropic Admin API, Anthropic console cost CSV, AWS CUR, Azure cost details, Fireworks, Together) in this folder and run it again. "
@@ -9682,13 +9669,13 @@ def unread_lines(path, ko, blank=None):
         return [("  파일이 비어 있습니다. 기록이 들어간 파일을 넣어 주세요." if ko else
                  "  The file is empty. Point it at the file the records went to."), ""]
     return [("  읽으려 한 모양: 한 줄에 JSON 하나(앞에 시각·글이 붙은 줄, 한 줄에 여럿 포함) · JSON 배열 · {\"data\": [...]} 같은 "
-             "감싼 JSON · CSV · 공급사 응답 원형 · Langfuse·LangSmith·Helicone·LiteLLM·Bedrock·Vertex·Gemini·Azure 내보내기." if ko else
+             "감싼 JSON · CSV · AI 제공사 응답 원형 · Langfuse·LangSmith·Helicone·LiteLLM·Bedrock·Vertex·Gemini·Azure 내보내기." if ko else
              "  Shapes tried: one JSON object a line (also with text before it, or several on a line), JSON arrays, wrapped "
              "JSON such as {\"data\": [...]}, CSV, raw vendor responses, and Langfuse, LangSmith, Helicone, LiteLLM, Bedrock, Vertex, Gemini and Azure exports."),
             ("  지금 읽게 하려면: %s --peek <파일> 로 칸 이름을 본 뒤 --map model=<칸> ts=<칸> output=<칸> 처럼 알려 주세요." if ko else
              "  To read it now: %s --peek <file> shows its field names; then pass --map model=<field> ts=<field> "
              "output=<field>.") % command_name(),
-            ("  이 파일의 첫 줄(본문은 지워도 됩니다)을 보여 주시면 다음 판에서 읽습니다." if ko else
+            ("  이 파일의 첫 줄(본문은 지워도 됩니다)을 보여 주시면 다음 버전에서 읽습니다." if ko else
              "  Show us its first line (blank out the text if you like) and the next version reads it."), ""]
 
 
@@ -9709,7 +9696,7 @@ def guide(lang="ko", empty=None):
            "     No conversion needed: JSONL, JSON arrays, CSV, .log (one JSON per line), .gz; raw OpenAI and Anthropic "
            "responses; Langfuse, LangSmith, Helicone, LiteLLM, Bedrock, Vertex, Gemini and Azure OpenAI exports. A folder "
            "is read file by file."), "",
-          ("  2  공급사 콘솔·청구 파일은 받을 수 있다" if ko else "  2  I can download a usage or cost file from the vendor"),
+          ("  2  AI 제공사 콘솔·청구 파일은 받을 수 있다" if ko else "  2  I can download a usage or cost file from the vendor"),
           "     %s <%s>" % (me, "받은 파일" if ko else "downloaded file"),
           ("     OpenAI 사용량(Usage API)·비용(Costs API) · OpenAI 콘솔 사용량·비용 CSV · Anthropic 사용량 보고(Admin API) · "
            "Anthropic 콘솔 비용 CSV · AWS 비용·사용 보고서(CUR) · Azure 비용 내역 · Fireworks 사용량 · Together 비용 CSV 를 그대로 넣으세요. 모델별 지출·입출력 비중·캐시 읽기·시간대가 나옵니다."
@@ -9817,9 +9804,9 @@ def main(argv=None):
             import html as _h
             open(a.out, "w", encoding="utf-8").write(
                 '<!DOCTYPE html>\n<html lang="%s"><head><meta charset="utf-8"><meta name="viewport" '
-                'content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body><header><h1>%s'
+                'content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body><header>%s<h1>%s'
                 '</h1><div class="meta">%s</div></header>\n%s</body></html>\n'
-                % (a.lang, _h.escape(T[a.lang]["title"]), REPORT_CSS, _h.escape(T[a.lang]["title"]),
+                % (a.lang, _h.escape(T[a.lang]["title"]), REPORT_CSS, report_brand(a.lang), _h.escape(T[a.lang]["title"]),
                    _h.escape(head_line(res, a.lang == "ko")), _md_html(md)))
             print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
         elif a.out:
@@ -9844,7 +9831,7 @@ def main(argv=None):
     if a.out and a.out != os.devnull:
         print(("리포트: %s" if a.lang == "ko" else "report: %s") % os.path.abspath(a.out))
     if a.demo:
-        print(("[합성] 예시 로그로 돌린 리포트입니다. 자기 로그는 %s --logs <파일 또는 폴더>" if a.lang == "ko" else
+        print(("[합성] 예시 로그로 돌린 리포트입니다. 실제 로그는 %s --logs <파일 또는 폴더>" if a.lang == "ko" else
                "[synthetic] This report used the example log. To scan your own: %s --logs <file or folder>") % command_name())
     if res.get("error") or not res.get("calls"):
         guide(a.lang, a.logs)

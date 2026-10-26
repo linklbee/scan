@@ -2,9 +2,9 @@
 
 # Linklbee scanner
 
-**Find where your LLM API bill leaks.** The scanner reads your LLM call log on your own machine and writes a one-page report of where token spend goes: prompts too short for the vendor's cache, the cache hit rate, prefixes repeated across calls, identical calls resent seconds apart, and failed or cut-off calls that were still billed. If your service writes new versions of the same documents, it also shows how much output could be saved by rewriting only the parts that changed.
+**Identify LLM API cost drivers and optimization opportunities from actual call patterns.** The scanner analyzes logs locally without uploading raw logs. It reviews caching conditions, repeated requests, output limits and retries, shared prefixes, and potential response reuse. For document revisions, it identifies opportunities to generate only the changed portions of a previous response.
 
-If the log lacks a field an item needs, the report does not guess. It names the field that would show the item. Every number comes from the log you give it.
+If essential fields are missing, the report explains the limitation rather than inventing estimates. **Estimated savings are not realized savings; actual results require measurement after integration.**
 
 ## Install and run
 
