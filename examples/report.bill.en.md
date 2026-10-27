@@ -1,6 +1,6 @@
 # Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.6 · 2 files · 한국어: --lang ko
+scanner 1.4.7 · 2 files · 한국어: --lang ko
 
 **Cache hit rate 50.8%** — the share of input tokens read from the cache (the vendor's usage totals). Details in section 3. By model it runs from 47.6% to 70.5%.
 
@@ -42,7 +42,7 @@ scanner 1.4.6 · 2 files · 한국어: --lang ko
 
 ### Additional savings opportunities
 
-- [code 7-9] what could go to OpenAI Flex — **found (upper bound)**
+- [code 7-9] what could go to OpenAI Flex — **improvement found (upper bound)**
   - 4 summary rows on Flex-table models (gpt-5.6-luna): 1,335,998 input tokens (cache included) and 25,213 output tokens, $0.13 at list prices. Flex runs the same model at half the standard rate (Batch rates, price list 2026-10-21). Sending all of it at Flex would cost **at most $0.06** less.
   - An upper bound. This file cannot tell which calls can wait. A call log narrows it to calls that were not streamed.
 

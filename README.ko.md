@@ -23,7 +23,7 @@ python3 linklbee_scan.py calls.jsonl --out report.html                   # 한�
 python3 linklbee_scan.py calls.jsonl --lang en --out report.html         # English report
 ```
 
-답 본문을 남기지 않아도 출력 비중은 나옵니다. `model`·`input_tokens`·`output_tokens` 만 있으면 "청구서에서 출력이 몇 %인가"가 본문 없이 계산됩니다. 링클비가 줄이는 것이 그 출력입니다.
+답 본문을 남기지 않아도 출력 비중은 나옵니다. `model`·`input_tokens`·`output_tokens` 만 있으면 "청구서에서 출력이 몇 %인가"가 본문 없이 계산됩니다. 입력·출력 비용 구성을 확인하고, 데이터가 지원하는 최적화 항목을 분석합니다.
 
 ## 먼저 `--peek` — 실행 전에 로그를 어떻게 읽을지 확인하세요
 
@@ -69,7 +69,7 @@ OpenAI Batch API 결과 줄(`response.body` 안)과 `{"request": …, "response"
 | Google Vertex AI · Gemini API | 응답 원형 |
 | Azure OpenAI | Chat Completions 로그 |
 
-필드 경로는 각 도구의 공식 문서에 적힌 것만 씁니다. 모양마다 [합성] 예시 한 파일이 `examples/adapters/` 에 있습니다.
+필드 경로는 각 도구의 공식 문서에 적힌 것만 씁니다. 지원 형식별 [합성] 예시 파일이 `examples/adapters/` 에 있습니다.
 
 표에 없는 모양이면 `--map` — 스크립트를 쓰지 않고 한 줄로 맞춥니다. 점 표기, 배열은 번호(`choices.0.message.content`).
 
@@ -83,8 +83,8 @@ JSON 배열 내보내기도 읽습니다. 파일이 `[` 로 시작하면 한 줄
 ## 이 파일이 아직 없다면
 
 - 답 본문까지 남기고 있다 → 위 표대로 바로 됩니다. 모양이 다르면 `--peek` 를 보고 `--map` 한 줄.
-- 토큰 수만 남긴다 → 1절(청구서에서 출력이 몇 %인가)은 본문 없이 나옵니다. 문서끼리 얼마나 닮았는지와 예상 절감 범위는 답 본문이나 토큰 해시(`--hashify`)가 있어야 나옵니다.
-- 아무것도 안 남긴다 → `ts` 와 `output` 두 개만 남기기 시작하면 됩니다. 기존 호출 바로 뒤에 아래 다섯 줄을 붙이세요(의존성 0). `model`·토큰 수까지 넣으면 금액이 나옵니다. 같은 문서의 판들을 묶는 id 가 있으면 `"group_key"` 로 넣으세요.
+- 토큰 수만 남긴다 → 1절(청구서에서 출력이 몇 %인가)은 본문 없이 나옵니다. 응답 간 유사도(토큰 기준)와 예상 절감 범위는 답 본문이나 토큰 해시(`--hashify`)가 있어야 나옵니다.
+- 호출 기록을 아직 저장하지 않는다 → `ts` 와 `output` 두 개만 남기기 시작하면 됩니다. 기존 호출 바로 뒤에 아래 다섯 줄을 붙이세요(의존성 0). `model`·토큰 수까지 넣으면 금액이 나옵니다. 같은 문서의 판들을 묶는 id 가 있으면 `"group_key"` 로 넣으세요.
 
 Python (OpenAI SDK; Anthropic 이면 `resp.content[0].text`, `u.input_tokens`, `u.output_tokens`):
 
@@ -169,15 +169,15 @@ python3 linklbee_scan.py --logs hashed.jsonl --out report.md
 
 `--share summary.json` 을 붙이면 화면에 공유용 요약 몇 줄도 나옵니다(호출 수 · 줄일 여지 추정 · 출력 몫 · 발견한 낭비 항목). 본문·파일 이름·회사명·키는 들어 있지 않으니 그대로 복사해서 붙이면 됩니다.
 
-링클비에 무엇을 보낼지는 직접 정하시고, 보내실 때도 직접 보내세요 — 진단기는 아무것도 보내지 않습니다. 리포트는 위와 같이 프롬프트·답 원문이 없어 그대로 보내셔도 되고, 가장 작게 보내려면 `--share summary.json` 이 쓴 통계 파일만 보내셔도 됩니다.
+상담이 필요하면 공유용 통계 파일을 선택해 보내실 수 있습니다. 원본 로그나 API 키는 보내지 마세요. 진단기는 아무것도 보내지 않습니다. 리포트는 위와 같이 프롬프트·답 원문이 없어 그대로 보내셔도 되고, 가장 작게 보내려면 `--share summary.json` 이 쓴 통계 파일만 보내셔도 됩니다.
 
-리포트를 링클비에 보낼지는 직접 정하시면 됩니다. 보내고 싶으시면 `--share summary.json` 으로 떨어지는 통계 파일만 직접 골라 보내시면 됩니다.
+리포트를 보낼지는 직접 정하시면 됩니다. `--share summary.json`으로 생성한 통계 파일만 골라 보내셔도 됩니다.
 
 ## 리포트가 보는 것 — 실린 순서대로 한 줄씩
 
-- 요약 — 새고 있는 돈과 더 줄일 수 있는 돈의 합(7절 금액, 범위는 아래쪽 값). 최소 기준이라는 한 줄
+- 요약 — 확인된 추가 비용과 추가 절감 가능 금액의 합(7절 금액, 범위가 있는 항목은 하한값). 표시 금액은 진단 기준에 따라 산정한 값이라는 한 줄
 - 0절 읽은 것 — 호출 수·기간·모델, 어느 필드를 어디서 읽었는지, 본문 없는 호출처럼 숫자에서 빠진 몫
-- 7절 낭비 점검서 — 7-1 실패 호출 과금 · 7-2 짧은 간격 재전송 · 7-3 길이 상한에서 잘린 답 · 7-4 요청 접두 직렬화 불안정 · 7-5 캐시 최소 길이 미달 · 7-6 과금 대조 · 7-7 캐시 적중률 · 7-8 호출끼리 같은 접두 · 7-9 OpenAI Flex 로 보낼 수 있었던 호출. 항목마다 발견 / 없음 / 더 보려면(로그에 있으면 보는 필드)
+- 7절 낭비 점검서 — 7-1 실패 호출 과금 · 7-2 짧은 간격 재전송 · 7-3 길이 상한에서 잘린 답 · 7-4 요청 접두 직렬화 불안정 · 7-5 캐시 최소 길이 미달 · 7-6 과금 대조 · 7-7 캐시 적중률 · 7-8 호출끼리 같은 접두 · 7-9 OpenAI Flex 로 보낼 수 있었던 호출. 항목마다 개선 항목 확인 / 해당 항목 없음 / 추가 데이터 필요(로그에 있으면 보는 필드)
 - 3절 줄일 수 있는 요청의 비중 — 이전 답을 고쳐 써서 줄일 수 있는 출력이 몇 %인가
 - 4절 예상 절감 범위 — 링클비가 잰 범위를 이 로그의 해당 구간에 대입한 값(이 로그에서 잰 절감이 아님)
 - 2절 답 쌍 분포 — 3절의 근거 표(문서 닮음 × 답 길이)
@@ -188,8 +188,8 @@ python3 linklbee_scan.py --logs hashed.jsonl --out report.md
 ## 리포트를 읽는 법
 
 - 줄일 수 있는 비중 — 이전 답과 다음 답이 토큰 기준 0.78 이상 같고 답이 200토큰 이상인 요청의 출력이 전체 출력의 몇 %인가. 이 로그에서 잰 값입니다.
-- 절감 범위 — 이 로그에서 잰 값이 **아닙니다.** 링클비가 공개 문서로 실호출해 잰 범위를 해당 구간에 대입한 예상 범위이고, 리포트에 그렇게 적힙니다. 실제 값은 일부 요청을 비교용으로 남겨 두는 파일럿에서 확인합니다.
-- 닮음 0.78, 길이 200 은 다른 데이터에서 읽은 기본선입니다. 데이터마다 맞는 선이 다르고, 리포트의 폭(몇 판에 한 번 부르는가) 표처럼 이 로그로 다시 맞춘 값은 그렇다고 적힙니다.
+- 절감 범위 — 링클비가 공개 문서로 실호출해 잰 결과를 이 로그의 후보 구간에 적용한 예상 범위입니다(이 로그에서 잰 값이 아니고, 리포트에 그렇게 적힙니다). 실제 효과는 일부 요청을 비교용으로 남겨 두는 파일럿에서 확인합니다.
+- 유사도 0.78과 응답 길이 200토큰은 현재 진단 기준값입니다. 데이터마다 맞는 선이 다르고, 리포트는 이 로그로 다시 맞춘 값(폭 표처럼 몇 판에 한 번 부르는가)과 기준값을 구분해 적습니다.
 
 ## 안 되는 것
 
@@ -232,7 +232,7 @@ One file (`linklbee_scan.py`). Python 3.9+, standard library only. No `pip insta
 
 Run it with no arguments to see these options. If it finds nothing to read, it shows the same options instead of an error.
 
-No answer text in the log? Output's share of the bill still comes out. `model`, `input_tokens` and `output_tokens` are enough. That output is what Linklbee shortens.
+No answer text in the log? Output's share of the bill still comes out. `model`, `input_tokens` and `output_tokens` are enough. The report then reviews the input/output cost mix and the optimization items the data supports.
 
 ### Check first with `--peek`
 
@@ -387,14 +387,14 @@ Whether to send anything to Linklbee is up to you, and you send it by hand — t
 - 4 Estimated savings — ranges Linklbee measured, applied to this log's matching calls (not a saving measured on this log)
 - 5 Answering without a call — calls whose prompt matches the previous one apart from digits
 - 6 Notes — what is left out of the numbers, such as calls without text
-- 7 Waste checklist — 7-1 billed failed calls · 7-2 quick resends · 7-3 answers cut off at the length limit · 7-4 inconsistent prefix serialization · 7-5 prompts under the cache minimum · 7-6 billing check · 7-7 cache hit rate · 7-8 prefixes shared across calls · 7-9 calls that could use OpenAI Flex. Each one is found / none / needs more data (with the field that would show it)
+- 7 Waste checklist — 7-1 billed failed calls · 7-2 quick resends · 7-3 answers cut off at the length limit · 7-4 inconsistent prefix serialization · 7-5 prompts under the cache minimum · 7-6 billing check · 7-7 cache hit rate · 7-8 prefixes shared across calls · 7-9 calls that could use OpenAI Flex. Each one is improvement found / nothing found / needs more data (with the field that would show it)
 - 8 Items that came out 0 — why, and what would change it (only when an item is 0)
 
 ### How to read the report
 
 - Reducible share: the share of all output that comes from calls whose answer matches the previous answer at 0.78 or more (by tokens) and runs 200+ tokens. Measured on this log.
-- Savings range: **not** measured on this log. Linklbee measured these ranges with real calls on public documents, and the report applies them to the matching calls and labels them that way. The real value comes from a pilot that holds back some calls for comparison.
-- The 0.78 similarity and 200-token lines are defaults taken from other data. The right line differs by data. Where the report refits a value to this log, such as the span table (how many versions between calls), it says so.
+- Savings range: Linklbee's real-call measurements on public documents, applied to this log's candidate calls — an expected range, not a value measured on this log, and the report labels it that way. The real effect comes from a pilot that holds back some calls for comparison.
+- The 0.78 similarity and 200-token lines are the current diagnostic thresholds. The right line differs by data, and the report tells values refit to this log, such as the span table (how many versions between calls), apart from the thresholds.
 
 ### Limits
 

@@ -62,7 +62,7 @@ A developer using Claude Code can try it on this machine's own records: `linklbe
 - Prefixes shared across calls that could be cached
 - Calls that could use OpenAI Flex
 
-Each item is reported as found, none, or needs more data — with the field that would show it.
+Each item is reported as improvement found, nothing found, or needs more data — with the field that would show it.
 
 ## No log file yet?
 
