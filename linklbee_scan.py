@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.5 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.6 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -16,7 +16,7 @@ import types
 # savings bands shown in the report (public ranges only) and the dated price table
 BANDS_JSON = r"""{
   "about": "Public savings bands for the scanner report: per switch-on overlap row, a range only. Each band covers every measured cell of its row (failed-edit re-call cost included where call records exist), rounded outward to 5 points (rounding step is a design value).",
-  "measured": {"ko": "공개 문서 3종(상품 설명·의약품 허가사항 개정·법령 조문 개정), 실호출, 실패한 변경 부분만 생성를 처음부터 다시 쓴 비용 포함(상품 설명은 호출 기록이 없어 미포함), 2026-10",
+  "measured": {"ko": "공개 문서 3종(상품 설명·의약품 허가사항 개정·법령 조문 개정), 실호출, 실패한 변경 부분만 생성을 처음부터 다시 쓴 비용 포함(상품 설명은 호출 기록이 없어 미포함), 2026-10",
                "en": "three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10"},
   "switch": {"min_overlap": 0.78, "min_answer_tokens": 200},
   "overlap_bands": [["<0.60", 0.0, 0.60], ["0.60-0.78", 0.60, 0.78], ["0.78-0.95", 0.78, 0.95], [">=0.95", 0.95, 1.01]],
@@ -39,7 +39,7 @@ BANDS_JSON = r"""{
 
 CACHE_JSON = r"""{
  "as_of": "2026-10-20",
- "source": "vendor prompt-caching documents, read 2026-10-20 (PM .remote/PM-20261020-축추가.md section 3); the full JSON of the project document linklbee-AI 제공사캐시상수-20261020.md was not on this machine, so only the values in that table are here",
+ "source": "vendor prompt-caching documents, read 2026-10-20 (PM .remote/PM-20261020-축추가.md section 3); the full JSON of the project document linklbee-벤더캐시상수-20261020.md was not on this machine, so only the values in that table are here",
  "note": "min_tokens = the shortest prompt the vendor caches. A model that is not listed is not guessed: the report says it cannot judge (Anthropic alone spans 512 to 4,096, 8x).",
  "vendors": {
   "anthropic": {
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.5"
+VERSION = "1.4.6"
 
 
 def _default_lang():
@@ -5952,7 +5952,7 @@ T = {
                "응답 본문은 메모리에서만 읽고, 이 리포트와 JSON 에는 본문과 문서 id 가 들어가지 않습니다(개수와 비율만).",
     },
     "en": {
-        "title": "LinklBee LLM API Cost Diagnostic Report", "s0": "0. What was read", "s1": "1. How much of the bill is output",
+        "title": "Linklbee LLM API Cost Diagnostic Report", "s0": "0. What was read", "s1": "1. How much of the bill is output",
         "s2": "2. Answer pairs by similarity and length", "s3": "3. Reducible share — the conclusion",
         "s4": "4. Estimated savings (expected range)", "s5": "5. Answering without a call", "s6": "6. Notes",
         "net": "The scanner has no network code. To check: `grep -cE \"ht[t]p|sock[e]t|url[l]ib\" linklbee_scan.py` -> 0. "
@@ -6156,7 +6156,7 @@ def head_summary(res, ko):
                     "is displayed as $0.00 at two decimal places. Your report uses amounts from your own log.")
                    % (usd(bill), leak_sum or 0.0))
     out += ["", ("위 금액은 진단 로그에 근거한 추정치입니다. 실제 절감 효과는 적용 후 기준 요청과 비교해 확인합니다." if ko else
-                 "These figures are estimates derived from the supplied logs. Actual savings are verified after deployment against baseline requests."), ""]
+                 "These figures are estimates derived from the supplied logs. Actual savings are verified after deployment against baseline calls."), ""]
     return out
 
 
@@ -9333,7 +9333,7 @@ REPORT_LOGO_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABuQAAAGFCAYAAAA
 
 def report_brand(lang):
     caption = "LLM API 비용 진단 리포트" if lang == "ko" else "LLM API COST DIAGNOSTIC"
-    return ('<div class="report-brand"><img alt="LinklBee" src="%s">'
+    return ('<div class="report-brand"><img alt="Linklbee" src="%s">'
             '<span class="report-label">%s</span></div>' % (REPORT_LOGO_URI, caption))
 
 ITEM_KEYS = ("failed", "resent", "truncated", "prefix_unstable", "cache_min", "billing", "cache_hit", "shared_prefix", "flex")
@@ -9378,7 +9378,7 @@ LEAD_T = {
            "manual": "The scanner does not transmit data automatically. This action prepares a diagnostic summary in your email app; you decide whether to send it.",
            "mail": "Review the message in your email app before sending. If an email app is unavailable, copy the summary and email it to bee@linklbee.com.",
            "copy": "Copy summary", "copied": "Copied", "bademail": "Please check the email address.",
-           "subject": "LinklBee diagnostic report review"}}
+           "subject": "Linklbee diagnostic report review"}}
 
 
 def lead_block(summary, lang="ko"):
@@ -9854,7 +9854,7 @@ minhash_lsh = types.SimpleNamespace(LSH=LSH, signature_oph=signature_oph)
 
 # examples/calls.sample.jsonl ([synthetic] demo log), gzip, hex
 DEMO_LOG_GZ = """
-1f8b08000000000002ffecbd7b73eb469667fbfffd140c774cdc99081c05124f1211a81b5d76b9dbddb6bbda75ce9c997b6b
+1f8b0800000000000213ecbd7b73eb469667fbfffd140c774cdc99081c05124f1211a81b5d76b9dbddb6bbda75ce9c997b6b
 a28247a2658d29512625b9351df5ddefde99009f9044520009902ba2cad2a1f800f148ac95bf9d99fff9d5c3ecabacf755e0
 07c9077ff0c1371f4d98f969e6fbffef575eefabdbc9d568ac4fb81c0f1faf461f6693bbbbd1c387f843ac7fbd9e4e1eefff
 f6ebe8599ff1309adece3ef8befee17e3ab9bd7fd0473f4f6f1e46bd875f46bd1f27d3875f7ebfb9bbeafde561321d5e8f7a

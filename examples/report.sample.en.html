@@ -1,153 +1,131 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Linklbee diagnostic report</title><style>
-
-:root{
-  --ink:#312723; --bg:#ffffff; --fg:#312723; --acc:49,39,35;
-  --f1:color-mix(in srgb,#312723 4%,transparent);
-  --f2:color-mix(in srgb,#312723 7%,transparent);
-  --mut:color-mix(in srgb,#312723 62%,transparent);
-  --faint:color-mix(in srgb,#312723 42%,transparent);
-  --line:color-mix(in srgb,#312723 14%,transparent);
-  --line2:color-mix(in srgb,#312723 26%,transparent);
-  --found:#a3261c; --none:#1e6b3e; --more:#8a6d1f;
-  --sans:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  color-scheme:light;
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Linklbee LLM API Cost Diagnostic Report</title><style>
+:root {
+ --bg:#fcfbf5;--ink:#342923;--fg:#342923;--brand:#2452e8;--acc:36,82,232;
+ --paper:#ffffff;--soft:#f3f3ef;--brand-tint:#edf1ff;--f1:#f6f5f0;--f2:#efeee8;
+ --mut:#615b56;--faint:#77716b;--line:#e3e0d8;--line2:#cfcac0;
+ --found:#a3261c;--none:#286d48;--more:#80681b;
+ --sans:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Segoe UI",Roboto,sans-serif;
+ --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ color-scheme:light;
 }
-@media (prefers-color-scheme:dark){:root{
-  --ink:#f2efed; --bg:#241d1a; --fg:#f2efed; --acc:242,239,237;
-  --f1:color-mix(in srgb,#ffffff 5%,transparent);
-  --f2:color-mix(in srgb,#ffffff 9%,transparent);
-  --mut:color-mix(in srgb,#f2efed 68%,transparent);
-  --faint:color-mix(in srgb,#f2efed 46%,transparent);
-  --line:color-mix(in srgb,#ffffff 14%,transparent);
-  --line2:color-mix(in srgb,#ffffff 26%,transparent);
-  --found:#f08b80; --none:#7fd18b; --more:#dcc06a;
-  color-scheme:dark;
-}}
-
 *{box-sizing:border-box}
 html{background:var(--bg)}
-body{margin:0 auto;max-width:880px;padding:40px 24px 72px;background:var(--bg);color:var(--fg);
-  font:400 15px/1.65 var(--sans);word-break:keep-all;overflow-wrap:anywhere;
-  -webkit-font-smoothing:antialiased}
-
-header{padding-bottom:28px;border-bottom:1px solid var(--line2);margin-bottom:8px}
-h1{font-size:26px;line-height:1.18;font-weight:600;letter-spacing:-.02em;margin:0 0 6px;color:var(--fg)}
-.meta{color:var(--faint);font:400 12px/18px var(--mono);font-variant-numeric:tabular-nums}
-.syn{display:inline-block;font:600 11px/18px var(--sans);background:var(--f2);color:var(--mut);
-  padding:0 7px;border-radius:3px;margin-left:7px;vertical-align:1px}
-
-h2{font-size:19px;line-height:1.3;font-weight:600;letter-spacing:-.012em;
-  margin:46px 0 14px;padding-top:0;border-top:0}
-h2::before{content:"";display:block;width:26px;height:2px;background:var(--line2);margin-bottom:13px}
-h3{font-size:15px;line-height:1.5;font-weight:600;margin:24px 0 6px}
-
-.hero{margin:26px 0 10px}
-.hero .lab{font-size:13px;line-height:20px;color:var(--mut)}
-.hero .big{font:600 44px/1.08 var(--sans);letter-spacing:-.03em;color:var(--fg);
-  font-variant-numeric:tabular-nums;margin-top:2px}
-.hero .note{font-size:13px;line-height:20px;color:var(--faint);margin-top:4px}
-
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:26px 0;
-  border-top:1px solid var(--line2)}
-.card{border:0;border-radius:0;padding:16px 20px 14px 0;min-width:0}
-.card + .card{padding-left:20px;border-left:1px solid var(--line)}
-.card .t{font-size:12px;line-height:18px;color:var(--mut)}
-.card .n{font:600 28px/1.2 var(--sans);letter-spacing:-.025em;
-  font-variant-numeric:tabular-nums;margin-top:2px}
-.card ul{margin:7px 0 0;padding-left:16px;font-size:13px;line-height:1.55;color:var(--mut)}
-.card.found .n{color:var(--found)} .card.none .n{color:var(--none)} .card.more .n{color:var(--more)}
-
-.bar{margin:10px 0 0;color:var(--fg)}
-.bar svg{width:100%;height:auto;display:block}
-
-table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
-th,td{padding:9px 12px 9px 0;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
-th:last-child,td:last-child{padding-right:0}
-thead th,th{font-size:12px;line-height:18px;color:var(--faint);font-weight:600;
-  border-bottom:1px solid var(--line2);padding-bottom:8px}
+body{margin:0 auto;max-width:1120px;padding:54px 48px 92px;background:var(--bg);color:var(--fg);
+ font:400 15px/1.74 var(--sans);word-break:keep-all;overflow-wrap:anywhere;
+ -webkit-font-smoothing:antialiased}
+header{padding-bottom:32px;border-bottom:1px solid var(--line2);margin-bottom:12px}
+.report-brand{display:flex;align-items:center;justify-content:space-between;gap:18px;
+ padding-bottom:21px;margin-bottom:28px;border-bottom:2px solid var(--brand)}
+.report-brand img{display:block;width:168px;max-width:58%;height:auto;object-fit:contain;object-position:left center}
+.report-brand .report-label{font:700 10.5px/1.4 var(--sans);color:var(--brand);
+ letter-spacing:.12em;text-align:right;text-transform:uppercase}
+h1{font-size:clamp(26px,3.5vw,42px);line-height:1.22;font-weight:750;letter-spacing:-.04em;
+ margin:0 0 9px;color:var(--ink)}
+.meta{color:var(--faint);font:400 12px/1.65 var(--mono);font-variant-numeric:tabular-nums}
+.syn{display:inline-block;font:650 11px/18px var(--sans);background:var(--f2);color:var(--mut);
+ padding:1px 8px;border-radius:3px;margin-left:8px;vertical-align:1px}
+h2{font-size:clamp(19px,2.4vw,23px);line-height:1.4;font-weight:740;letter-spacing:-.024em;
+ margin:48px 0 18px;padding-top:20px;border-top:1px solid var(--line)}
+h2::before{content:"";display:block;width:34px;height:3px;background:var(--brand);margin-bottom:15px}
+h3{font-size:16px;line-height:1.5;font-weight:700;margin:26px 0 8px;letter-spacing:-.015em}
+p{margin:10px 0}
+.hero{margin:27px 0 17px;padding:23px 28px 25px;background:var(--paper);
+ border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:5px}
+.hero .lab{font-size:13px;line-height:1.55;color:var(--mut);font-weight:600}
+.hero .big{font:760 clamp(33px,5.8vw,56px)/1.12 var(--sans);letter-spacing:-.05em;
+ color:var(--brand);font-variant-numeric:tabular-nums;margin-top:7px}
+.hero .note{font-size:13px;line-height:1.65;color:var(--mut);margin-top:9px}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:26px 0 10px}
+.card{background:var(--paper);border:1px solid var(--line);border-top:3px solid var(--brand);
+ border-radius:5px;padding:20px;min-width:0}
+.card .n{font:750 34px/1.15 var(--sans);letter-spacing:-.04em;
+ font-variant-numeric:tabular-nums;color:var(--ink);margin-bottom:9px}
+.card .t{font-size:13px;line-height:1.5;color:var(--mut);font-weight:650}
+.card ul{margin:12px 0 0;padding-left:17px;font-size:12.5px;line-height:1.65;color:var(--mut)}
+.card.found{border-top-color:var(--found)}.card.found .n{color:var(--found)}
+.card.none .n{color:var(--brand)}.card.more .n{color:var(--ink)}
+.bar{margin:9px 0 0;color:var(--fg)}.bar svg{width:100%;height:auto;display:block}
+table{border-collapse:collapse;width:100%;margin:16px 0 21px;font-size:13.5px;
+ background:var(--paper);border:1px solid var(--line)}
+th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+thead th,th{font-size:12px;line-height:1.5;color:var(--mut);font-weight:700;
+ border-bottom:2px solid var(--line2);background:var(--soft)}
 tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--brand-tint)}
 td.num,td.money,td.r,th.r{text-align:right;font-family:var(--mono);font-size:13px;
-  font-variant-numeric:tabular-nums}
+ font-variant-numeric:tabular-nums}
 th.r{font-family:var(--sans);font-size:12px}
 td.heat{text-align:right;font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;
-  -webkit-print-color-adjust:exact;print-color-adjust:exact}
-
-ul{padding-left:19px;margin:9px 0}
-li{margin:5px 0}
-li li{font-size:14px;color:var(--mut)}
-
-code{font:13px/1.5 var(--mono);background:var(--f2);padding:1px 5px;border-radius:3px;
-  word-break:break-all}
-pre{font:12.5px/1.55 var(--mono);margin:9px 0 0;padding:12px 14px;background:var(--f1);
-  border:1px solid var(--line);border-radius:4px;overflow-x:auto}
-pre code{background:none;padding:0}
-
-.badge{display:inline-block;font:600 11px/17px var(--sans);padding:0 7px;border-radius:3px;
-  border:0;margin-right:6px;margin-left:0;vertical-align:1px;white-space:nowrap}
-.badge.found{background:var(--f2);color:var(--mut)}
-.badge.none{background:var(--f2);color:var(--none)}
-.badge.more{background:var(--ink);color:var(--bg)}
-
-.wrap{overflow-x:auto;max-width:100%}
+ -webkit-print-color-adjust:exact;print-color-adjust:exact}
+ul{padding-left:20px;margin:11px 0}li{margin:6px 0}li li{font-size:14px;color:var(--mut)}
+strong{font-weight:700}
+code{font:12.5px/1.5 var(--mono);background:var(--f2);padding:2px 5px;border-radius:3px;word-break:break-all}
+pre{font:12.5px/1.58 var(--mono);margin:12px 0 18px;padding:17px 18px;
+ background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--brand);
+ border-radius:4px;overflow-x:auto}pre code{background:none;padding:0}
+.badge{display:inline-block;font:650 11px/1.6 var(--sans);padding:2px 8px;border-radius:3px;
+ border:0;margin-right:6px;vertical-align:1px;white-space:nowrap}
+.badge.found{background:#f9e9e7;color:#8c251b}.badge.none{background:#e8f3ed;color:#286d48}
+.badge.more{background:var(--brand-tint);color:var(--brand)}
+.wrap{overflow-x:auto;max-width:100%;border-radius:5px}
 .card,section,header{min-width:0}
-
-footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
-  color:var(--faint);font-size:12px;line-height:19px}
-
-@media (max-width:640px){
-  body{padding:28px 18px 56px;font-size:14.5px}
-  h1{font-size:22px}
-  .cards{grid-template-columns:1fr;border-top:0}
-  .card{padding:14px 0;border-top:1px solid var(--line)}
-  .card + .card{padding-left:0;border-left:0}
-  .hero .big{font-size:34px}
+footer{margin-top:66px;padding-top:20px;border-top:2px solid var(--brand);
+ color:var(--faint);font-size:12px;line-height:1.8}
+.lead{margin-top:42px;padding:29px 30px 28px;background:var(--brand-tint);
+ border:1px solid #cbd5ff;border-radius:6px}
+.lead h3{margin:0 0 6px;font-size:21px;line-height:1.45;font-weight:740}
+.lead p.l{margin:0 0 18px;font-size:14px;line-height:1.65;color:var(--mut);max-width:70ch}
+.lead .row{display:flex;flex-wrap:wrap;gap:9px;align-items:flex-start}
+.lead input,.lead textarea{font:400 14px/1.5 var(--sans);padding:12px 13px;
+ border:1px solid var(--line2);border-radius:4px;background:var(--paper);color:var(--ink);min-width:0}
+.lead input{flex:1 1 210px}.lead textarea{flex:1 1 100%;min-height:64px;resize:vertical}
+.lead input:focus,.lead textarea:focus{outline:2px solid var(--brand);outline-offset:1px}
+.lead button{font:700 14px/1.5 var(--sans);padding:12px 18px;border:1px solid var(--brand);
+ border-radius:4px;cursor:pointer;background:var(--brand);color:#fff;white-space:nowrap}
+.lead button.ghost{background:transparent;color:var(--brand);font-weight:650}
+.lead button:disabled{opacity:.55;cursor:default}
+.lead .note{margin-top:13px;font-size:12.5px;line-height:1.65;color:var(--mut)}
+.lead .msg{margin-top:12px;font-size:13.5px;line-height:1.6;font-weight:650}
+.lead .msg.bad{font-weight:400;color:var(--found)}
+.lead details{margin-top:15px}.lead summary{font-size:13px;line-height:1.55;color:var(--mut);cursor:pointer}
+.lead pre.peek{margin:11px 0 0;padding:12px 14px;background:var(--paper);border:1px solid var(--line);
+ border-radius:4px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+ max-height:270px;overflow:auto}
+@media (max-width:700px){
+ body{padding:26px 18px 55px;font-size:14px}
+ .report-brand{margin-bottom:23px;padding-bottom:16px}.report-brand img{width:136px}
+ .report-brand .report-label{font-size:9px;letter-spacing:.045em}
+ h1{font-size:26px}.hero{margin:23px 0 14px;padding:21px 17px}
+ .hero .big{font-size:34px}.cards{grid-template-columns:1fr;gap:8px}
+ .card{padding:17px 18px}.card .n{font-size:30px}table{font-size:12px}
+ th,td{padding:10px 9px}.lead{padding:22px 18px}
 }
-
 @media print{
-  :root{--bg:#fff;--fg:#312723;--mut:#555;--faint:#777;--line:#ddd;--line2:#bbb}
-  body{max-width:none;padding:0;font-size:10.5pt;line-height:1.55}
-  h2{break-after:avoid;margin-top:26px}
-  .card,table,li,pre,.hero{break-inside:avoid}
-  .badge,.card.found .n,.card.none .n{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  footer{margin-top:28px}
+ :root{--bg:#fff;--paper:#fff;--fg:#342923;--mut:#555;--faint:#777;
+ --line:#ddd;--line2:#bbb;--brand-tint:#f0f3ff}
+ body{max-width:none;padding:0;font-size:10.5pt;line-height:1.55}
+ .report-brand{margin-bottom:14px}.report-brand img{width:135px}
+ h2{break-after:avoid;margin-top:24px}.card,table,li,pre,.hero{break-inside:avoid}
+ .cards{gap:8px}.card{padding:12px}.hero{padding:13px}
+ .badge,.card,.hero,.bar,td.heat{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ footer{margin-top:26px}.lead{display:none}
 }
-.lead{margin-top:26px;padding:22px 22px 20px;background:var(--f2,#f3f1f0);border-radius:6px}
-.lead h3{margin:0 0 5px;font-size:17px;line-height:25px;font-weight:600}
-.lead p.l{margin:0 0 15px;font-size:14px;line-height:21px;color:var(--mut);max-width:62ch}
-.lead .row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
-.lead input,.lead textarea{font:400 14px/21px var(--sans);padding:9px 11px;border:1px solid var(--line2);
-  border-radius:4px;background:var(--bg);color:inherit;min-width:0}
-.lead input{flex:1 1 210px}
-.lead textarea{flex:1 1 100%;min-height:54px;resize:vertical}
-.lead button{font:600 14px/21px var(--sans);padding:9px 17px;border:0;border-radius:4px;cursor:pointer;
-  background:var(--ink);color:var(--bg);white-space:nowrap}
-.lead button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line2);font-weight:500}
-.lead button:disabled{opacity:.5;cursor:default}
-.lead .note{margin-top:11px;font-size:12.5px;line-height:19px;color:var(--faint,#9b938f)}
-.lead .msg{margin-top:11px;font-size:13.5px;line-height:21px;font-weight:600}
-.lead .msg.bad{font-weight:400;color:var(--mut)}
-.lead details{margin-top:13px}
-.lead summary{font-size:13px;line-height:20px;color:var(--mut);cursor:pointer}
-.lead pre.peek{margin:9px 0 0;padding:11px 13px;background:var(--bg);border:1px solid var(--line);
-  border-radius:4px;font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;max-height:270px;overflow:auto}
-@media print{.lead{display:none}}
-</style></head><body><header><h1>Linklbee diagnostic report</h1><div class="meta">scanner 1.4.4 · 1 file · 한국어: --lang ko<span class="syn">[synthetic] example log</span></div>
+</style></head><body><header><div class="report-brand"><img alt="Linklbee" src="data:image/png;base64,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"><span class="report-label">LLM API COST DIAGNOSTIC</span></div><h1>Linklbee LLM API Cost Diagnostic Report</h1><div class="meta">scanner 1.4.6 · 1 file · 한국어: --lang ko<span class="syn">[synthetic] example log</span></div>
 <div class="hero"><div class="lab">Cache hit rate</div><div class="big">0.0%</div><div class="note">The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.</div></div>
-<div class="hero"><div class="lab">What this log could save — of the bill</div><div class="big">17.2% ~ 50.9%</div><div class="note">Section 4 — ranges Linklbee measured on other public documents, applied to this log's reducible calls. Not a saving measured on this log.</div></div>
+<div class="hero"><div class="lab">Estimated savings for this log — of the bill</div><div class="big">17.2% ~ 50.9%</div><div class="note">Section 4 — ranges Linklbee measured on other public documents, applied to this log's reducible calls. Not a saving measured on this log.</div></div>
 <div class="bar"><svg viewBox="0 0 600 64" role="img" aria-label="17.2% ~ 50.9%"><rect x="20" y="22" width="560" height="10" rx="5" fill="currentColor" opacity=".12"/><rect x="116.2" y="18" width="188.5" height="18" rx="9" fill="rgb(var(--acc))"/><text x="116.2" y="56" font-size="13" text-anchor="middle" fill="currentColor">17.2%</text><text x="304.8" y="56" font-size="13" text-anchor="middle" fill="currentColor">50.9%</text><text x="20" y="12" font-size="11" fill="currentColor" opacity=".6">0%</text><text x="580" y="12" font-size="11" text-anchor="end" fill="currentColor" opacity=".6">100%</text></svg></div>
-<div class="cards"><div class="card found"><div class="n">3</div><div class="t">leaking now</div><ul><li>7-2 the same request resent shortly after</li><li>7-3 answers cut off at the length limit</li><li>7-4 request prefix serialized inconsistently</li></ul></div><div class="card none"><div class="n">3</div><div class="t">could cost less</div><ul><li>7-5 prompts shorter than the cache minimum</li><li>7-8 prefix shared between calls</li><li>7-9 calls that could use OpenAI Flex</li></ul></div><div class="card more"><div class="n">0</div><div class="t">more data would show</div></div></div>
+<div class="cards"><div class="card found"><div class="n">3</div><div class="t">additional costs identified</div><ul><li>7-2 the same request resent shortly after</li><li>7-3 answers cut off at the length limit</li><li>7-4 request prefix serialized inconsistently</li></ul></div><div class="card none"><div class="n">3</div><div class="t">additional savings opportunities</div><ul><li>7-5 prompts shorter than the cache minimum</li><li>7-8 prefix shared between calls</li><li>7-9 calls that could use OpenAI Flex</li></ul></div><div class="card more"><div class="n">0</div><div class="t">more data required</div></div></div>
 </header>
 <section><h2>Summary</h2>
-<ul><li>Leaking now: <strong>$0.00</strong> — the sum of section 2 'Leaking now', 3 items (1 without an amount left out)</li><li>Could cost less: <strong>$0.00</strong> — the sum of section 2 'Could cost less', 3 items, ranges at their low end (2 without an amount left out)</li><li>Of that, a one-time fix you can do yourself: $0.00 · needs ongoing tuning: $0.00. Rewriting only the changed parts (section 4) and answering without a call (section 6) also need ongoing work: answer pieces are kept and compared on every request.</li><li>The example log is a small one: its whole bill is $1.06. The leak found in it is $0.004, so the money lines, which show two decimals, read $0.00. Your own log gives amounts at the size of its bill.</li></ul>
-<p>This is the floor. Once switched on, the amount actually saved shows on screen.</p>
+<ul><li>Additional costs identified: <strong>$0.00</strong> — the sum of section 2 'Additional costs identified', 3 items (1 without an amount left out)</li><li>Additional savings opportunities: <strong>$0.00</strong> — the sum of section 2 'Additional savings opportunities', 3 items, using the lower bound of each range (2 without an amount left out)</li><li>Of that, a one-time fix you can do yourself: $0.00 · needs ongoing tuning: $0.00. Rewriting only the changed parts (section 4) and answering without a call (section 6) also need ongoing work: answer pieces are kept and compared on every request.</li><li>The synthetic example has a total cost of $1.06. Identified additional costs are $0.004, so the value is displayed as $0.00 at two decimal places. Your report uses amounts from your own log.</li></ul>
+<p>These figures are estimates derived from the supplied logs. Actual savings are verified after deployment against baseline calls.</p>
 </section><section><h2>1. What was read</h2>
-<ul><li><strong>[synthetic] This is the example log.</strong> 322 of 322 calls are made up, so these are not a real company's figures. To scan your own log: <code>python3 linklbee_scan.py --logs &lt;file&gt;</code>.</li><li>322 calls (322 lines, 0 not JSON, 0 rejected for missing ts) · 2026-09-01 to 2026-10-09</li><li>models: claude-sonnet-5-5 168, gpt-5.6-luna 154</li><li>body: text 308 · token hashes 0 · none 14</li><li>input grade A — with answer text. 7 of 7 checklist items can be checked. Items 7-1 (billed failed calls) and 7-6 (billing check) are left out: the engine does not fix them.</li><li>Billing: per token on the API — dollars are API usage x the price list. On a flat rate or a plan, add <code>--flat all</code>.</li><li>The scanner has no network code. Send this report to bee@linklbee.com and we will take a deeper look. To check: <code>grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py</code> -&gt; 0. Answer text stays in memory. This report and the JSON hold counts and shares only — no text, no document ids.</li><li>14 calls have no body, so they are not in the answer pairs or similarity</li></ul>
-</section><section><h2>2. Checklist — what is leaking, what could cost less</h2>
-<h3>Leaking now — money going out</h3>
+<ul><li><strong>[synthetic] This is the example log.</strong> 322 of 322 calls are made up, so these are not a real company's figures. To scan your own log: <code>python3 linklbee_scan.py --logs &lt;file&gt;</code>.</li><li>322 calls (322 lines, 0 not JSON, 0 rejected for missing ts) · 2026-09-01 to 2026-10-09</li><li>models: claude-sonnet-5-5 168, gpt-5.6-luna 154</li><li>body: text 308 · token hashes 0 · none 14</li><li>input grade A — with answer text. 7 of 7 checklist items can be checked. Items 7-1 (billed failed calls) and 7-6 (billing check) are left out: the engine does not fix them.</li><li>Billing: per token on the API — dollars are API usage x the price list. On a flat rate or a plan, add <code>--flat all</code>.</li><li>The scanner has no network code. For an additional review, email the diagnostic summary to bee@linklbee.com. To check: <code>grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py</code> -&gt; 0. Answer text stays in memory. This report and the JSON hold counts and shares only — no text, no document ids.</li><li>14 calls have no body, so they are not in the answer pairs or similarity</li></ul>
+</section><section><h2>2. Checklist — what is leaking, what additional savings opportunities</h2>
+<h3>Additional costs identified — money going out</h3>
 <ul><li>[code 7-2] the same request sent again shortly after — <span class="badge found">found</span><ul><li>Fix: when an identical request (same full body) comes back within a set time, the engine can return the stored answer without calling the vendor. Streams and irreversible actions are excluded. A regenerate would also get the stored answer, so the engine proposes this with the amount first, and you decide whether to turn it on.</li><li>You can do this yourself: a one-time fix.</li><li>How: find where the same request is sent again shortly after (retries, double clicks) and stop it from going out again before the first one has finished.</li><li>Calls paid for and not used, two kinds (told apart in the same log): <strong>discarded output</strong> $0.00 (14 failed calls still billed + 0 OK answers the same request replaced — a quality check, a broken format or a user's regenerate cannot be told apart here) · <strong>retries</strong> $0.00 (14 repeats after a failed or timed-out call — the service's retry setting). Repeats after a cut answer are counted in 7-3.</li><li>Within 60 s, 14 calls repeated the request just sent (within the same document when the log has document ids; out of 322 calls whose request is known). The earlier call had: failed 14 · been cut 0 · succeeded 0 · unknown 0. Median gap 30.5 s. input 2,379 · output 306 tokens, $0.00 (14 priced calls, API usage x price list). A repeat after a successful answer may be a user regenerating on purpose.</li><li>Split by the earlier call: after a successful answer none — the engine's stored answer can fix this · after a failure $0.00 — fixed by the service's retry settings · after a cut none — fixed by 7-3's larger cap.</li><li>The Linklbee engine does not reduce the share after a failure; it only shows the retry chains. Changing the retry settings in your service code (interval, maximum retries) is what lowers it.</li><li>Engine: the Linklbee server records each response's status and request signature. The engine's usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff interval, maximum retries, switching route after repeated failures).</li></ul></li><li>[code 7-3] answers cut off at the length limit — <span class="badge found">found</span><ul><li>Fix: if the same request is often cut and then resent with a higher cap, the engine can send it with that cap from the start, so you stop paying for the cut first attempt. Answers may get longer, so the engine proposes this with the amount first, and you decide whether to turn it on.</li><li>You can do this yourself: a one-time fix.</li><li>How: send the calls that are resent with a bigger length limit after a cut with that limit from the start.</li><li>Of 322 calls that can be checked, 1 were cut off (0.3%). Their output was 300 tokens, 0.3% of all output, and they cost $0.00. max_tokens of the cut calls: 300×1.</li><li>Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. The engine's usage view shows the cut share per limit, with a suggested limit.</li></ul></li><li>[code 7-4] request prefix serialized inconsistently (tool definitions, system instructions) — <span class="badge found">found</span><ul><li>Fix: the engine sends tool definitions and system blocks in one key order. It can turn this on when usage records show a gain, and turns it off when they show a loss (judged on Anthropic and OpenAI GPT-5.6+ records). Changing parts such as times and ids are not handled yet.</li><li>You can do this yourself: a one-time fix.</li><li>How: send the tool definitions and system instructions in the same order and the same text every time, and move changing values such as times and IDs to the end of the call.</li><li>322 calls have a prefix. 3 kinds of block were compared by their as-sent hash and key-sorted hash.</li><li><strong>Block <code>tools</code>: 2 serializations with the same content in a different key order, so the vendor caches it as 2 separate entries.</strong> Of 154 calls with this block, 29 were not in the most common form. The forms first differ at character 4 (the block is 409 characters, 87 o200k tokens).</li><li>Source (vendor documents): Anthropic's prompt caching guide says "some languages (for example, Swift, Go) randomize key order during JSON conversion, breaking caches". OpenAI's guide, in its table of settings that affect the cached prefix, says of tools: "Changes tool names, descriptions, schemas, ordering, or tool-specific instructions."</li><li>Engine: the Linklbee engine sends tool definitions and system blocks with sorted keys. List order and strings stay the same, so the model reads the same content (a structured-output schema keeps its field order; only its other keys are sorted). It can turn this on when usage records show a gain, and turns it off when they show a loss. Set <code>"prefix_normalize": false</code> in the engine settings file <code>waste.json</code> to keep it off.</li></ul></li><li>[code 7-7] prompt cache hit rate — <span class="badge none">none</span><ul><li>Cache-read tokens / prompt tokens = <strong>0.0%</strong> (322 calls). For calls above the cache minimum only (the 120 that pass 7-5): <strong>0.0%</strong>. Below 0.0% is reported as found (a design value).</li><li>That line is half of what this log could read: of the input of the calls above the minimum, <strong>0.0%</strong> is a prefix shared with an earlier call of the same model within 5 minutes (the 7-8 replay, a perfect cache's ceiling) x 0.5. A log with little shared prefix is not held to another log's line.</li><li>claude-sonnet-5-5 (anthropic): 0.0%; above the minimum 0.0% (120 calls); 168 calls with no cache read.</li><li>gpt-5.6-luna (openai): 0.0%; above the minimum — (0 calls); 154 calls with no cache read.</li><li>Why calls above the minimum still miss: caching was not turned on (the Anthropic API caches only with <code>cache_control</code> in the request; Bedrock tries without it, best effort, with no hit guaranteed), the prefix is not byte-identical (7-4), the cache expired, or the vendor sent the request to another server (OpenAI's guide says traffic over about 15 a minute on one key can overflow on models before GPT-5.6; from GPT-5.6 on OpenAI routes the cache itself).</li><li>Engine: the engine's usage view reports the same rate from your usage records. Below the line it suggests <code>cache_control</code> markers (Anthropic, Bedrock), prefix normalization (<code>"prefix_normalize": true</code>), putting fixed parts first, and OpenAI <code>prompt_cache_key</code>.</li></ul></li></ul>
-<h3>Could cost less — cheaper ways, even with nothing wrong</h3>
+<h3>Additional savings opportunities — cheaper ways, even with nothing wrong</h3>
 <ul><li>[code 7-5] prompts shorter than the cache minimum — <span class="badge found">found</span><ul><li>Fix: the engine counts how many tokens each request is short of the minimum. It can pad a short fixed prefix up to the minimum, but only with text you provide. It can also send short calls that share a prefix as one call (OpenAI and Anthropic, single calls without tools). The answers can change, so the engine never turns this on itself; you decide.</li><li>You can do this yourself: a one-time fix.</li><li>How: for short calls that share a start, lengthen the fixed instructions past the cache minimum or send several of them together as one request.</li><li>claude-sonnet-5-5 (anthropic): 48 of 168 calls under 512 tokens (28.6%), 48 of them with no cache read.</li><li>gpt-5.6-luna (openai): 154 of 154 calls under 1,024 tokens (100.0%), 154 of them with no cache read.</li><li>by threshold (322 calls checked): 64 -&gt; 0.0% under · 512 -&gt; 62.7% under · 1,024 -&gt; 100.0% under · 2,048 -&gt; 100.0% under · 4,096 -&gt; 100.0% under</li><li>Anthropic runs a prompt under the minimum without caching and without an error, so nothing in the log shows it.</li><li>Engine: the engine's usage view reports the same share from your usage records, using the same constants, with a suggested fix for those calls (grow the prefix past the threshold, or drop the cache marker).</li><li>Thresholds as of 2026-10-20 (vendor documents). Gemini prices change on 2026-12-01.</li></ul></li><li>[code 7-8] prefix shared between calls — <span class="badge found">found</span><ul><li>This needs ongoing tuning: when the gap between returns of the same prefix changes, the value has to be picked again, so a one-time fix does not hold.</li><li>Share of prompt tokens in a prefix already sent by an earlier call (same model): within 5 minutes <strong>3.2%</strong> · within 1 hour 17.7% · across the whole log 30.1% (322 calls, 22 of them sharing a prefix within 5 minutes).</li><li>Shared prefixes that came back after more than 5 minutes, once the cache had expired: <strong>26.9%</strong>.</li><li>Shared within 5 minutes but shorter than the vendor's cache minimum (cache_constants.json), so it cannot be cached: <strong>3.2%</strong> (22 of 22 calls checked).</li><li>Compare: actual cache reads (7-7) 0.0% vs prefixes shared within 5 minutes 3.2%.</li><li>Method: only whole items count, in the order tools → system → conversation items (without a request body, the prompt in 64-token blocks). Partial matches inside an item are not counted. Where the vendor actually caches (<code>cache_control</code> markers, its own block sizes) is decided separately, so this share is how much a cache could read, not a saving.</li></ul></li><li>[code 7-9] calls that could have used OpenAI Flex (not streamed) — <span class="badge found">found</span><ul><li>Fix: the engine works out which calls could have used Flex and how much that saves, and proposes it first. Once on, it sends the chosen traffic at Flex. If Flex has no capacity, it retries once at standard (the refusal is not billed). Flex answers come later than standard ones, so leave it off for calls a person is waiting on.</li><li>You can do this yourself: a one-time fix.</li><li>How: add <code>service_tier: "flex"</code> to the calls no one is waiting on (overnight jobs, batch work).</li><li>154 calls used models that Flex offers, and 91 of them were not streamed: input 15,476 · output 1,799 tokens, $0.01 (91 priced calls, API usage x price list). Flex runs the same model at half the standard rate (Batch rates, price list 2026-10-21).</li><li>What it would save: a share of the bill, <strong>0 – 0.2%</strong>. It is 0 if no call can wait, and 0.2% if every call that was not streamed can wait. The log cannot tell which calls can wait.</li></ul></li></ul>
 <p>This section reflects the log provided. It is not a guarantee.</p>
 </section><section><h2>3. Reducible share — the conclusion</h2>
@@ -162,7 +140,7 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
 <p><strong>This is not a saving measured on this log.</strong> The ranges Linklbee measured on other public documents (below) are applied to this log's reducible calls. Everything else counts as 0.</p>
 <ul><li>output tokens: 32.7% – 61.1% of all output (ranges applied)</li><li>if the engine had decided: 29.4% – 55.1%<ul><li>Counted again with the engine's own rules. On public material (laws, eCFR; logs without a document key) it came to 0.92~1.12 times what the engine actually turned on. Judgments only the engine makes (such as a request with two equally likely previous answers) are not replayed.</li></ul></li><li>dollars (cost ranges measured without a prompt cache): $0.18 – $0.54 = 17.2% – 50.9% of the bill · prices as of 2026-10-25 · reducible pairs without a price: 0<ul><li>Linklbee sends 10.0% of the reducible pairs in full as its comparison group. The range above is what the rest saves.</li></ul></li></ul>
 <p>Ranges Linklbee measured (three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10):</p>
-<ul><li>similarity &gt;=0.95 · answer 200+ tokens: output 55% – 95%, cost 30% – 75%</li><li>similarity 0.78-0.95 · answer 200+ tokens: output 15% – 65%, cost -5% – 50%</li><li>The saving ranges in section 4 were measured on other materials (the public documents named at the end of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison</li></ul>
+<ul><li>similarity &gt;=0.95 · answer 200+ tokens: output 55% – 95%, cost 30% – 75%</li><li>similarity 0.78-0.95 · answer 200+ tokens: output 15% – 65%, cost -5% – 50%</li><li>The estimated savings in section 4 were measured on other materials (the public documents named at the end of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison</li></ul>
 </section><section><h2>5. Answer pairs by similarity and length</h2>
 <p>138 answer pairs from 170 documents. Each pair compares an answer with the previous answer for the same document. Similarity here is measured with the answer known. How documents were found: 308 calls by the document key in the log · 0 calls grouped by the scanner (0 pairs) · 0 skipped for an identical timestamp.</p>
 <div class="wrap"><table><thead><tr><th>similarity \ length</th><th>&lt;200</th><th>200-500</th><th>500-2000</th><th>2000+</th></tr></thead><tbody><tr><th>&gt;=0.95</th><td>—</td><td>—</td><td class="heat" style="background:rgba(var(--acc),0.36)"><strong>100 · 62.4%</strong></td><td>—</td></tr><tr><th>0.78-0.95</th><td>—</td><td>—</td><td class="heat" style="background:rgba(var(--acc),0.13)"><strong>20 · 13.1%</strong></td><td>—</td></tr><tr><th>0.60-0.78</th><td>—</td><td class="heat" style="background:rgba(var(--acc),0.06)">2 · 0.7%</td><td>—</td><td>—</td></tr><tr><th>&lt;0.60</th><td>—</td><td class="heat" style="background:rgba(var(--acc),0.08)">16 · 5.0%</td><td>—</td><td>—</td></tr></tbody></table></div>
@@ -177,8 +155,8 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
 <ul><li>Section 6, answering without a call — <strong>0%</strong>. (a) 138 answer pairs, 138 of them with a prompt; none match the previous call's prompt apart from digits. For reference, counted with the answer known (an upper bound): pairs identical to the previous answer 0 · allowing digit-only differences 16. (b) The rule picks traffic that repeats the same request (fixed templates, FAQs).</li><li>[code 7-7] prompt cache hit rate — none. (a) hit rate above the cache minimum 0.0%, at or above the 0.0% line (the hit-rate floor). (b) nothing to cut here within this log (no waste).</li></ul>
 <p>These items came out at 0 on this analysis. That is not an analysis error; each line above gives the reason and what more would be needed.</p>
 <p>Send this report to bee@linklbee.com and we will look deeper, free of charge. The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.</p>
-<p>took 2.1s</p></section>
-<section class="lead"><h3>We will help you stop the leak, not just find it</h3><p class="l">Send us the numbers above and we will write back with what to fix first for the largest cut. Free of charge.</p><form id="lb-lead" novalidate><div class="row"><input id="lb-email" type="email" autocomplete="email" placeholder="Email for our reply" required><input id="lb-co" type="text" autocomplete="organization" placeholder="Company (optional)"><button id="lb-send" type="submit">Request a free deep-dive</button></div><div class="row" style="margin-top:8px"><textarea id="lb-note" placeholder="Anything you want to add (optional)"></textarea></div></form><div class="msg" id="lb-msg" role="status" aria-live="polite"></div><p class="note">The scanner has sent nothing. The button fills the numbers summary below into your mail app; you press send.</p><details><summary>See exactly what gets sent</summary><p class="note" style="margin-top:7px">No prompts, no answers, no document names, no keys. What you see below is all of it.</p><pre class="peek" id="lb-peek"></pre><button class="ghost" type="button" id="lb-copy" style="margin-top:9px">Copy summary</button></details><script type="application/json" id="lb-share">"Linklbee scan — 322 calls\nroom to cut (estimate): 17.2% – 50.9% of the bill\noutput's share of the bill: 82.8%\n9 waste checks, 7 found: 7-1 billed failed calls, 7-2 the same request resent shortly after, 7-3 answers cut off at the length limit, 7-4 request prefix serialized inconsistently, 7-5 prompts shorter than the cache minimum, 7-8 prefix shared between calls, 7-9 calls that could use OpenAI Flex\n[synthetic] example log\nContains no text, company name or keys (counts and shares only, computed on this machine)."</script><script>(function(){var $=function(i){return document.getElementById(i)};var T={"h": "We will help you stop the leak, not just find it", "p": "Send us the numbers above and we will write back with what to fix first for the largest cut. Free of charge.", "email": "Email for our reply", "company": "Company (optional)", "note": "Anything you want to add (optional)", "send": "Request a free deep-dive", "what": "See exactly what gets sent", "never": "No prompts, no answers, no document names, no keys. What you see below is all of it.", "manual": "The scanner has sent nothing. The button fills the numbers summary below into your mail app; you press send.", "mail": "Your mail app will open. Press send there. No mail app? Copy the summary and send it to bee@linklbee.com.", "copy": "Copy summary", "copied": "Copied", "bademail": "Please check the email address.", "subject": "Linklbee deep-dive request"},TO="bee@linklbee.com",D="";
+<p>took 1.7s</p></section>
+<section class="lead"><h3>Review optimization opportunities in your report</h3><p class="l">Share the diagnostic summary for a free review of cost patterns, applicable improvements, and suggested priorities.</p><form id="lb-lead" novalidate><div class="row"><input id="lb-email" type="email" autocomplete="email" placeholder="Reply email" required><input id="lb-co" type="text" autocomplete="organization" placeholder="Company (optional)"><button id="lb-send" type="submit">Request a free report review</button></div><div class="row" style="margin-top:8px"><textarea id="lb-note" placeholder="Additional details (optional)"></textarea></div></form><div class="msg" id="lb-msg" role="status" aria-live="polite"></div><p class="note">The scanner does not transmit data automatically. This action prepares a diagnostic summary in your email app; you decide whether to send it.</p><details><summary>Review information to share</summary><p class="note" style="margin-top:7px">The summary excludes prompt and response content, document names, and API keys. Review the information below before sharing.</p><pre class="peek" id="lb-peek"></pre><button class="ghost" type="button" id="lb-copy" style="margin-top:9px">Copy summary</button></details><script type="application/json" id="lb-share">"Linklbee scan — 322 calls\nroom to cut (estimate): 17.2% – 50.9% of the bill\noutput's share of the bill: 82.8%\n9 waste checks, 7 found: 7-1 billed failed calls, 7-2 the same request resent shortly after, 7-3 answers cut off at the length limit, 7-4 request prefix serialized inconsistently, 7-5 prompts shorter than the cache minimum, 7-8 prefix shared between calls, 7-9 calls that could use OpenAI Flex\n[synthetic] example log\nContains no text, company name or keys (counts and shares only, computed on this machine)."</script><script>(function(){var $=function(i){return document.getElementById(i)};var T={"h": "Review optimization opportunities in your report", "p": "Share the diagnostic summary for a free review of cost patterns, applicable improvements, and suggested priorities.", "email": "Reply email", "company": "Company (optional)", "note": "Additional details (optional)", "send": "Request a free report review", "what": "Review information to share", "never": "The summary excludes prompt and response content, document names, and API keys. Review the information below before sharing.", "manual": "The scanner does not transmit data automatically. This action prepares a diagnostic summary in your email app; you decide whether to send it.", "mail": "Review the message in your email app before sending. If an email app is unavailable, copy the summary and email it to bee@linklbee.com.", "copy": "Copy summary", "copied": "Copied", "bademail": "Please check the email address.", "subject": "Linklbee diagnostic report review"},TO="bee@linklbee.com",D="";
 try{D=JSON.parse($("lb-share").textContent||'""')}catch(x){}
 $("lb-peek").textContent=D;
 function say(s,b){var e=$("lb-msg");e.textContent=s;e.className="msg"+(b?" bad":"")}
@@ -193,4 +171,4 @@ $("lb-lead").onsubmit=function(ev){ev.preventDefault();
  if(b.length>1800)b=b.slice(0,1800)+"\n...";
  say(T.mail);window.location.href="mailto:"+TO+"?subject="+encodeURIComponent(T.subject)+"&body="+encodeURIComponent(b)};
 })();</script></section>
-<footer>no network code, no AI calls, no text or keys (counts and shares only) · scanner 1.4.4 · sha256 c0cf4281ee5c · took 2.1s</footer></body></html>
+<footer>no network code, no AI calls, no text or keys (counts and shares only) · scanner 1.4.6 · sha256 00ee14e91270 · took 1.7s</footer></body></html>

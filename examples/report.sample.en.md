@@ -1,17 +1,17 @@
-# Linklbee diagnostic report
+# Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.4 · 1 file · 한국어: --lang ko
+scanner 1.4.6 · 1 file · 한국어: --lang ko
 
 **Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
 ## Summary
 
-- Leaking now: **$0.00** — the sum of section 2 'Leaking now', 3 items (1 without an amount left out)
-- Could cost less: **$0.00** — the sum of section 2 'Could cost less', 3 items, ranges at their low end (2 without an amount left out)
+- Additional costs identified: **$0.00** — the sum of section 2 'Additional costs identified', 3 items (1 without an amount left out)
+- Additional savings opportunities: **$0.00** — the sum of section 2 'Additional savings opportunities', 3 items, using the lower bound of each range (2 without an amount left out)
 - Of that, a one-time fix you can do yourself: $0.00 · needs ongoing tuning: $0.00. Rewriting only the changed parts (section 4) and answering without a call (section 6) also need ongoing work: answer pieces are kept and compared on every request.
-- The example log is a small one: its whole bill is $1.06. The leak found in it is $0.004, so the money lines, which show two decimals, read $0.00. Your own log gives amounts at the size of its bill.
+- The synthetic example has a total cost of $1.06. Identified additional costs are $0.004, so the value is displayed as $0.00 at two decimal places. Your report uses amounts from your own log.
 
-This is the floor. Once switched on, the amount actually saved shows on screen.
+These figures are estimates derived from the supplied logs. Actual savings are verified after deployment against baseline calls.
 
 ## 1. What was read
 
@@ -24,9 +24,9 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
 - The scanner has no network code. To check: `grep -cE "ht[t]p|sock[e]t|url[l]ib" linklbee_scan.py` -> 0. Answer text stays in memory. This report and the JSON hold counts and shares only — no text, no document ids.
 - 14 calls have no body, so they are not in the answer pairs or similarity
 
-## 2. Checklist — what is leaking, what could cost less
+## 2. Checklist — what is leaking, what additional savings opportunities
 
-### Leaking now — money going out
+### Additional costs identified — money going out
 
 - [code 7-2] the same request sent again shortly after — **found**
   - Fix: when an identical request (same full body) comes back within a set time, the engine can return the stored answer without calling the vendor. Streams and irreversible actions are excluded. A regenerate would also get the stored answer, so the engine proposes this with the amount first, and you decide whether to turn it on.
@@ -59,7 +59,7 @@ This is the floor. Once switched on, the amount actually saved shows on screen.
   - Why calls above the minimum still miss: caching was not turned on (the Anthropic API caches only with `cache_control` in the request; Bedrock tries without it, best effort, with no hit guaranteed), the prefix is not byte-identical (7-4), the cache expired, or the vendor sent the request to another server (OpenAI's guide says traffic over about 15 a minute on one key can overflow on models before GPT-5.6; from GPT-5.6 on OpenAI routes the cache itself).
   - Engine: the engine's usage view reports the same rate from your usage records. Below the line it suggests `cache_control` markers (Anthropic, Bedrock), prefix normalization (`"prefix_normalize": true`), putting fixed parts first, and OpenAI `prompt_cache_key`.
 
-### Could cost less — cheaper ways, even with nothing wrong
+### Additional savings opportunities — cheaper ways, even with nothing wrong
 
 - [code 7-5] prompts shorter than the cache minimum — **found**
   - Fix: the engine counts how many tokens each request is short of the minimum. It can pad a short fixed prefix up to the minimum, but only with text you provide. It can also send short calls that share a prefix as one call (OpenAI and Anthropic, single calls without tools). The answers can change, so the engine never turns this on itself; you decide.
@@ -128,7 +128,7 @@ This section covers only calls that can be answered by rewriting the changed par
 Ranges Linklbee measured (three public document sets (product copy, drug label revisions, statute revisions), real calls, failed-edit re-calls included (not for product copy: no call records), 2026-10):
 - similarity >=0.95 · answer 200+ tokens: output 55% – 95%, cost 30% – 75%
 - similarity 0.78-0.95 · answer 200+ tokens: output 15% – 65%, cost -5% – 50%
-- The saving ranges in section 4 were measured on other materials (the public documents named at the end of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison
+- The estimated savings in section 4 were measured on other materials (the public documents named at the end of section 4). The real value for this traffic comes from a pilot that holds back some calls for comparison
 
 ## 5. Answer pairs by similarity and length
 
@@ -168,4 +168,4 @@ These items came out at 0 on this analysis. That is not an analysis error; each 
 
 Send this report to bee@linklbee.com and we will look deeper, free of charge. The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.
 
-took 2.1s
+took 1.7s

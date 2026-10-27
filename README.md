@@ -6,17 +6,18 @@
 
 If essential fields are missing, the report explains the limitation rather than inventing estimates. **Estimated savings are not realized savings; actual results require measurement after integration.**
 
-## Install and run
+## Download and run
+
+The whole tool is one file. Download `linklbee_scan.py` and run it:
 
 ```
-pip install linklbee-scan
-linklbee-scan <log file or folder> --lang en --out report.html
-linklbee-scan --demo --lang en          # see a report on a [synthetic] example log first
+python3 linklbee_scan.py <log file or folder> --lang en --out report.html
+python3 linklbee_scan.py --demo --lang en          # see a report on a [synthetic] example log first
 ```
+
+`pip install linklbee-scan` works too; it installs the `linklbee-scan` command, which takes the same arguments (the examples below use it).
 
 Python 3.9+, no dependencies. Reports are in Korean by default; `--lang en` gives English. Run it with no arguments and it looks in the current folder for something to read.
-
-Without pip, the whole tool is one file: download `linklbee_scan.py` and run `python3 linklbee_scan.py` with the same arguments.
 
 Not sure how your log will be read? `--peek` reads the first 200 records, prints which field comes from where, and writes nothing:
 
