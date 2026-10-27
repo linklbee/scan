@@ -1,6 +1,6 @@
 # Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.7 · 2 files · 한국어: --lang ko
+scanner 1.4.8 · 2 files · 한국어: --lang ko
 
 **Cache hit rate 50.8%** — the share of input tokens read from the cache (the vendor's usage totals). Details in section 3. By model it runs from 47.6% to 70.5%.
 

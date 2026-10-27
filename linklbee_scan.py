@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.7 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.8 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.7"
+VERSION = "1.4.8"
 
 
 def _default_lang():
@@ -6143,7 +6143,7 @@ def head_summary(res, ko):
         out.append(line)
     if split:
         sums = {g: sum(a for kk, (gg, a) in split.items() if a is not None and gg == g) for g in ("A", "B")}
-        out.append(("- 그중 설정 개선 %s · 지속 최적화 %s. 변경된 부분만 변경 부분만 생성(4절)와 기존 응답 재사용(5절)도 지속 최적화 항목입니다. "
+        out.append(("- 그중 설정 개선 %s · 지속 최적화 %s. 변경 부분만 생성(4절)과 기존 응답 재사용(5절)도 지속 최적화 항목입니다. "
                     "적용 효과는 이전 응답과의 유사도와 응답 길이에 따라 달라집니다. 요청 패턴이 바뀌면 적용 기준도 조정해야 합니다. "
                     "유사도가 낮은 요청에 적용하면 오히려 비용이 증가할 수 있습니다." if ko else
                     "- Of that, setting improvements: %s · ongoing optimization: %s. Generating only the changed parts "
@@ -6391,7 +6391,7 @@ def _report_body(res, lang="ko", cache_line=True):
     warn = []
     if cl.get("warn"):
         warn = [("- 이 로그에는 이전 답이 이미 다음 답과 거의 같은(응답 유사도 %.2f 이상) 요청이 비교한 응답 쌍 출력의 %s 있습니다. 그런 요청은 "
-                 "애초에 부르지 않는 편이 낫습니다(행정규칙 실호출 277건에서 이전 답 그대로 0.9635 > 변경된 부분만 변경 부분만 생성 0.9611 > "
+                 "애초에 부르지 않는 편이 낫습니다(행정규칙 실호출 277건에서 이전 답 그대로 0.9635 > 변경 부분만 생성 0.9611 > "
                  "처음부터 다시 쓰기 0.9545). 링클비는 호출을 없애는 판단을 기본으로 켜지 않습니다. 위 수치는 그 요청도 부른다고 보고 "
                  "잰 값입니다. 이 설명을 붙이는 선(응답 유사도 %.2f 이상이 출력의 %s 이상)은 다른 재료 3종에서 정했고, 이 로그의 선이 아닙니다." if ko else
                  "- In this log, %s of paired output comes from calls whose previous answer is already almost the "
@@ -6405,7 +6405,7 @@ def _report_body(res, lang="ko", cache_line=True):
     small = []  # its own list: the rescue branch below replaces warn
     if res.get("small_models"):
         sm = ", ".join("%s (%gB, %d)" % m for m in res["small_models"][:4])
-        small = [("- **주의 — 작은 모델: %s.** 이름이 %gB 미만을 밝힌 모델은 변경된 부분만 변경 부분만 생성에서 빼고 보세요. 우리 법령 재료에서 3B 의 "
+        small = [("- **주의 — 작은 모델: %s.** 이름이 %gB 미만을 밝힌 모델은 변경 부분만 생성에서 빼고 보세요. 우리 법령 재료에서 3B 의 "
                   "변경 부분만 생성는 이전 답 그대로보다 품질이 낮았습니다(토큰 F1 0.9163 < 0.9348, 개정 반영 0.114 — 7B 0.377·14B 0.422). 재료 하나·모델 "
                   "계열 하나에서 정한 선이고 이 로그의 값이 아닙니다." if ko else
                   "- **Caution — small models: %s.** Don't use models whose name says under %gB for rewriting only the "
@@ -6760,8 +6760,8 @@ def more_order(res):
 # What the Linklbee engine does about each found item (docs/PAIRING-1021.md; PM 10-21 13:48: an item the engine does
 # not fix says so). Change this together with that table.
 WFIX = {  # what the engine at tag engine-2026.10.22 does (ko: docs/STYLE-KO.md on master)
-    "failed": ("개선 방향: 링클비 엔진은 이 항목을 찾기만 하고 고치지 않습니다. 고치려면 서비스 코드를 직접 바꿔야 합니다.",
-               "Fix: the Linklbee engine detects this but does not fix it. The fix is in your service code."),
+    "failed": ("개선 방향: 실패 호출 과금 패턴과 비용을 분석해 보여 줍니다. 현재 이 항목은 엔진이 직접 변경하지 않으며, 서비스의 실패 처리(재시도·시간 제한) 조정이 필요합니다.",
+               "Fix: the engine analyzes the pattern and cost of billed failed calls and shows them. The engine does not change this item itself; it needs an adjustment of the service's failure handling (retries, time limits)."),
     "resent": ("개선 방향: 엔진은 같은 요청(본문 전체가 같은 것)이 설정한 시간 안에 반복되면 기존 응답을 재사용해 추가 API 호출을 줄일 수 있습니다"
                "(스트리밍·되돌릴 수 없는 요청 제외). 동일 요청 재사용은 사용자의 다시 생성 요청과 충돌할 수 있어, 엔진이 변경 내용과 예상 효과를 먼저 "
                "보이고 확인을 받은 뒤 적용합니다.",
@@ -7692,7 +7692,7 @@ def waste_lines(res, ko):
         if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge" and W[k]["missing"] != "threshold table":
             need.setdefault(W[k]["missing"], []).append(ITEM_NAMES[k][0 if ko else 1])
     # the other sections' items this log cannot show yet, as the next step (section 8 keeps only the zeros)
-    label = {"switch": ("2~4절 변경된 부분만 변경 부분만 생성(응답 유사도 × 응답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
+    label = {"switch": ("2~4절 변경 부분만 생성(응답 유사도 × 응답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),
              "fact_input": ("3절 사실 입력(요청이 바뀐 내용을 알려 주는가)", "Section 3, facts in the request (does it say what changed)"),
              "zero_call": ("5절 기존 응답 재사용", "Section 5, answering without a call")}
     nm_ = [e for e in (res.get("zero_explain") or {}).get("axes") or () if e["state"] == "not_measured" and e["axis"] in label]
@@ -7758,7 +7758,7 @@ def zero_lines(res, ko):
         if stt == "not_measured" or ax in NO_KNIFE:  # said once in section 7; no-knife items are left out of the report
             continue
         if ax == "switch":
-            head = "- " + ("변경된 부분만 변경 부분만 생성(응답 유사도 × 응답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
+            head = "- " + ("변경 부분만 생성(응답 유사도 × 응답 길이)" if ko else "Rewriting only the changed parts (similarity x answer length)")
             if stt == "not_measured" and e["missing"] == "ts":
                 L.append(head + " — " + nm("ts") + (". (나) ts(ISO-8601 또는 epoch 초)를 넣으면 같은 문서의 판을 시간 순서로 이어 응답 유사도를 잽니다. "
                                                     "이 로그에서는 대신 %s 를 봅니다." if ko else
@@ -9072,7 +9072,7 @@ def report_usage(res, lang="ko"):
            "busy hours · the least cache written and never read · a cache-minimum signal (files with request counts) · "
            "the most that could go to OpenAI Flex (section 3)."),
           ("- **호출 로그를 주시면 볼 수 있는 것**: 비용 증가 요인(재전송·출력 제한으로 중단된 응답·접두 흔들림·캐시 적중)과 추가 최적화 기회(캐시 최소 "
-           "미달·호출끼리 공통 접두부·변경된 부분만 변경 부분만 생성·기존 응답 재사용). AI 제공사 집계에는 호출 하나하나가 없습니다. 호출 로그를 "
+           "미달·호출끼리 공통 접두부·변경 부분만 생성·기존 응답 재사용). AI 제공사 집계에는 호출 하나하나가 없습니다. 호출 로그를 "
            "남기려면 README 의 \"이 파일이 아직 없다면\" 을 보세요." if ko else
            "- **What a call log would add**: what is leaking (resends, cut-off answers, unstable prefixes, cache hits) and "
            "what additional savings opportunities (prompts under the cache minimum, shared prefixes, rewriting only the changed parts, "
@@ -9222,7 +9222,7 @@ def report_usage(res, lang="ko"):
     cw = COLLECT_WAKE
     L += ["", "## " + ("4. 호출 기록을 켜면" if ko else "4. With a call log"), "",
           ("- 기록 도구(코드 두 줄, 본문은 남기지 않음)를 켜면 비용 증가 요인·추가 최적화 기회을 호출 단위로 봅니다. 답·요청 해시까지 "
-           "켜면 변경된 부분만 변경 부분만 생성와 기존 응답 재사용도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 비중:" if ko else
+           "켜면 변경 부분만 생성과 기존 응답 재사용도 봅니다. 모은 시간에 따라, 하루치에서 나올 고칠 것 중 보이는 비중:" if ko else
            "- The recording tool (two lines of code, no text kept) checks what is leaking and what additional savings opportunities, call by "
            "call. With answer and request hashes on, it also checks rewriting only the changed parts and answering without "
            "a call. Of what a full day would find to fix, the share seen after:"),
@@ -9406,8 +9406,9 @@ LEAD_T = {
 
 
 def lead_block(summary, lang="ko"):
-    """The HTML block: email / company / note, a mail button, and the exact summary that would go (summary =
-    share_text, counts and shares only). @media print hides it."""
+    """The HTML block: email / company / note, then the mail button last (10-28: the button used to sit between the
+    company field and the note, so at 320 px it came above the textarea), and the exact summary that would go
+    (summary = share_text, counts and shares only). @media print hides it."""
     import html as _h
     t = LEAD_T["ko" if lang == "ko" else "en"]
     e = _h.escape
@@ -9429,14 +9430,14 @@ $("lb-lead").onsubmit=function(ev){ev.preventDefault();
 })();""" % (json.dumps(t, ensure_ascii=False), json.dumps(LEAD_TO)))
     return ('<section class="lead"><h3>%s</h3><p class="l">%s</p><form id="lb-lead" novalidate><div class="row">'
             '<input id="lb-email" type="email" autocomplete="email" placeholder="%s" required>'
-            '<input id="lb-co" type="text" autocomplete="organization" placeholder="%s">'
-            '<button id="lb-send" type="submit">%s</button></div>'
-            '<div class="row" style="margin-top:8px"><textarea id="lb-note" placeholder="%s"></textarea></div></form>'
+            '<input id="lb-co" type="text" autocomplete="organization" placeholder="%s"></div>'
+            '<div class="row" style="margin-top:8px"><textarea id="lb-note" placeholder="%s"></textarea></div>'
+            '<div class="row" style="margin-top:8px"><button id="lb-send" type="submit">%s</button></div></form>'
             '<div class="msg" id="lb-msg" role="status" aria-live="polite"></div><p class="note">%s</p>'
             '<details><summary>%s</summary><p class="note" style="margin-top:7px">%s</p><pre class="peek" id="lb-peek"></pre>'
             '<button class="ghost" type="button" id="lb-copy" style="margin-top:9px">%s</button></details>'
             '<script type="application/json" id="lb-share">%s</script><script>%s</script></section>'
-            % (e(t["h"]), e(t["p"]), e(t["email"]), e(t["company"]), e(t["send"]), e(t["note"]), e(t["manual"]),
+            % (e(t["h"]), e(t["p"]), e(t["email"]), e(t["company"]), e(t["note"]), e(t["send"]), e(t["manual"]),
                e(t["what"]), e(t["never"]), e(t["copy"]), raw, js))
 
 
