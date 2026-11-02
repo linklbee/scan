@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.8 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.9 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.8"
+VERSION = "1.4.9"
 
 
 def _default_lang():
@@ -5939,8 +5939,31 @@ def pct(x, d=1):
     return "—" if x is None else ("%." + str(d) + "f%%") % (100 * x)
 
 
+# Money for display (PM 11-02 17:25). Display only: no amount, threshold, sample or judgement rule changes here.
+#   - a real 0 stays $0.00, so "nothing" still reads as nothing
+#   - an amount that is not 0 but smaller than a cent is shown as <$0.01 (>-$0.01 on the other side) instead of
+#     being rounded to $0.00, so a small real value is never read as nothing
+#   - an amount that could not be worked out is said to be missing data where the report names an item's amount,
+#     and is never read as nothing to save
+USD_CENT = 0.01
+
+
 def usd(x):
-    return "—" if x is None else "$%.2f" % x
+    if x is None:
+        return "—"
+    if x == 0:
+        return "$0.00"
+    if 0 < x < USD_CENT:
+        return "<$0.01"
+    if -USD_CENT < x < 0:
+        return ">-$0.01"
+    return "$%.2f" % x
+
+
+def usd_rounds_to_zero(x):
+    """True when an amount prints as $0.00 at two decimal places. The report compared usd() values for this before
+    the display rule above; it is its own number test now so the display changes no judgement."""
+    return ("%.2f" % (x or 0.0)) == "0.00"
 
 
 T = {
@@ -6134,9 +6157,16 @@ def head_summary(res, ko):
             continue
         miss = len(amt) - len(known)
         line = ("- %s: **%s** — 7절 「%s」 %d건의 합" if ko else "- %s: **%s** — the sum of section 7 '%s', %d items") % (
-            name[0 if ko else 1], usd(sum(known)) if known else ("금액 산정 불가" if ko else "unknown"), name[2 if ko else 3], len(ks))
+            name[0 if ko else 1],
+            usd(sum(known)) if known else ("금액 산정에 필요한 데이터 부족" if ko else "not enough data for an amount"),
+            name[2 if ko else 3], len(ks))
         if kind == "more":
             line += ", 범위가 있는 항목은 하한값 적용" if ko else ", using the lower bound of each range"
+            if known and sum(known) == 0:
+                # the floor of a range, not a confirmed amount: say so, so it is not read as a confirmed $0
+                line += (" — 하한의 합이 $0.00 입니다. 절감 금액이 0 이라는 뜻이 아니라 하한이 0 인 것이고, 각 항목의 상한은 7절에 있습니다" if ko else
+                         " — the lower bounds add up to $0.00: the floor of the range is 0, not the saving itself; "
+                         "each item's upper bound is in section 7")
         if miss and known:
             line += (" (금액 산정에 필요한 데이터가 부족한 %d건은 합계에서 제외했습니다. 해당 항목은 7절에 있습니다)" if ko else
                      " (%d items without enough data for an amount are left out of the sum; they are listed in section 7)") % miss
@@ -6151,14 +6181,88 @@ def head_summary(res, ko):
                     "depends on the similarity to the earlier answer and on answer length, the thresholds have to be "
                     "adjusted when the request pattern changes, and applying it to low-similarity calls can raise cost.") % (usd(sums["A"]), usd(sums["B"])))
     bill = (res.get("bill") or {}).get("usd_total")
-    if res.get("synthetic_calls") and bill and usd(leak_sum or 0.0) == usd(0.0):
-        out.append(("- 합성 예시 로그의 전체 비용은 %s입니다. 분석된 추가 비용은 $%.3f이므로 소수 둘째 자리까지 표시하면 "
-                    "$0.00으로 표시됩니다. 실제 서비스의 금액은 입력한 로그를 기준으로 계산합니다." if ko else
-                    "- The synthetic example has a total cost of %s. Identified additional costs are $%.3f, so the value "
-                    "is displayed as $0.00 at two decimal places. Your report uses amounts from your own log.")
-                   % (usd(bill), leak_sum or 0.0))
+    # the note is about a value too small to print as cents, so it follows the display rule, not two-decimal rounding
+    if res.get("synthetic_calls") and bill and 0 < (leak_sum or 0.0) < USD_CENT:
+        out.append(("- 합성 예시 로그의 전체 비용은 %s입니다. 분석된 추가 비용은 $%.3f 입니다. 한 센트보다 작아 %s 로 표시됩니다. "
+                    "실제 서비스의 금액은 입력한 로그를 기준으로 계산합니다." if ko else
+                    "- The synthetic example has a total cost of %s. Identified additional costs are $%.3f, under a cent, "
+                    "so the value is shown as %s. Your report uses amounts from your own log.")
+                   % (usd(bill), leak_sum or 0.0, usd(leak_sum or 0.0)))
     out += ["", ("표시 금액은 진단 기준에 따라 산정한 값입니다. 실제 절감액은 연동 후 측정 결과로 확인합니다." if ko else
                  "The amounts shown are calculated by the diagnostic's rules. Actual savings are confirmed by measurement after integration."), ""]
+    return out + start_lines(res, ko)
+
+
+# 1.4.9 (PM 11-02 15:15 item 2): the head's 'where to start' list. It runs no new check and prints no new number -- the
+# items, the amounts (HEAD_USD) and the kind (FIX_KIND) are the ones the summary above and section 7 already carry, and
+# the method stays in section 7, said once. At most START_MAX rows; fewer when fewer items were found, none when none
+# were, and an item whose amount could not be worked out says so instead of being read as nothing to save.
+START_MAX = 3
+# the two group names section 7 prints over its blocks, as a label
+WKIND_LABEL = {"leak": ("비용 증가 요인", "Additional costs identified"),
+               "more": ("추가 최적화 기회", "Additional savings opportunities")}
+
+
+def start_amount(W, k):
+    """A found item's amount for the start list: the same lower side the head summary sums, or None."""
+    if k == "flex":  # a range whose low end is 0 (no call may wait), as the summary counts it
+        return 0.0 if W[k].get("saving_upper_usd") is not None else None
+    v = [W[k].get(f) for f in HEAD_USD.get(k, ()) if W[k].get(f) is not None]
+    return max(v) if v else None
+
+
+def start_lines(res, ko):
+    """The head's 'where to start': the found section 7 items the summary counted, largest amount first, at most
+    START_MAX of them, each with where to read it and whether it is a one-time setting or an ongoing one."""
+    W = res.get("waste")
+    if not W:
+        return []
+    ks = [k for k in WKIND if k in W and k not in NO_KNIFE and W[k]["status"] == "found"]
+    cj = [k for k in WKIND if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge"]
+    if not ks and not cj:
+        return []  # every item was checked and none was found: no list rather than empty rows
+    amt = {k: start_amount(W, k) for k in ks}
+    ks.sort(key=lambda k: (amt[k] is None, -(amt[k] or 0.0), WCODE[k]))
+    found, ks = len(ks), ks[:START_MAX]
+    n = len(ks)
+    if not n:
+        # nothing found, but some items were not judged: say both, so an empty list is not read as nothing to save
+        lead = ("7절에서 확인된 개선 항목은 없습니다. 아래 항목은 로그에 없는 값이 있어 판단하지 않았습니다 — 데이터가 부족한 것은 "
+                "절감 여지가 없다는 뜻이 아닙니다." if ko else
+                "No item was found in section 7. The items below were not judged because the log is missing a value "
+                "they need: not enough data does not mean nothing to save.")
+    elif found > n:
+        lead = ("7절에서 확인된 항목 %d개 중 금액이 큰 %d개입니다." % (found, n) if ko else
+                "The %d items found in section 7 with the largest amounts, of %d." % (n, found))
+    elif n > 1:
+        lead = ("7절에서 확인된 항목 %d개입니다(금액이 큰 순서)." % n if ko else
+                "The %d items found in section 7, largest amount first." % n)
+    else:
+        lead = "7절에서 확인된 항목입니다." if ko else "The one item found in section 7."
+    out = ["## " + ("먼저 볼 것" if ko else "Where to start"), "",
+           lead + ((" 각 항목의 숫자와 개선 방법은 7절 같은 번호에 있습니다." if ko else
+                    " Each item's numbers and method are in section 7, under the same code.") if n else ""), ""]
+    for k in ks:
+        a = amt[k]
+        # a savings opportunity is a range and the summary above counts its low end, so the label says so here too
+        if a is None:
+            money = "금액 산정에 필요한 데이터 부족" if ko else "not enough data for an amount"
+        elif WKIND[k] == "more" and a == 0:
+            # the floor of a range is 0; a confirmed additional cost of $0.00 is a different thing, so say which
+            money = ("절감 하한 $0.00 — 상한은 7절" if ko else "savings lower bound $0.00 — upper bound in section 7")
+        else:
+            money = usd(a) + (("(하한)" if ko else " (lower bound)") if WKIND[k] == "more" else "")
+        kind = " · ".join(FIX_KIND_SHORT[g][0 if ko else 1] for g in fix_kinds(W, k, "found"))
+        out.append("- %s %s — %s: %s%s" % (WCODE[k], wtitle(k, ko), WKIND_LABEL[WKIND[k]][0 if ko else 1], money,
+                                           (" · " + kind) if kind else ""))
+    if cj:
+        # the codes only: what each one needs is already written at the end of section 7
+        codes = " · ".join(WCODE[k] for k in sorted(cj, key=lambda x: WCODE[x]))
+        out.append(("- 판단할 데이터가 부족한 항목 %d개: %s. 무엇이 더 있으면 보이는지는 7절 끝에 적었습니다." % (len(cj), codes)) if ko else
+                   ("- %d item%s need%s more data before being judged: %s. The end of section 7 says what %s."
+                    % (len(cj), "" if len(cj) == 1 else "s", "s" if len(cj) == 1 else "", codes,
+                       "it needs" if len(cj) == 1 else "each one needs")))
+    out.append("")
     return out
 
 
@@ -6720,6 +6824,27 @@ WKIND = {"failed": "leak", "resent": "leak", "truncated": "leak", "prefix_unstab
          "cache_hit": "leak", "cache_min": "more", "shared_prefix": "more", "flex": "more"}
 # Items the engine has no fix for stay in the JSON and are left out of the report (PM 10-22 19:15 item 4)
 NO_KNIFE = ("failed", "billing")
+# The section 7 item code and title, in one place: section 7 prints them and the head's 'where to start' list names
+# the same words, so the two can never drift apart
+WCODE = {"failed": "7-1", "resent": "7-2", "truncated": "7-3", "prefix_unstable": "7-4", "cache_min": "7-5",
+         "billing": "7-6", "cache_hit": "7-7", "shared_prefix": "7-8", "flex": "7-9"}
+WTITLE = {
+    "failed": ("실패 호출 과금", "billed failed calls"),
+    "resent": ("짧은 간격으로 다시 보낸 같은 요청", "the same request sent again shortly after"),
+    "truncated": ("길이 상한에서 출력 제한으로 중단된 응답", "answers cut off at the length limit"),
+    "prefix_unstable": ("요청 접두(도구 정의·시스템 지시) 직렬화 불안정",
+                        "request prefix serialized inconsistently (tool definitions, system instructions)"),
+    "cache_min": ("캐시 최소 길이 미달 요청", "prompts shorter than the cache minimum"),
+    "billing": ("과금 대조 — 청구된 출력 토큰 vs 응답 본문", "billing check — billed output tokens vs the answer body"),
+    "cache_hit": ("캐시 적중률", "prompt cache hit rate"),
+    "shared_prefix": ("호출끼리 같은 접두부", "prefix shared between calls"),
+    "flex": ("OpenAI Flex로 처리할 수 있는 호출(비스트리밍 요청)", "calls that could have used OpenAI Flex (not streamed)"),
+}
+
+
+def wtitle(k, ko):
+    """A section 7 item's title in the report's language."""
+    return WTITLE[k][0 if ko else 1]
 # 'Could cost less' (PM 10-23 07:05 item 1): found items in descending dollar order; two or more found items each
 # under this share of the log's bill go on one line instead of one block each (design value)
 MORE_SMALL_SHARE = 0.01
@@ -6831,6 +6956,20 @@ FIX_KIND_TEXT = {
     "B": ("지속 최적화: 요청 내용과 사용 패턴에 따라 적용 여부와 기준을 조정해야 하는 항목입니다. 운영 중에도 절감 효과를 확인하고 기준을 관리해야 합니다.",
           "Ongoing optimization: whether and at what threshold it applies follows the request content and usage pattern, "
           "so the saving is checked and the threshold managed during operation.")}
+# the same two words the head summary's split line uses, as a label (FIX_KIND_TEXT says the same thing in a sentence)
+FIX_KIND_SHORT = {"A": ("설정 개선", "setting improvement"), "B": ("지속 최적화", "ongoing optimization")}
+
+
+def fix_kinds(W, k, st):
+    """Which FIX_KIND groups a found item falls in (A one-time, B ongoing). Section 7 and the head read the same answer."""
+    if st != "found" or k not in FIX_KIND:
+        return []
+    gs = [g for g, f in SPLIT_FIELDS.get(k, ()) if W[k].get(f)]
+    if not gs and k == "shared_prefix" and (W[k].get("history") or {}).get("net_tokens", 0) > 0:
+        gs = ["A"]  # found on the history cut counted in tokens (no amount field): that part is the one-time kind
+    return list(dict.fromkeys(gs or [FIX_KIND[k]]))
+
+
 # MISSION-4 (PM 10-25 18:05 1): a one-time (A) item also says how to do it yourself, in one line; an ongoing (B) part
 # gives the amount and why it is ongoing, never the method (its prescription line is left out)
 FIX_HOWTO = {
@@ -6918,12 +7057,7 @@ def waste_lines(res, ko):
         return "- %s %s — **%s**" % (n, title, tag) + kind_line(k, st)
 
     def kinds(k, st):
-        if st != "found" or k not in FIX_KIND:
-            return []
-        gs = [g for g, f in SPLIT_FIELDS.get(k, ()) if W[k].get(f)]
-        if not gs and k == "shared_prefix" and (W[k].get("history") or {}).get("net_tokens", 0) > 0:
-            gs = ["A"]  # found on the history cut counted in tokens (no amount field): that part is the one-time kind
-        return list(dict.fromkeys(gs or [FIX_KIND[k]]))
+        return fix_kinds(W, k, st)
 
     def kind_line(k, st):
         out = ""
@@ -6934,12 +7068,12 @@ def waste_lines(res, ko):
         return out
 
     w = W["failed"]
-    L.append(head("7-1", "failed", "실패 호출 과금" if ko else "billed failed calls"))
+    L.append(head(WCODE["failed"], "failed", wtitle("failed", ko)))
     if w["status"] != "cannot_judge":
         L.append(("  - 상태가 있는 호출 %d건 중 실패 %d건, 그중 토큰이 청구된 것 %d건: %s." if ko else
                   "  - %d calls have a status. %d failed, and %d of those were still billed: %s.")
                  % (w["calls_with_status"], w["failed_calls"], w["failed_calls_billed"], _spent(w, ko)))
-    if w.get("usd_back_on_retry") and usd(w["usd_back_on_retry"]) != usd(0):
+    if w.get("usd_back_on_retry") and not usd_rounds_to_zero(w["usd_back_on_retry"]):
         L.append(("  - 이 금액은 청구된 %s 에서 %s 를 뺀 것입니다. 뺀 비중은 재시도 %d건이 실패 호출이 써 둔 캐시를 읽어 덜 낸 "
                   "돈입니다. 그래서 실패가 없었다면 실제로 아꼈을 돈은 이 금액입니다." if ko else
                   "  - This is the billed %s less %s: %d retries read the cache the failed calls wrote and paid that "
@@ -6952,7 +7086,7 @@ def waste_lines(res, ko):
                   "until that is confirmed. The Linklbee server also records streams whose client disconnected "
                   "(`client_gone`), so this number keeps being counted."))
     w = W["resent"]
-    L.append(head("7-2", "resent", "짧은 간격으로 다시 보낸 같은 요청" if ko else "the same request sent again shortly after"))
+    L.append(head(WCODE["resent"], "resent", wtitle("resent", ko)))
     dc, rt = (W["failed"].get("split") or {}).get("discarded") or {}, (W["failed"].get("split") or {}).get("retries") or {}
     if dc.get("usd") or rt.get("after_failed_usd"):
         L.append(("  - 비용이 청구됐지만 결과가 활용되지 않은 호출을 두 유형으로 분류했습니다: **버려진 산출물** %s(청구된 실패 %d건 + 같은 요청이 다시 "
@@ -6966,7 +7100,7 @@ def waste_lines(res, ko):
                     dc.get("dropped_ok_calls", 0), usd(rt.get("after_failed_usd")) if rt.get("after_failed_usd") else "—",
                     rt.get("after_failed_calls", 0)))
         fb = W["failed"]
-        if fb.get("usd_back_on_retry") and usd(fb["usd_back_on_retry"]) != usd(0):
+        if fb.get("usd_back_on_retry") and not usd_rounds_to_zero(fb["usd_back_on_retry"]):
             L.append(("  - 버려진 산출물의 실패 비중은 청구된 %s 에서 %s 를 뺀 금액입니다. 뺀 비중은 재시도 %d건이 실패 호출이 써 둔 캐시를 "
                       "읽어 덜 낸 돈입니다. 실패가 없었다면 실제로 아꼈을 돈만 셉니다." if ko else
                       "  - The failed part of the discarded output is the billed %s less %s: %d retries read the cache the "
@@ -7036,7 +7170,7 @@ def waste_lines(res, ko):
                   "usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff "
                   "interval, maximum retries, switching route after repeated failures)."))
     w = W["truncated"]
-    L.append(head("7-3", "truncated", "길이 상한에서 출력 제한으로 중단된 응답" if ko else "answers cut off at the length limit"))
+    L.append(head(WCODE["truncated"], "truncated", wtitle("truncated", ko)))
     if w["status"] != "cannot_judge":
         mt = ", ".join("%s×%d" % kv for kv in w["max_tokens_of_cut"].items())
         L.append(("  - 판단 가능한 호출 %d건 중 잘림 %d건(%s), 출력 %s 토큰 = 전체 출력의 %s, 그 호출들의 금액 %s.%s" if ko else
@@ -7051,8 +7185,7 @@ def waste_lines(res, ko):
                       "  - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. "
                       "The engine's usage view shows the cut share per limit, with a suggested limit."))
     w = W["prefix_unstable"]
-    L.append(head("7-4", "prefix_unstable", "요청 접두(도구 정의·시스템 지시) 직렬화 불안정" if ko else
-                  "request prefix serialized inconsistently (tool definitions, system instructions)"))
+    L.append(head(WCODE["prefix_unstable"], "prefix_unstable", wtitle("prefix_unstable", ko)))
     if w["status"] != "cannot_judge":
         if w["calls_with_prefix"]:  # (RAG-SANDWICH: a sandwich-only 7-4 has no block to compare)
             L.append(("  - 접두가 있는 호출 %d건, 블록 %d종을 원본 해시와 키 정렬 해시로 비교." if ko else
@@ -7173,7 +7306,7 @@ def waste_lines(res, ko):
                       "usage records show a gain, and turns it off when they show a loss. Set `\"prefix_normalize\": false` "
                       "in the engine settings file `waste.json` to keep it off."))
     w = W["cache_min"]
-    L.append(head("7-5", "cache_min", "캐시 최소 길이 미달 요청" if ko else "prompts shorter than the cache minimum"))
+    L.append(head(WCODE["cache_min"], "cache_min", wtitle("cache_min", ko)))
     if w["status"] != "cannot_judge":
         for b in w["by_model"][:8]:
             L.append(("  - %s (%s): 최소 %s 토큰 미만 %d건 / %d건(%s), 그중 캐시 읽기 0 %d건." if ko else
@@ -7271,8 +7404,7 @@ def waste_lines(res, ko):
               "  - Thresholds as of %s (vendor documents). Gemini prices change on %s.")
              % (w["constants_as_of"], w["gemini_valid_until"]))
     w = W["billing"]
-    L.append(head("7-6", "billing", "과금 대조 — 청구된 출력 토큰 vs 응답 본문" if ko else
-                  "billing check — billed output tokens vs the answer body"))
+    L.append(head(WCODE["billing"], "billing", wtitle("billing", ko)))
     if w["status"] != "cannot_judge":
         f = lambda n: "{:,}".format(n)  # noqa: E731
         L.append(("  - 판단 가능한 호출 %d건: 청구 출력 %s 토큰 = 본문(o200k) %s + 추론(AI 제공사 보고) %s + **설명되지 않는 차이 %s "
@@ -7319,7 +7451,7 @@ def waste_lines(res, ko):
                   "The engine's usage view shows the same difference, with the response ids of the largest gaps as "
                   "evidence for a vendor inquiry (no text is kept)."))
     w = W["cache_hit"]
-    L.append(head("7-7", "cache_hit", "캐시 적중률" if ko else "prompt cache hit rate"))
+    L.append(head(WCODE["cache_hit"], "cache_hit", wtitle("cache_hit", ko)))
     us_ = w.get("upstream_spread")
     if us_ and us_["spread"]:
         L.append(("  - **보낸 서버(upstream)가 기록된 호출 %s건, 서버 %d대.** 앞 호출과 앞부분을 나눠 갖는 호출 %s건 중 %s건이 앞 호출과 "
@@ -7532,7 +7664,7 @@ def waste_lines(res, ko):
         L.append(("  - 판단 못 한 호출: " if ko else "  - not checked: ") +
                  " · ".join(names[k][0 if ko else 1] % v for k, v in sorted(nj.items())))
     w = W["shared_prefix"]
-    L.append(head("7-8", "shared_prefix", "호출끼리 같은 접두부" if ko else "prefix shared between calls"))
+    L.append(head(WCODE["shared_prefix"], "shared_prefix", wtitle("shared_prefix", ko)))
     if w["status"] != "cannot_judge":
         L.append(("  - 입력 토큰 중 앞선 호출(같은 모델)과 같은 접두: 5분 안 **%s** · 1시간 안 %s · 기간 전체 %s "
                   "(호출 %d건, 5분 안에 접두를 나눈 호출 %d건)." if ko else
@@ -7621,8 +7753,7 @@ def waste_lines(res, ko):
                   "how much a cache could read, not a saving.") % w["block_tokens"])
     w = W.get("flex")
     if w and w["status"] != "cannot_judge":
-        L.append(head("7-9", "flex", "OpenAI Flex로 처리할 수 있는 호출(비스트리밍 요청)" if ko else
-                      "calls that could have used OpenAI Flex (not streamed)"))
+        L.append(head(WCODE["flex"], "flex", wtitle("flex", ko)))
         if not w["calls_flex_models"]:
             L.append(("  - Flex 할인이 있는 OpenAI 모델의 호출이 이 로그에 없습니다." if ko else
                       "  - This log has no calls to the OpenAI models that Flex offers."))

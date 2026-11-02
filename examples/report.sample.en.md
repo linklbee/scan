@@ -1,17 +1,25 @@
 # Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.8 · 1 file · 한국어: --lang ko
+scanner 1.4.9 · 1 file · 한국어: --lang ko
 
 **Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
 ## Summary
 
-- Additional costs identified: **$0.00** — the sum of section 2 'Additional costs identified', 3 items (1 items without enough data for an amount are left out of the sum; they are listed in section 2)
-- Additional savings opportunities: **$0.00** — the sum of section 2 'Additional savings opportunities', 3 items, using the lower bound of each range (2 items without enough data for an amount are left out of the sum; they are listed in section 2)
-- Of that, setting improvements: $0.00 · ongoing optimization: $0.00. Generating only the changed parts (section 4) and reusing earlier answers (section 6) are ongoing optimization items too: the effect depends on the similarity to the earlier answer and on answer length, the thresholds have to be adjusted when the request pattern changes, and applying it to low-similarity calls can raise cost.
-- The synthetic example has a total cost of $1.06. Identified additional costs are $0.004, so the value is displayed as $0.00 at two decimal places. Your report uses amounts from your own log.
+- Additional costs identified: **<$0.01** — the sum of section 2 'Additional costs identified', 3 items (1 items without enough data for an amount are left out of the sum; they are listed in section 2)
+- Additional savings opportunities: **$0.00** — the sum of section 2 'Additional savings opportunities', 3 items, using the lower bound of each range — the lower bounds add up to $0.00: the floor of the range is 0, not the saving itself; each item's upper bound is in section 2 (2 items without enough data for an amount are left out of the sum; they are listed in section 2)
+- Of that, setting improvements: <$0.01 · ongoing optimization: $0.00. Generating only the changed parts (section 4) and reusing earlier answers (section 6) are ongoing optimization items too: the effect depends on the similarity to the earlier answer and on answer length, the thresholds have to be adjusted when the request pattern changes, and applying it to low-similarity calls can raise cost.
+- The synthetic example has a total cost of $1.06. Identified additional costs are $0.004, under a cent, so the value is shown as <$0.01. Your report uses amounts from your own log.
 
 The amounts shown are calculated by the diagnostic's rules. Actual savings are confirmed by measurement after integration.
+
+## Where to start
+
+The 3 items found in section 2 with the largest amounts, of 6. Each item's numbers and method are in section 2, under the same code.
+
+- [code 7-3] answers cut off at the length limit — Additional costs identified: <$0.01 · setting improvement
+- [code 7-2] the same request sent again shortly after — Additional costs identified: <$0.01 · setting improvement
+- [code 7-9] calls that could have used OpenAI Flex (not streamed) — Additional savings opportunities: savings lower bound $0.00 — upper bound in section 2 · setting improvement
 
 ## 1. What was read
 
@@ -32,16 +40,16 @@ The amounts shown are calculated by the diagnostic's rules. Actual savings are c
   - Fix: when an identical request (same full body) comes back within a set time, the engine can return the stored answer without calling the vendor. Streams and irreversible actions are excluded. A regenerate would also get the stored answer, so the engine proposes this with the amount first, and you decide whether to turn it on.
   - Setting improvement: applied by changing a setting or how calls are built. You can apply it yourself with the method below.
   - How: find where the same request is sent again shortly after (retries, double clicks) and stop it from going out again before the first one has finished.
-  - Calls paid for and not used, two kinds (told apart in the same log): **discarded output** $0.00 (14 failed calls still billed + 0 OK answers the same request replaced — a quality check, a broken format or a user's regenerate cannot be told apart here) · **retries** $0.00 (14 repeats after a failed or timed-out call — the service's retry setting). Repeats after a cut answer are counted in 7-3.
-  - Within 60 s, 14 calls repeated the request just sent (within the same document when the log has document ids; out of 322 calls whose request is known). The earlier call had: failed 14 · been cut 0 · succeeded 0 · unknown 0. Median gap 30.5 s. input 2,379 · output 306 tokens, $0.00 (14 priced calls, API usage x price list). A repeat after a successful answer may be a user regenerating on purpose.
-  - Split by the earlier call: after a successful answer none — the engine's stored answer can fix this · after a failure $0.00 — fixed by the service's retry settings · after a cut none — fixed by 7-3's larger cap.
+  - Calls paid for and not used, two kinds (told apart in the same log): **discarded output** <$0.01 (14 failed calls still billed + 0 OK answers the same request replaced — a quality check, a broken format or a user's regenerate cannot be told apart here) · **retries** <$0.01 (14 repeats after a failed or timed-out call — the service's retry setting). Repeats after a cut answer are counted in 7-3.
+  - Within 60 s, 14 calls repeated the request just sent (within the same document when the log has document ids; out of 322 calls whose request is known). The earlier call had: failed 14 · been cut 0 · succeeded 0 · unknown 0. Median gap 30.5 s. input 2,379 · output 306 tokens, <$0.01 (14 priced calls, API usage x price list). A repeat after a successful answer may be a user regenerating on purpose.
+  - Split by the earlier call: after a successful answer none — the engine's stored answer can fix this · after a failure <$0.01 — fixed by the service's retry settings · after a cut none — fixed by 7-3's larger cap.
   - The retry pattern and its cost after failures are analyzed and the settings to improve are shown. The engine does not change this item itself; it takes an adjustment of the service's retry policy (interval, maximum retries).
   - Engine: the Linklbee server records each response's status and request signature. The engine's usage view shows retry chains and gaps after failures, with a suggested retry policy (backoff interval, maximum retries, switching route after repeated failures).
 - [code 7-3] answers cut off at the length limit — **improvement found**
   - Fix: if the same request is often cut and then resent with a higher cap, the engine can send it with that cap from the start, so you stop paying for the cut first attempt. Answers may get longer, so the engine proposes this with the amount first, and you decide whether to turn it on.
   - Setting improvement: applied by changing a setting or how calls are built. You can apply it yourself with the method below.
   - How: send the calls that are resent with a bigger length limit after a cut with that limit from the start.
-  - Of 322 calls that can be checked, 1 were cut off (0.3%). Their output was 300 tokens, 0.3% of all output, and they cost $0.00. max_tokens of the cut calls: 300×1.
+  - Of 322 calls that can be checked, 1 were cut off (0.3%). Their output was 300 tokens, 0.3% of all output, and they cost <$0.01. max_tokens of the cut calls: 300×1.
   - Engine: the Linklbee server records each answer's finish reason and the request's max_tokens. The engine's usage view shows the cut share per limit, with a suggested limit.
 - [code 7-4] request prefix serialized inconsistently (tool definitions, system instructions) — **improvement found**
   - Fix: the engine sends tool definitions and system blocks in one key order. It can turn this on when usage records show a gain, and turns it off when they show a loss (judged on Anthropic and OpenAI GPT-5.6+ records). The current prefix normalization adjusts key order; changes to values such as timestamps and ids are not included.
@@ -82,7 +90,7 @@ The amounts shown are calculated by the diagnostic's rules. Actual savings are c
   - Fix: the engine works out which calls could have used Flex and how much that saves, and proposes it first. Once on, it sends the chosen traffic at Flex. If Flex has no capacity, it retries once at standard (the refusal is not billed). Flex answers come later than standard ones, so it is applied only to work that can wait; which traffic goes to Flex is chosen from the engine's proposed list.
   - Setting improvement: applied by changing a setting or how calls are built. You can apply it yourself with the method below.
   - How: add `service_tier: "flex"` to the calls no one is waiting on (overnight jobs, batch work).
-  - 154 calls used models that Flex offers, and 91 of them were not streamed: input 15,476 · output 1,799 tokens, $0.01 (91 priced calls, API usage x price list). Flex runs the same model at half the standard rate (Batch rates, price list 2026-10-21).
+  - 154 calls used models that Flex offers, and 91 of them were not streamed: input 15,476 · output 1,799 tokens, <$0.01 (91 priced calls, API usage x price list). Flex runs the same model at half the standard rate (Batch rates, price list 2026-10-21).
   - What it would save: a share of the bill, **0 – 0.2%**. It is 0 if no call can wait, and 0.2% if every call that was not streamed can wait. The log cannot tell which calls can wait.
 
 
