@@ -84,27 +84,41 @@ JSON 배열 내보내기도 읽습니다. 파일이 `[` 로 시작하면 한 줄
 
 - 답 본문까지 남기고 있다 → 위 표대로 바로 됩니다. 모양이 다르면 `--peek` 를 보고 `--map` 한 줄.
 - 토큰 수만 남긴다 → 1절(청구서에서 출력이 몇 %인가)은 본문 없이 나옵니다. 응답 간 유사도(토큰 기준)와 예상 절감 범위는 답 본문이나 토큰 해시(`--hashify`)가 있어야 나옵니다.
-- 호출 기록을 아직 저장하지 않는다 → `ts` 와 `output` 두 개만 남기기 시작하면 됩니다. 기존 호출 바로 뒤에 아래 다섯 줄을 붙이세요(의존성 0). `model`·토큰 수까지 넣으면 금액이 나옵니다. 같은 문서의 판들을 묶는 id 가 있으면 `"group_key"` 로 넣으세요.
+- 호출 기록을 아직 저장하지 않는다 → 아래 기록 함수를 넣고, 기존 호출 바로 뒤에 한 줄(`log_call(resp)`)을 붙이세요. SDK 응답을 그대로 저장하므로 답 본문·모델·토큰 수·캐시 토큰이 한 번에 남고, OpenAI 와 Anthropic 공식 SDK 가 같은 코드로 됩니다(추가 패키지 0). 기록이 실패해도 예외를 내보내지 않습니다 — 실행 로그에 `log_call skipped` 경고만 남고 API 응답은 그대로 쓰입니다. 같은 문서의 판들을 묶는 id 가 있으면 저장 전에 `record["group_key"] = ...` 로 넣으세요.
 
-Python (OpenAI SDK; Anthropic 이면 `resp.content[0].text`, `u.input_tokens`, `u.output_tokens`):
+Python (OpenAI·Anthropic 공식 SDK 공통):
 
 ```python
-import json, time
+import json, sys, time
+
 def log_call(resp, path="calls.jsonl"):  # resp = client.chat.completions.create(...) 의 반환값
-    u = resp.usage
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": time.time(), "output": resp.choices[0].message.content, "model": resp.model, "input_tokens": u.prompt_tokens, "output_tokens": u.completion_tokens}, ensure_ascii=False) + "\n")
+    try:                                 # 기록이 실패해도 경고만 남기고 API 응답은 그대로 사용합니다
+        record = resp.model_dump(mode="json")
+        record["ts"] = time.time()
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("log_call skipped:", e, file=sys.stderr)
 ```
 
-TypeScript (Node, OpenAI SDK):
+TypeScript (Node):
 
 ```ts
 import { appendFileSync } from "node:fs";
-export function logCall(resp: any, path = "calls.jsonl") {  // resp = await client.chat.completions.create(...)
-  const u = resp.usage ?? {};
-  appendFileSync(path, JSON.stringify({ ts: Date.now() / 1000, output: resp.choices[0].message.content, model: resp.model, input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens }) + "\n");
+
+export function logCall(resp: any, path = "calls.jsonl") {  // resp = await client.chat.completions.create(...) 의 반환값
+  try {                                                     // 기록이 실패해도 경고만 남깁니다
+    if (!resp?.model) throw new Error("no completed response");
+    appendFileSync(path, JSON.stringify({ ...resp, ts: Date.now() / 1000 }) + "\n");
+  } catch (e) {
+    console.error("logCall skipped:", e);
+  }
 }
 ```
+
+스트리밍은 스트림이 끝난 뒤 도우미가 주는 최종 응답을 넘깁니다 — OpenAI 는 `log_call(stream.get_final_completion())` · `logCall(await stream.finalChatCompletion())`, Anthropic 은 `log_call(stream.get_final_message())` · `logCall(await stream.finalMessage())` 입니다. OpenAI 는 `stream_options={"include_usage": True}` 를 켜야 토큰 수가 남습니다. `stream=True` 응답을 직접 읽는 코드는 기록되지 않습니다 — 기록 함수가 경고만 남기고 건너뛰고, 응답은 그대로 전달됩니다.
+
+`calls.jsonl` 에는 답 본문이 저장됩니다. 코드 저장소에 올리거나 외부로 보내지 마세요. 진단 리포트에는 본문이 들어가지 않습니다.
 
 ## 아무것도 보내지 않습니다 — 직접 확인하세요
 
@@ -292,27 +306,41 @@ CSV is detected by extension (`.csv`, `.tsv`) or by its first line, and the head
 
 - If the log already keeps answer text, it works as is (table above). For a different shape, run `--peek` and add one `--map`.
 - If it keeps token counts only, output's share of the bill still comes out. How alike the documents are, and the expected savings, need answer text or token hashes (`--hashify`).
-- If it keeps nothing, start with just `ts` and `output`: add the five lines below right after the existing call (no dependencies). Add `model` and the token counts to get dollars. If an id ties together the versions of one document, log it as `"group_key"`.
+- If it keeps nothing, add the function below and one line right after the existing call. It stores the SDK response as it is, so the answer text, the model, the token counts and the cache tokens are all kept, and the OpenAI and Anthropic SDKs need no change between them (no extra package). Logging never raises: a failed write prints a `log_call skipped` warning and the API response is used as it was. If an id ties together the versions of one document, add it before the write as `record["group_key"] = ...`.
 
-Python (OpenAI SDK; for Anthropic use `resp.content[0].text`, `u.input_tokens`, `u.output_tokens`):
+Python (the OpenAI and Anthropic SDKs, the same code for both):
 
 ```python
-import json, time
+import json, sys, time
+
 def log_call(resp, path="calls.jsonl"):  # resp = what client.chat.completions.create(...) returned
-    u = resp.usage
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": time.time(), "output": resp.choices[0].message.content, "model": resp.model, "input_tokens": u.prompt_tokens, "output_tokens": u.completion_tokens}, ensure_ascii=False) + "\n")
+    try:                                 # a failed write only warns; the API response is untouched
+        record = resp.model_dump(mode="json")
+        record["ts"] = time.time()
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("log_call skipped:", e, file=sys.stderr)
 ```
 
-TypeScript (Node, OpenAI SDK):
+TypeScript (Node):
 
 ```ts
 import { appendFileSync } from "node:fs";
+
 export function logCall(resp: any, path = "calls.jsonl") {  // resp = await client.chat.completions.create(...)
-  const u = resp.usage ?? {};
-  appendFileSync(path, JSON.stringify({ ts: Date.now() / 1000, output: resp.choices[0].message.content, model: resp.model, input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens }) + "\n");
+  try {                                                     // a failed write only warns
+    if (!resp?.model) throw new Error("no completed response");
+    appendFileSync(path, JSON.stringify({ ...resp, ts: Date.now() / 1000 }) + "\n");
+  } catch (e) {
+    console.error("logCall skipped:", e);
+  }
 }
 ```
+
+Streaming: pass the final response the stream helper gives you, after the stream ends — OpenAI `log_call(stream.get_final_completion())` / `logCall(await stream.finalChatCompletion())`, Anthropic `log_call(stream.get_final_message())` / `logCall(await stream.finalMessage())`. OpenAI needs `stream_options={"include_usage": True}` for the token counts. A raw `stream=True` response is not logged: the function warns and skips it, and the response reaches your code unchanged.
+
+`calls.jsonl` holds the answer text. Keep it out of the code repository, and do not send it anywhere; the report itself holds no text.
 
 ### Sends nothing — check it yourself
 

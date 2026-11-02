@@ -66,25 +66,39 @@ Each item is reported as improvement found, nothing found, or needs more data â€
 
 ## No log file yet?
 
-Add these lines right after each call (OpenAI SDK; for Anthropic use `resp.content[0].text`, `u.input_tokens`, `u.output_tokens`). Once calls build up, run the scanner on `calls.jsonl`.
+Add the function below and one line right after each call. It stores the SDK response as it is, so the answer text, the model, the token counts and the cache tokens are all kept, and the OpenAI and Anthropic SDKs need no change between them. Logging never raises: a failed write prints a `log_call skipped` warning and the API response is used as it was. Once calls build up, run the scanner on `calls.jsonl`.
 
 ```python
-import json, time
+import json, sys, time
+
 def log_call(resp, path="calls.jsonl"):  # resp = what client.chat.completions.create(...) returned
-    u = resp.usage
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": time.time(), "output": resp.choices[0].message.content, "model": resp.model, "input_tokens": u.prompt_tokens, "output_tokens": u.completion_tokens}, ensure_ascii=False) + "\n")
+    try:                                 # a failed write only warns; the API response is untouched
+        record = resp.model_dump(mode="json")
+        record["ts"] = time.time()
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("log_call skipped:", e, file=sys.stderr)
 ```
 
-TypeScript (Node, OpenAI SDK):
+TypeScript (Node):
 
 ```ts
 import { appendFileSync } from "node:fs";
+
 export function logCall(resp: any, path = "calls.jsonl") {  // resp = await client.chat.completions.create(...)
-  const u = resp.usage ?? {};
-  appendFileSync(path, JSON.stringify({ ts: Date.now() / 1000, output: resp.choices[0].message.content, model: resp.model, input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens }) + "\n");
+  try {                                                     // a failed write only warns
+    if (!resp?.model) throw new Error("no completed response");
+    appendFileSync(path, JSON.stringify({ ...resp, ts: Date.now() / 1000 }) + "\n");
+  } catch (e) {
+    console.error("logCall skipped:", e);
+  }
 }
 ```
+
+Streaming: pass the final response the stream helper gives you, after the stream ends â€” OpenAI `log_call(stream.get_final_completion())` / `logCall(await stream.finalChatCompletion())`, Anthropic `log_call(stream.get_final_message())` / `logCall(await stream.finalMessage())`. OpenAI needs `stream_options={"include_usage": True}` for the token counts. A raw `stream=True` response is not logged: the function warns and skips it, and the response reaches your code unchanged.
+
+`calls.jsonl` holds the answer text. Keep it out of the code repository, and do not send it anywhere; the report itself holds no text.
 
 ## Privacy
 

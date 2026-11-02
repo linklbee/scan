@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.9 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.10 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.9"
+VERSION = "1.4.10"
 
 
 def _default_lang():
@@ -6153,7 +6153,24 @@ def head_summary(res, ko):
             else:
                 split[(k, None)] = (FIX_KIND.get(k), a)
         if not ks:
-            out.append(("- %s: 7절에서 찾지 못했습니다." if ko else "- %s: none found in section 7.") % name[0 if ko else 1])
+            # DATA-GAP (1.4.10, site relay 11-02 20:39 item 4): "none found" and "could not be judged" are different
+            # answers, and this line said only the first -- a log missing the fields a check needs read as nothing to
+            # save. The counts come from the item statuses section 7 already prints: no new check, no new number.
+            chk = [k2 for k2 in WKIND if WKIND[k2] == kind and k2 in W and k2 not in NO_KNIFE]
+            cj = [k2 for k2 in chk if W[k2]["status"] == "cannot_judge"]
+            if not cj:
+                out.append(("- %s: 7절에서 찾지 못했습니다." if ko else "- %s: none found in section 7.") % name[0 if ko else 1])
+            elif len(cj) == len(chk):
+                out.append(("- %s: 판단하지 못했습니다 — 7절 「%s」 %d건 모두 로그에 없는 값이 있습니다. 없다는 뜻이 아닙니다." if ko else
+                            "- %s: could not be judged -- all %d items under section 7 '%s' need a value this log does "
+                            "not have. That is not the same as none.")
+                           % ((name[0], name[2], len(chk)) if ko else (name[1], len(chk), name[3])))
+            else:
+                out.append(("- %s: 7절에서 확인된 항목은 없습니다. 그중 %d건은 로그에 없는 값이 있어 판단하지 못했습니다 — 없는 것과 "
+                            "판단 불가는 다릅니다." if ko else
+                            "- %s: no item was found in section 7, and %d of them could not be judged because this log "
+                            "is missing a value they need -- not found and not judged are different.")
+                           % (name[0 if ko else 1], len(cj)))
             continue
         miss = len(amt) - len(known)
         line = ("- %s: **%s** — 7절 「%s」 %d건의 합" if ko else "- %s: **%s** — the sum of section 7 '%s', %d items") % (
@@ -6297,6 +6314,35 @@ def frame_143(L, res, ko):
     return out + timing
 
 
+# DATA-GAP (1.4.10, site relay 11-02 20:39 item 3): a report with no usable call printed the raw error key
+# ("**no usable rows**") -- English inside the Korean report, and no next action in the report itself (the ways in were
+# only on the terminal, after it). The sentence is localized and the three ways in follow it, so a saved or shared
+# report is not a dead end. Wording only: the error key in the JSON (res["error"]) is unchanged.
+def no_rows_lines(res, ko):
+    """The headline and the next action for a report whose input gave no usable call."""
+    me = command_name()
+    L = [("**쓸 수 있는 호출이 0건입니다 — 1~5절을 내지 않았습니다.**" if ko else
+          "**No usable calls were read, so sections 1-5 are omitted.**"), "",
+         ("다음 행동 — 하나를 고르세요." if ko else "What to do next -- pick one."), ""]
+    if not res.get("lines"):
+        L.append(("1. 기록이 들어간 파일이나 폴더를 주세요: `%s --logs <파일 또는 폴더>`" if ko else
+                  "1. Point it at the file or folder the records went to: `%s --logs <file or folder>`") % me)
+    else:
+        L.append(("1. 칸 이름을 먼저 보세요: `%s --peek <파일>`. 그 이름을 `--map ts=<칸> output=<칸> model=<칸>` 으로 알려 주시면 "
+                  "이 파일을 변환 없이 읽습니다." if ko else
+                  "1. Look at its field names first: `%s --peek <file>`. Pass them as "
+                  "`--map ts=<field> output=<field> model=<field>` and this file is read as it is.") % me)
+    L.append(("2. AI 제공사 콘솔에서 사용량·비용 파일을 받을 수 있으면 그대로 넣으세요: `%s <받은 파일>`. 모델별 지출·입출력 비중·"
+              "캐시 읽기·시간대가 나옵니다." if ko else
+              "2. If you can download a usage or cost file from the vendor console, pass it as is: `%s <downloaded file>`. "
+              "You get spend by model, input vs output, cache reads and busy hours.") % me)
+    L.append(("3. 아직 호출 기록이 없으면 README 「이 파일이 아직 없다면」의 기록 코드를 호출 뒤에 넣고, 호출이 쌓인 뒤 다시 돌리세요."
+              if ko else
+              "3. If there is no call log yet, add the logging code from the README's \"No log file yet?\" after your "
+              "calls and run this again once they build up."))
+    return L + [""]
+
+
 def _report_body(res, lang="ko", cache_line=True):
     t, ko = T[lang], lang == "ko"
     L = ["# " + t["title"], "", head_line(res, ko), ""]
@@ -6311,7 +6357,7 @@ def _report_body(res, lang="ko", cache_line=True):
         L += [("- 줄 %d · JSON 오류 %d · ts 없음 거부 %d → 쓸 수 있는 호출 0건" if ko else
                "- %d lines · %d not JSON · %d rejected for missing ts -> 0 usable calls")
               % (res["lines"], res["bad_json"], res["rejected_no_ts"])] + sources_line(res, ko) + \
-             ["", "**" + res["error"] + "**", ""]
+             [""] + no_rows_lines(res, ko)
         L += ["## " + t["s6"], "", "- " + ("전부. 리포트 1~5절을 내지 않습니다." if ko else "No readable records were found, so sections 1–5 are omitted.")]
         L += ["-" + x[1:] for x in unread_lines(None, ko, blank=not res["lines"]) if x]
         if res["rejected_no_ts"]:
@@ -8331,6 +8377,29 @@ def peek(path, field_map=None, lang="ko"):
     ko = lang == "ko"
     FIELD_MAP.clear()
     FIELD_MAP.update(field_map or {})
+    # DATA-GAP (1.4.10, site relay 11-02 20:39 item 2): --peek reads a CALL LOG's field names. A vendor usage file has
+    # none of them, so every field printed "not found" and "0 records with an answer body" although the scan itself
+    # reads the file fine (input grade D). Recognised with the same usage_kind() the scan uses, and only when no --map
+    # was given, exactly as main() decides which path to take. Display only: nothing new is detected or computed.
+    if not field_map:
+        uk = usage_kind(next(iter(_usage_docs(path)), None))
+        if uk:
+            print("\n".join([
+                ("형식: %s — AI 제공사 사용량·비용 파일입니다." if ko else "format: %s -- a vendor usage or cost file.")
+                % USAGE_KINDS[uk][0 if ko else 1],
+                ("--peek 은 호출 기록의 칸 이름을 보는 기능입니다. 사용량 파일에는 호출별 칸(시각·본문·토큰)이 없고 집계된 줄만 "
+                 "있어서 이 파일에는 해당하지 않습니다 — 「못 찾음」이 나오더라도 읽기에는 문제가 없습니다." if ko else
+                 "--peek shows a call log's field names. A usage file has no per-call fields (time, answer text, tokens), "
+                 "only summary rows, so --peek does not apply to it: a 'not found' line here does not mean the file "
+                 "cannot be read."),
+                ("이대로 돌리세요: %s <파일>" if ko else "To run the scan: %s <file>") % command_name(),
+                ("리포트는 입력 등급 D 로 나옵니다 — 모델별 지출·입력과 출력의 비중·캐시 읽기 비율·시간대 몰림을 봅니다. "
+                 "다시 보낸 요청이나 출력 제한에서 중단된 응답처럼 호출 하나하나를 봐야 하는 항목은 호출 기록이 있어야 "
+                 "봅니다." if ko else
+                 "The report comes out at input grade D: spend by model, the input and output shares, the cache-read "
+                 "share and busy hours. Items that need one row per call, such as re-sent calls or answers cut off "
+                 "at the length limit, need a call log.")]))
+            return 0
     with open_text(log_files(path)[0]) as fh:
         fmt = open_records(log_files(path)[0], fh)[0]
     recs = head_records(path)
