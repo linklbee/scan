@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.12 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.13 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.12"
+VERSION = "1.4.13"
 
 
 def _default_lang():
@@ -6824,6 +6824,11 @@ MISSING = {
          "the request body (`messages` / `system` / `tools`) or `prompt`, with `input_tokens` and `ts`"),
     "prompt": ("요청 본문(`prompt`, 또는 --hashify 의 `prompt_token_hashes`)", "the request body (`prompt`, or --hashify's `prompt_token_hashes`)"),
     "output": ("답 본문(`output`, 또는 --hashify 의 `output_token_hashes`)", "the answer body (`output`, or --hashify's `output_token_hashes`)"),
+    # KO-RESIDUE (11-03): 7-9's line had no entry, so the Korean report printed this key verbatim in English.
+    # The English side is the key itself, unchanged -- the English report reads as before.
+    "an OpenAI model on the Flex table + the request's stream field":
+        ("`model`(OpenAI Flex 를 쓸 수 있는 모델)과 요청의 `stream` 값",
+         "an OpenAI model on the Flex table + the request's stream field"),
 }
 
 

@@ -1,6 +1,6 @@
 # Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.12 · 1 file · 한국어: --lang ko
+scanner 1.4.13 · 1 file · 한국어: --lang ko
 
 **Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
