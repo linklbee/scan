@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.11 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.12 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.11"
+VERSION = "1.4.12"
 
 
 def _default_lang():
@@ -7131,7 +7131,14 @@ def waste_lines(res, ko):
         return out
 
     w = W["failed"]
-    L.append(head(WCODE["failed"], "failed", wtitle("failed", ko)))
+    # INTAKE (11-03): said at the item itself, not only in section 1 -- this item's amount is outside the summary's
+    # sums, so a reader adding it to them would double-count it. First line under the item's own line, before
+    # anything it measured. No number and no judgement changes.
+    h_ = head(WCODE["failed"], "failed", wtitle("failed", ko))
+    note_ = "  - " + ("이 항목의 금액은 요약의 합계에 넣지 않았습니다." if ko else
+                      "This item's amount is not in the summary's totals.")
+    i_ = h_.find("\n")
+    L.append(h_ + "\n" + note_ if i_ < 0 else h_[:i_] + "\n" + note_ + h_[i_:])
     if w["status"] != "cannot_judge":
         L.append(("  - 상태가 있는 호출 %d건 중 실패 %d건, 그중 토큰이 청구된 것 %d건: %s." if ko else
                   "  - %d calls have a status. %d failed, and %d of those were still billed: %s.")
@@ -7887,7 +7894,11 @@ def waste_lines(res, ko):
         L.append("")
     need = {}
     for k in WKIND:
-        if k in W and k not in NO_KNIFE and W[k]["status"] == "cannot_judge" and W[k]["missing"] != "threshold table":
+        # INTAKE (11-03): the no-knife items (7-1, 7-6) are listed here too. Without this a log that has no `status`
+        # field shows 7-1 and 7-6 nowhere at all -- not in this section and not in the groups above, which leave every
+        # cannot_judge item out -- so a customer reads them as never looked at. They stay out of the item count, the
+        # sums and the 'where to start' list (those have their own NO_KNIFE filters).
+        if k in W and W[k]["status"] == "cannot_judge" and W[k]["missing"] != "threshold table":
             need.setdefault(W[k]["missing"], []).append(ITEM_NAMES[k][0 if ko else 1])
     # the other sections' items this log cannot show yet, as the next step (section 8 keeps only the zeros)
     label = {"switch": ("2~4절 변경 부분만 생성(응답 유사도 × 응답 길이)", "Sections 2-4, rewriting only the changed parts (similarity x answer length)"),

@@ -1,6 +1,6 @@
 # Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.11 · 1 file · 한국어: --lang ko
+scanner 1.4.12 · 1 file · 한국어: --lang ko
 
 **Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
@@ -37,6 +37,7 @@ The 3 items found in section 2 with the largest amounts, of 6. Each item's numbe
 ### Additional costs identified — money going out
 
 - [code 7-1] billed failed calls — **improvement found**
+  - This item's amount is not in the summary's totals.
   - Fix: the engine analyzes the pattern and cost of billed failed calls and shows them. The engine does not change this item itself; it needs an adjustment of the service's failure handling (retries, time limits).
   - Setting improvement: applied by changing a setting or how calls are built. You can apply it yourself with the method below.
   - How: find the calls the billed failures cluster on (model, time of day) and fix your service's timeout and retry settings.
@@ -188,4 +189,4 @@ These items came out at 0 on this analysis. That is not an analysis error; each 
 
 Send this report to bee@linklbee.com and we will look deeper, free of charge. The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.
 
-took 2.2s
+took 2.1s
