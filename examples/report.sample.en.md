@@ -1,6 +1,6 @@
 # Linklbee LLM API Cost Diagnostic Report
 
-scanner 1.4.10 · 1 file · 한국어: --lang ko
+scanner 1.4.11 · 1 file · 한국어: --lang ko
 
 **Cache hit rate 0.0%** — The share of input tokens read from the cache (322 calls, the vendor's usage) · 0.0% on calls over the minimum. Details in 7-7.
 
@@ -36,6 +36,12 @@ The 3 items found in section 2 with the largest amounts, of 6. Each item's numbe
 
 ### Additional costs identified — money going out
 
+- [code 7-1] billed failed calls — **improvement found**
+  - Fix: the engine analyzes the pattern and cost of billed failed calls and shows them. The engine does not change this item itself; it needs an adjustment of the service's failure handling (retries, time limits).
+  - Setting improvement: applied by changing a setting or how calls are built. You can apply it yourself with the method below.
+  - How: find the calls the billed failures cluster on (model, time of day) and fix your service's timeout and retry settings.
+  - 322 calls have a status. 14 failed, and 14 of those were still billed: input 2,379 · output 0 tokens, <$0.01 (14 priced calls, API usage x price list).
+  - Why: vendor documents do not say how much of a cut or failed call is billed, so nothing changes until that is confirmed. The Linklbee server also records streams whose client disconnected (`client_gone`), so this number keeps being counted.
 - [code 7-2] the same request sent again shortly after — **improvement found**
   - Fix: when an identical request (same full body) comes back within a set time, the engine can return the stored answer without calling the vendor. Streams and irreversible actions are excluded. A regenerate would also get the stored answer, so the engine proposes this with the amount first, and you decide whether to turn it on.
   - Setting improvement: applied by changing a setting or how calls are built. You can apply it yourself with the method below.
@@ -59,6 +65,12 @@ The 3 items found in section 2 with the largest amounts, of 6. Each item's numbe
   - **Block `tools`: 2 serializations with the same content in a different key order, so the vendor caches it as 2 separate entries.** Of 154 calls with this block, 29 were not in the most common form. The forms first differ at character 4 (the block is 409 characters, 87 o200k tokens).
   - Source (vendor documents): Anthropic's prompt caching guide says "some languages (for example, Swift, Go) randomize key order during JSON conversion, breaking caches". OpenAI's guide, in its table of settings that affect the cached prefix, says of tools: "Changes tool names, descriptions, schemas, ordering, or tool-specific instructions."
   - Engine: the Linklbee engine sends tool definitions and system blocks with sorted keys. List order and strings stay the same, so the model reads the same content (a structured-output schema keeps its field order; only its other keys are sorted). It can turn this on when usage records show a gain, and turns it off when they show a loss. Set `"prefix_normalize": false` in the engine settings file `waste.json` to keep it off.
+- [code 7-6] billing check — billed output tokens vs the answer body — **nothing found**
+  - 322 calls checked: billed output 90,523 tokens = body (o200k) 90,523 + reasoning (vendor-reported) 0 + **unexplained 0 tokens (0.0%)**. 0 calls report reasoning tokens.
+  - Calls billed at 2.0x or more of body + reasoning: 0. Highest: 1.0x.
+  - Unexplained, by vendor: anthropic 0.0% · openai 0.0%
+  - This difference does not mean overbilling. It can have legitimate causes: the body was counted with o200k, so for non-OpenAI models the tokenizer difference shows up here (paid Claude calls without reasoning billed 1.54-1.71x per o200k token) · hidden system or format tokens added by the vendor · output the log does not keep (the 0 calls with a visible tool call are left out).
+  - Engine: the Linklbee server records vendor-reported reasoning tokens and each response id. The engine's usage view shows the same difference, with the response ids of the largest gaps as evidence for a vendor inquiry (no text is kept).
 - [code 7-7] prompt cache hit rate — **nothing found**
   - Cache-read tokens / prompt tokens = **0.0%** (322 calls). For calls above the cache minimum only (the 120 that pass 7-5): **0.0%**. No threshold can be set from this log, so the rate alone is not judged (next line).
   - The threshold comes from the cache-usable share computed on this log. No input of the calls above the minimum is a prefix shared with an earlier call of the same model within 5 minutes (0 %), so no threshold can be set. Cache savings would need a different request pattern.
@@ -176,4 +188,4 @@ These items came out at 0 on this analysis. That is not an analysis error; each 
 
 Send this report to bee@linklbee.com and we will look deeper, free of charge. The report holds no prompt or answer text — only numbers, patterns and model names. No need to send the log.
 
-took 2.4s
+took 2.2s

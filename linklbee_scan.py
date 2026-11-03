@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linklbee scanner 1.4.10 — single-file build. Reads your files on this machine; sends nothing.
+"""Linklbee scanner 1.4.11 — single-file build. Reads your files on this machine; sends nothing.
 
   python3 linklbee_scan.py --logs calls.jsonl            (LLM call log, one JSON per line)
 
@@ -2595,7 +2595,7 @@ from array import array
 
 
 
-VERSION = "1.4.10"
+VERSION = "1.4.11"
 
 
 def _default_lang():
@@ -2801,7 +2801,13 @@ ALIASES = {
     "cached_input_tokens": ["usage.prompt_tokens_details.cached_tokens", "usage.input_tokens_details.cached_tokens",
                             "usage.cache_read_input_tokens", "usageDetails.cache_read_input_tokens",
                             "usageDetails.input_cached_tokens", "prompt_cache_read_tokens", "usage.cacheReadInputTokens",
-                            "usageMetadata.cachedContentTokenCount"],
+                            "usageMetadata.cachedContentTokenCount",
+                            # INTAKE (11-03): flat names. The report and --peek ask for exactly these three
+                            # ("cached_tokens / cache_read_input_tokens / cachedContentTokenCount"), and a
+                            # de-identified usage export carries them at the top level, not under "usage".
+                            # input_cached_tokens is the OpenAI usage CSV's column name.
+                            "cached_tokens", "cache_read_input_tokens", "cachedContentTokenCount",
+                            "input_cached_tokens"],
     # LangSmith run metadata · Bedrock invocation log · Gemini / Vertex
     "model": ["extra.metadata.ls_model_name", "modelId", "modelVersion"],
 }
@@ -2988,6 +2994,16 @@ def resolve(d):
                     via.append(("input_tokens", "+".join((pre + "." if pre else "") + "usage." + k
                                                          for k in ["input_tokens"] + extra)))
                 break
+    # INTAKE (11-03): the same two names at the top level of a flat record, where they carry the same meaning
+    # (outside input_tokens). Only when input_tokens is also flat -- the nested branch above owns the other case.
+    elif ("input_tokens" not in FIELD_MAP and isinstance(d, dict)
+            and ("cache_read_input_tokens" in d or "cache_creation_input_tokens" in d)
+            and _num(d.get("input_tokens")) is not None):
+        extra = [k for k in ("cache_read_input_tokens", "cache_creation_input_tokens") if _num(d.get(k))]
+        if extra:
+            out["input_tokens"] = _num(d["input_tokens"]) + sum(_num(d[k]) for k in extra)
+            via = [x for x in via if x[0] != "input_tokens"]
+            via.append(("input_tokens", "+".join(["input_tokens"] + extra)))
     return out, tuple(via)
 
 
@@ -6868,7 +6884,8 @@ def table_gap(w, ko):
 # way that can show on a healthy log too (padding a short prefix, a longer-lived cache, Flex, sections 4 and 5).
 WKIND = {"failed": "leak", "resent": "leak", "truncated": "leak", "prefix_unstable": "leak", "billing": "leak",
          "cache_hit": "leak", "cache_min": "more", "shared_prefix": "more", "flex": "more"}
-# Items the engine has no fix for stay in the JSON and are left out of the report (PM 10-22 19:15 item 4)
+# Items the engine has no fix for: kept out of the item count, the sums and the 'where to start' list
+# (PM 10-22 19:15 item 4). Their own result line is printed in the checklist section, as section 1 says it is.
 NO_KNIFE = ("failed", "billing")
 # The section 7 item code and title, in one place: section 7 prints them and the head's 'where to start' list names
 # the same words, so the two can never drift apart
@@ -7828,8 +7845,12 @@ def waste_lines(res, ko):
                           "not streamed can wait. The log cannot tell which calls can wait.")
                          % ((("분석 기간 비용의" if ko else "a share of the bill,"), pct(up / bill_), pct(up / bill_)) if bill_ else
                             (("금액으로" if ko else "in dollars,"), usd(up), usd(up))))
-    # regroup (PM 10-22 19:15): 'leak' items first, then 'more' items, found before none; items with no engine fix
-    # dropped; items that need more data listed once per missing field, together with sections 2-5
+    # regroup (PM 10-22 19:15): 'leak' items first, then 'more' items, found before none; items that need more data
+    # listed once per missing field, together with sections 2-5.
+    # INTAKE (11-03): the no-knife items (7-1, 7-6) are printed here again. Section 1 says "they are not in the count
+    # or the sums; this section gives their result and the direction of the fix", and they were dropped instead -- on a
+    # usage-only log 7-1 was measured ($ of billed failed calls) and the section then said "none found in this log".
+    # They stay out of the item count, the sums and the 'where to start' list, as that sentence says.
     segs = {}
     for i, (k, a) in enumerate(marks):
         segs[k] = L[a:marks[i + 1][1] if i + 1 < len(marks) else len(L)]
@@ -7839,7 +7860,7 @@ def waste_lines(res, ko):
               ("more", ("추가 최적화 기회 — 검토 항목", "Additional savings opportunities — cheaper ways, even with nothing wrong"),
                ("이 로그에서 더 싸게 할 길을 찾지 못했습니다.", "No cheaper way found in this log.")))
     for kind, title, empty in groups:
-        ks = [k for k in WKIND if WKIND[k] == kind and k in segs and k not in NO_KNIFE and W[k]["status"] != "cannot_judge"]
+        ks = [k for k in WKIND if WKIND[k] == kind and k in segs and W[k]["status"] != "cannot_judge"]
         L += ["### " + title[0 if ko else 1], ""]
         if not any(W[k]["status"] == "found" for k in ks):
             L += ["**" + empty[0 if ko else 1] + "**", ""]
